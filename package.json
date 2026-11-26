@@ -18,8 +18,8 @@
     "release": "bun scripts/release.ts"
   },
   "dependencies": {
-    "@opentui/core": "0.9.4",
-    "@opentui/react": "0.9.4",
+    "@opentui/core": "0.9.8",
+    "@opentui/react": "0.9.8",
     "irc-client-ts": "^0.23.1",
     "react": "^19.2.0"
   },
