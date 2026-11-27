@@ -1,6 +1,9 @@
-import type { CliRenderer, MouseEvent, MousePointerStyle } from "@opentui/core";
+import type { CliRenderer, MouseEvent, MousePointerStyle, TextRenderable } from "@opentui/core";
 import { useRenderer, type BoxProps } from "@opentui/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { indexAtCell } from "./display.ts";
+import type { TextRange } from "./format.tsx";
+import { nameAt, type NameInText } from "./nameAt.ts";
 
 /**
  * Decides the mouse pointer from how many clickable elements are under the
@@ -248,5 +251,89 @@ export function LinkArea({
     >
       {children}
     </box>
+  );
+}
+
+/** What a click on a name in the chat does. */
+export interface NameActions {
+  /** The nick of someone in the channel (other than you) that `word` names, as the user list spells it. */
+  findNick: (word: string) => string | undefined;
+  /** Opens a DM with `nick`. */
+  openNick: (nick: string) => void;
+  /** Joins `channel`, or switches to it when honk is in it already. */
+  openChannel: (channel: string) => void;
+}
+
+/**
+ * The name at cell (x, y) of `text`, a single line of chat, if there is one.
+ * OpenTUI wraps the line, and its `lineInfo` tells the column where each
+ * screen row starts, so honk does not do the wrapping math again. A cell
+ * inside a link has no name: the link opens there.
+ */
+function nameAtCell(
+  renderer: CliRenderer,
+  text: TextRenderable,
+  x: number,
+  y: number,
+  findNick: (word: string) => string | undefined,
+  namesEnd: number,
+): NameInText | undefined {
+  if (renderer.getLinkIdAt(x, y) !== 0) return undefined;
+  const info = text.lineInfo;
+  const row = y - text.y + text.scrollY;
+  const col = x - text.x;
+  const start = info.lineStartCols[row];
+  if (start === undefined || col < 0 || col >= info.lineWidthCols[row]!) return undefined;
+  const line = text.plainText.slice(0, namesEnd);
+  return nameAt(line, indexAtCell(line, start + col), findNick);
+}
+
+type NameTextProps = {
+  names: NameActions;
+  /** Where the message ends in the text. Names stop there: " (not sent)" may follow. */
+  namesEnd: number;
+  /** The text's content, with the name under the mouse (if any) to underline. */
+  children: (hovered: TextRange | undefined) => ReactNode;
+};
+
+/**
+ * A line of chat whose nicks and channel names work like links: under the
+ * mouse a name is underlined and the pointer is a hand, and a plain click
+ * opens a DM with the nick or joins the channel. The text is drawn as usual,
+ * not as terminal links, so the terminal's own Cmd+click never sees them.
+ *
+ * As with LinkArea, the hover is checked only when the mouse moves.
+ */
+export function NameText({ names, namesEnd, children }: NameTextProps) {
+  const renderer = useRenderer();
+  const ref = useRef<TextRenderable>(null);
+  const [hovered, setHovered] = useState<TextRange | undefined>(undefined);
+  const clear = useCallback(() => setHovered(undefined), []);
+  usePointer(hovered !== undefined, clear);
+
+  const at = (event: MouseEvent) =>
+    ref.current
+      ? nameAtCell(renderer, ref.current, event.x, event.y, names.findNick, namesEnd)
+      : undefined;
+  const check = (event: MouseEvent) => {
+    const name = at(event);
+    setHovered((prev) => (prev?.start === name?.start && prev?.end === name?.end ? prev : name));
+  };
+
+  return (
+    <text
+      ref={ref}
+      onMouseOver={check}
+      onMouseMove={check}
+      onMouseOut={clear}
+      onMouseUp={(event) => {
+        if (!isPlainClick(renderer, event)) return;
+        const name = at(event);
+        if (name?.kind === "nick") names.openNick(name.name);
+        else if (name?.kind === "channel") names.openChannel(name.name);
+      }}
+    >
+      {children(hovered)}
+    </text>
   );
 }

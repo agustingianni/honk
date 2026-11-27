@@ -55,6 +55,22 @@ export function cellWidth(str: string): number {
 }
 
 /**
+ * The index in `str` of the grapheme that covers cell `col` (counted from 0),
+ * or -1 when `str` ends before that cell. In "日本" cells 0 and 1 are "日"
+ * (index 0), and cells 2 and 3 are "本" (index 1).
+ */
+export function indexAtCell(str: string, col: number): number {
+  if (col < 0) return -1;
+  if (PRINTABLE_ASCII.test(str)) return col < str.length ? col : -1;
+  let width = 0;
+  for (const { segment, index } of graphemes.segment(str)) {
+    width += graphemeWidth(segment);
+    if (col < width) return index;
+  }
+  return -1;
+}
+
+/**
  * Cuts `str` to at most `max` terminal cells, with "…" at the end when it cuts.
  * It measures cells, not UTF-16 code units: "田中さん" is 4 code units and 8 cells.
  * It cuts between graphemes, so an emoji with a skin tone or a ZWJ stays whole.

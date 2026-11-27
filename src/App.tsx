@@ -184,6 +184,12 @@ export function App({
     },
     [manager, activeServerId],
   );
+  const joinChannel = useCallback(
+    (channel: string) => {
+      if (activeServerId) manager.openChannel(activeServerId, channel);
+    },
+    [manager, activeServerId],
+  );
 
   const sidebarFits = width >= SIDEBAR_MIN_WIDTH;
   const nicklistFits = width >= NICKLIST_MIN_WIDTH;
@@ -221,6 +227,7 @@ export function App({
             onSubmit={submit}
             onPasteLines={pasteLines}
             onSelectUser={selectUser}
+            onJoinChannel={joinChannel}
           />
 
           {showNicklist && (

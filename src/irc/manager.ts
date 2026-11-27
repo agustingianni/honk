@@ -15,6 +15,7 @@ import type {
 import {
   bufferKindFor,
   isChannelName,
+  NICK_CHAR,
   normalizeNick,
   nameKey,
   sameNick,
@@ -386,14 +387,11 @@ function createBuffer(name: string, kind: BufferKind): BufferState {
   };
 }
 
-/** Characters allowed in IRC nicks. A mention must not touch one on either side. */
-const NICK_CHAR = String.raw`[\w\[\]\\` + "`" + String.raw`^{}|-]`;
-
-/** True if `text` contains `nick` as a whole word. `\b` fails for nicks like `goose[m]`. */
+/** True if `text` contains `nick` as a whole word, touching no nick character on either side. `\b` fails for nicks like `goose[m]`. */
 function mentionsNick(text: string, nick: string): boolean {
   if (!nick) return false;
   const escaped = nick.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<!${NICK_CHAR})${escaped}(?!${NICK_CHAR})`, "i").test(text);
+  return new RegExp(`(?<!${NICK_CHAR.source})${escaped}(?!${NICK_CHAR.source})`, "i").test(text);
 }
 
 /** The buffer a chat line belongs to: the channel, or for a DM the other person. */
@@ -2343,6 +2341,22 @@ export class IrcManager {
   openDm(serverId: string, nick: string): void {
     this.ensureBuffer(serverId, nick, "dm");
     this.setActive(serverId, nick);
+  }
+
+  /**
+   * A click on a channel name in the chat: switches to the channel when it has
+   * a buffer on this server, and joins it otherwise. A typed "/join" sends JOIN
+   * even then, to get back into a channel whose rejoin failed; a click should
+   * not send one JOIN per click.
+   */
+  openChannel(serverId: string, channel: string): void {
+    const key = this.bufferKey(serverId, channel);
+    if (this.servers.get(serverId)?.buffers[key]?.kind === "channel") {
+      this.setActive(serverId, key);
+      return;
+    }
+    const on = this.active?.serverId === serverId ? this.active : undefined;
+    this.handleCommand(`join ${channel}`, on);
   }
 
   cycleBuffer(delta: 1 | -1): void {

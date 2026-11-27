@@ -448,3 +448,15 @@ test("a bug that hits many lines is reported 5 times at most", async () => {
   await until(() => texts("#honk").includes("still connected"));
   expect(texts(STATUS_BUFFER).filter((t) => t.startsWith("A bug in honk:"))).toHaveLength(5);
 });
+
+test("a click on a channel name joins it once, then only switches to it", async () => {
+  await inHonk();
+  m.openChannel("alpha", "#rust");
+  await until(() => m.getSnapshot().active?.buffer === "#rust");
+  m.setActive("alpha", "#honk");
+  m.openChannel("alpha", "#RUST"); // channel names match without case
+  expect(m.getSnapshot().active?.buffer).toBe("#rust");
+  await Bun.sleep(100);
+  const joins = irc.received.filter((l) => l.command === "JOIN" && l.params[0] === "#rust");
+  expect(joins.length).toBe(1);
+});

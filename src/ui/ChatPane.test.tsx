@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import { act, useState } from "react";
-import type { BufferState, ChatMessage } from "../types.ts";
+import { TextAttributes, type MousePointerStyle } from "@opentui/core";
+import type { BufferState, ChatMessage, ServerState } from "../types.ts";
 import { ChatPane } from "./ChatPane.tsx";
 
 function message(i: number): ChatMessage {
@@ -14,15 +15,18 @@ function message(i: number): ChatMessage {
   };
 }
 
+interface Handlers {
+  onOpenLink?: (href: string) => void;
+  onSelectUser?: (nick: string) => void;
+  onJoinChannel?: (channel: string) => void;
+}
+
 /**
- * Renders a ChatPane for `buffer` (a #honk channel by default). Call `destroy`
- * when done: it unmounts the React tree, which is a state update.
+ * Renders a ChatPane for `buffer` (a #honk channel by default), on a server
+ * where your nick is "me". Call `destroy` when done: it unmounts the React
+ * tree, which is a state update.
  */
-async function renderPane(
-  buffer: Partial<BufferState>,
-  width = 60,
-  onOpenLink?: (href: string) => void,
-) {
+async function renderPane(buffer: Partial<BufferState>, width = 60, handlers: Handlers = {}) {
   const full: BufferState = {
     name: "#honk",
     kind: "channel",
@@ -33,16 +37,27 @@ async function renderPane(
     hasMention: false,
     ...buffer,
   };
-  const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(
+  const server: ServerState = {
+    id: "test",
+    name: "test",
+    config: { id: "test", host: "127.0.0.1", nick: "me" },
+    status: "connected",
+    nick: "me",
+    tls: false,
+    buffers: { [full.name]: full },
+    bufferOrder: [full.name],
+  };
+  const { renderOnce, captureCharFrame, captureSpans, mockMouse, renderer } = await testRender(
     <ChatPane
-      server={undefined}
+      server={server}
       buffer={full}
       inputFocused={false}
       paneWidth={width}
       onSubmit={() => {}}
       onPasteLines={() => {}}
-      onSelectUser={() => {}}
-      onOpenLink={onOpenLink}
+      onSelectUser={handlers.onSelectUser ?? (() => {})}
+      onJoinChannel={handlers.onJoinChannel ?? (() => {})}
+      onOpenLink={handlers.onOpenLink}
     />,
     { width, height: 24 },
   );
@@ -53,7 +68,18 @@ async function renderPane(
     destroy();
     throw error;
   }
-  return { screen: captureCharFrame().split("\n"), mockMouse, destroy };
+  return { screen: captureCharFrame().split("\n"), mockMouse, renderer, renderOnce, captureSpans, destroy };
+}
+
+/** The cell of the `nth` (from 0) `text` on `screen`, plus `dx` cells. */
+function cellOf(screen: string[], text: string, nth = 0, dx = 1) {
+  let seen = 0;
+  for (let y = 0; y < screen.length; y++) {
+    for (let x = screen[y]!.indexOf(text); x !== -1; x = screen[y]!.indexOf(text, x + 1)) {
+      if (seen++ === nth) return { x: x + dx, y };
+    }
+  }
+  throw new Error(`"${text}" is not on screen`);
 }
 
 /** Renders a ChatPane for `buffer` and returns the screen lines. */
@@ -122,15 +148,11 @@ test("a click opens a link in a message and in the topic", async () => {
       messages: [{ ...message(0), text: "see https://example.com/x for more" }],
     },
     80,
-    (href) => opened.push(href),
+    { onOpenLink: (href) => opened.push(href) },
   );
   try {
-    const at = (text: string) => {
-      const y = screen.findIndex((line) => line.includes(text));
-      return { x: screen[y]!.indexOf(text) + 2, y };
-    };
-    const topic = at("https://honk.example/docs");
-    const body = at("https://example.com/x");
+    const topic = cellOf(screen, "https://honk.example/docs", 0, 2);
+    const body = cellOf(screen, "https://example.com/x", 0, 2);
     // Each click waits for a possible second click before it opens the link.
     await act(() => mockMouse.click(topic.x, topic.y));
     await Bun.sleep(400);
@@ -148,7 +170,7 @@ test("a topic link that is cut to fit is not a link", async () => {
   const { screen, mockMouse, destroy } = await renderPane(
     { topic: "docs at https://github.com.evil.example/login" },
     48,
-    (href) => opened.push(href),
+    { onOpenLink: (href) => opened.push(href) },
   );
   try {
     const y = screen.findIndex((line) => line.includes("https://"));
@@ -186,6 +208,7 @@ test("after the topic changes, a click opens the link it shows now", async () =>
         onSubmit={() => {}}
         onPasteLines={() => {}}
         onSelectUser={() => {}}
+        onJoinChannel={() => {}}
         onOpenLink={(href) => opened.push(href)}
       />
     );
@@ -226,4 +249,111 @@ test("bidi and control characters from the server never reach the screen", async
   expect(text).toContain("eve");
   // Right-to-left letters are kept, in the order they were sent.
   expect(text).toContain("see gpj.exe \u05E9\u05DC\u05D5\u05DD");
+});
+
+describe("names in messages", () => {
+  const users = ["alice", "bob", "Hello_", "me", "sent"].map((nick) => ({ prefix: "", nick }));
+  const lines: ChatMessage[] = [
+    { ...message(0), from: "carol", text: "bob: look at #rust, or ask me" },
+    { ...message(1), kind: "action", from: "alice", text: "waves at BOB" },
+    { ...message(2), from: "carol", text: "hello see https://example.com/bob" },
+    {
+      ...message(3),
+      from: "carol",
+      text: "a long line that wraps onto the next screen line, where bob is",
+    },
+    { ...message(4), from: "me", isSelf: true, delivery: "failed", text: "ok bob" },
+  ];
+
+  async function setup() {
+    const clicked: string[] = [];
+    const pane = await renderPane({ users, messages: lines }, 60, {
+      onSelectUser: (nick) => clicked.push(`dm ${nick}`),
+      onJoinChannel: (channel) => clicked.push(`join ${channel}`),
+      onOpenLink: (href) => clicked.push(`open ${href}`),
+    });
+    const at = (text: string, nth = 0, dx = 1) => cellOf(pane.screen, text, nth, dx);
+    const click = async (text: string, nth = 0, dx = 1) => {
+      const { x, y } = at(text, nth, dx);
+      await act(() => pane.mockMouse.click(x, y));
+    };
+    return { ...pane, clicked, at, click };
+  }
+
+  test("a click on a nick opens a DM, and a click on a channel joins it", async () => {
+    const { screen, click, clicked, destroy } = await setup();
+    try {
+      expect(screen.find((l) => l.includes("where bob is"))).toBeDefined();
+      await click("bob:"); // a nick before a colon
+      await click("#rust"); // the comma after it is not part of the name
+      await click("alice"); // the sender of an action
+      await click("BOB"); // nicks match without case
+      await click("bob is"); // on the second line of a wrapped message
+      // "BOB" opens the DM under the nick as the user list spells it.
+      expect(clicked).toEqual(["dm bob", "join #rust", "dm alice", "dm bob", "dm bob"]);
+    } finally {
+      destroy();
+    }
+  });
+
+  test("words that are not names of others in the channel do nothing", async () => {
+    const { click, clicked, destroy } = await setup();
+    try {
+      await click("hello"); // no one has this nick: Hello_ is not hello
+      await click("ask me", 0, 5); // your own nick
+      await click("look"); // a plain word
+      await click(", or", 0, 0); // the comma after #rust
+      await click("(not sent)", 0, 6); // "sent" is a nick, but not part of the message
+      expect(clicked).toEqual([]);
+      await click("ok bob", 0, 3); // the message before it still has names
+      expect(clicked).toEqual(["dm bob"]);
+      clicked.length = 0;
+      await click("example.com/bob", 0, 13); // a nick inside a link is the link
+      await Bun.sleep(400); // a link waits for a possible second click
+      expect(clicked).toEqual(["open https://example.com/bob"]);
+    } finally {
+      destroy();
+    }
+  });
+
+  test("a drag across a nick selects text and opens nothing", async () => {
+    const { at, mockMouse, renderer, clicked, destroy } = await setup();
+    try {
+      const { x, y } = at("bob:", 0, 0);
+      await act(() => mockMouse.drag(x, y, x + 3, y));
+      expect(renderer.getSelection()?.getSelectedText()).toBe("bob:");
+      expect(clicked).toEqual([]);
+    } finally {
+      destroy();
+    }
+  });
+
+  test("a name under the mouse is underlined and shows the hand pointer", async () => {
+    const { at, mockMouse, renderer, renderOnce, captureSpans, destroy } = await setup();
+    try {
+      const pointers: MousePointerStyle[] = [];
+      renderer.setMousePointer = (shape: MousePointerStyle) => void pointers.push(shape);
+      const nick = at("bob:");
+      const plain = at("look");
+      /** True when the cell at (x, y) is underlined. */
+      const underlined = (x: number, y: number) => {
+        let left = x;
+        for (const span of captureSpans().lines[y]!.spans) {
+          if (left < span.width) return (span.attributes & TextAttributes.UNDERLINE) !== 0;
+          left -= span.width;
+        }
+        return false;
+      };
+      await act(() => mockMouse.moveTo(nick.x, nick.y));
+      await renderOnce();
+      expect(underlined(nick.x, nick.y)).toBe(true);
+      expect(underlined(plain.x, plain.y)).toBe(false);
+      await act(() => mockMouse.moveTo(plain.x, plain.y));
+      await renderOnce();
+      expect(underlined(nick.x, nick.y)).toBe(false);
+      expect(pointers).toEqual(["pointer", "default"]);
+    } finally {
+      destroy();
+    }
+  });
 });

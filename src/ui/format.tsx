@@ -43,7 +43,7 @@ function ircColorToHex(code: number): string | undefined {
   return undefined;
 }
 
-interface FormattedSegment {
+export interface FormattedSegment {
   text: string;
   fg?: string;
   bg?: string;
@@ -262,6 +262,35 @@ export function truncateSegments(segments: FormattedSegment[], max: number): For
   return out;
 }
 
+/** The characters from `start` up to (not including) `end` of the shown text. */
+export interface TextRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Underlines the characters of `range` in `segments`, counted in the shown
+ * text (formatting codes left out). It splits the segments the range starts or
+ * ends inside. A range outside the text changes nothing.
+ */
+export function underlineRange(segments: FormattedSegment[], range: TextRange): FormattedSegment[] {
+  const out: FormattedSegment[] = [];
+  let at = 0;
+  for (const seg of segments) {
+    const from = Math.max(range.start - at, 0);
+    const to = Math.min(range.end - at, seg.text.length);
+    at += seg.text.length;
+    if (from >= to) {
+      out.push(seg);
+      continue;
+    }
+    if (from > 0) out.push({ ...seg, text: seg.text.slice(0, from) });
+    out.push({ ...seg, text: seg.text.slice(from, to), underline: true });
+    if (to < seg.text.length) out.push({ ...seg, text: seg.text.slice(to) });
+  }
+  return out;
+}
+
 interface FormattedTextProps {
   text: string;
   defaultFg?: string;
@@ -301,7 +330,7 @@ export function LinkedText({ text, fg }: { text: string; fg: string }) {
   return <Segments segments={segments} defaultFg={fg} forceItalic={false} />;
 }
 
-function Segments({
+export function Segments({
   segments,
   defaultFg,
   forceItalic,

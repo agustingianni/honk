@@ -1,14 +1,14 @@
 import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { isUserSender, sameNick, STATUS_BUFFER } from "../irc/names.ts";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isUserSender, nameKey, sameNick, STATUS_BUFFER } from "../irc/names.ts";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
-import type { BufferState, ChatMessage, ServerState } from "../types.ts";
+import type { BufferState, ChatMessage, NickEntry, ServerState } from "../types.ts";
 import { linkOpener } from "../openUrl.ts";
-import { Clickable, isPlainClick, LinkArea } from "./Clickable.tsx";
+import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
 import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
-import { FormattedText, LinkedText } from "./format.tsx";
+import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
 
 interface ChatPaneProps {
   server: ServerState | undefined;
@@ -18,8 +18,10 @@ interface ChatPaneProps {
   onSubmit: (value: string) => void;
   /** A paste of several lines: each line is sent as its own message. */
   onPasteLines: (lines: string[]) => void;
-  /** A click on a sender's nick: open a DM with them, as in the nick list. */
+  /** A click on a nick: open a DM with them, as in the nick list. */
   onSelectUser: (nick: string) => void;
+  /** A click on a channel name in a message: join it, or switch to it. */
+  onJoinChannel: (channel: string) => void;
   /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
   onOpenLink?: (href: string) => void;
 }
@@ -27,6 +29,7 @@ interface ChatPaneProps {
 /** Undefined over SSH and on platforms honk cannot open a browser on. */
 const openLink = linkOpener();
 
+const NO_USERS: NickEntry[] = [];
 const NICK_COL_WIDTH = 12;
 /** Time (5), a space, then the nick column. The message body starts after this. */
 const LABEL_COL_WIDTH = 5 + 1 + NICK_COL_WIDTH;
@@ -86,15 +89,15 @@ const MessageRow = memo(function MessageRow({
   msg,
   grouped,
   highlightMentions,
-  onSelectUser,
+  names,
 }: {
   msg: ChatMessage;
   grouped: boolean;
   /** False in a DM: every line there is to you, so painting each one adds nothing. */
   highlightMentions: boolean;
-  onSelectUser: (nick: string) => void;
+  names: NameActions;
 }) {
-  useThemeVersion(); // re-render when the theme changes
+  const themeVersion = useThemeVersion(); // re-render when the theme changes
   const mention = highlightMentions && Boolean(msg.isMention);
   const sender = msg.from ?? "";
   const senderColor = msg.isSelf ? theme.accent : nickColor(sender);
@@ -102,7 +105,16 @@ const MessageRow = memo(function MessageRow({
   const unconfirmed = msg.delivery !== undefined;
   let label: ReactNode;
   let labelFg: string;
-  let body: ReactNode;
+  // What people write (messages, actions, notices) is parsed into segments, so
+  // the names in it can be found and underlined. Other lines are a plain body.
+  const segments = useMemo(() => {
+    if (msg.kind !== "message" && msg.kind !== "action" && msg.kind !== "notice") return undefined;
+    const parsed = parseIrcText(msg.text);
+    // The sender is a name in the text too: "* alice waves" opens a DM with alice.
+    return msg.kind === "action" ? [{ text: `${sender} `, fg: senderColor }, ...parsed] : parsed;
+  }, [msg.kind, msg.text, sender, senderColor, themeVersion]);
+  let textFg = theme.fgPrimary;
+  let body: ReactNode = null;
   let bg: string | undefined;
   // The sender of a message, when a click on the nick opens a DM with them.
   let clickableNick: string | undefined;
@@ -113,34 +125,18 @@ const MessageRow = memo(function MessageRow({
       labelFg = senderColor;
       if (!msg.isSelf && isUserSender(sender)) clickableNick = sender;
       bg = mention ? theme.bgMention : theme.bgBase;
-      body = (
-        <FormattedText
-          text={msg.text}
-          defaultFg={unconfirmed ? theme.fgMuted : mention ? theme.fgBright : theme.fgPrimary}
-        />
-      );
+      textFg = unconfirmed ? theme.fgMuted : mention ? theme.fgBright : theme.fgPrimary;
       break;
     case "action":
       label = "*";
       labelFg = theme.accentAlt;
       bg = mention ? theme.bgMention : theme.bgBase;
-      body = (
-        <>
-          <span fg={senderColor}>
-            <em>{sender} </em>
-          </span>
-          <FormattedText
-            text={msg.text}
-            defaultFg={unconfirmed ? theme.fgMuted : theme.accentAlt}
-            forceItalic
-          />
-        </>
-      );
+      textFg = unconfirmed ? theme.fgMuted : theme.accentAlt;
       break;
     case "notice":
       label = shortNick(`-${msg.from ?? "notice"}-`);
       labelFg = theme.yellow;
-      body = <FormattedText text={msg.text} defaultFg={theme.yellow} />;
+      textFg = theme.yellow;
       break;
     case "error":
       label = "!";
@@ -161,14 +157,8 @@ const MessageRow = memo(function MessageRow({
     }
   }
 
-  if (msg.delivery === "failed") {
-    body = (
-      <>
-        {body}
-        <span fg={theme.red}> (not sent)</span>
-      </>
-    );
-  }
+  // After the message, so its words are not names.
+  const notSent = msg.delivery === "failed" && <span fg={theme.red}> (not sent)</span>;
 
   // Two columns, so a long body wraps inside its own column and the gutter line
   // continues down beside it.
@@ -193,7 +183,7 @@ const MessageRow = memo(function MessageRow({
             {/* Yoga right-aligns the nick, measuring cells as the terminal does. */}
             <box width={NICK_COL_WIDTH} flexDirection="row" justifyContent="flex-end">
               {clickableNick ? (
-                <NickLabel nick={clickableNick} color={labelFg} onSelect={onSelectUser} />
+                <NickLabel nick={clickableNick} color={labelFg} onSelect={names.openNick} />
               ) : (
                 <text fg={labelFg}>{label}</text>
               )}
@@ -209,7 +199,25 @@ const MessageRow = memo(function MessageRow({
         border={["left"]}
         borderColor={theme.gutter}
       >
-        <text>{body}</text>
+        {segments ? (
+          <NameText names={names} namesEnd={segments.reduce((n, seg) => n + seg.text.length, 0)}>
+            {(hovered) => (
+              <>
+                <Segments
+                  segments={hovered ? underlineRange(segments, hovered) : segments}
+                  defaultFg={textFg}
+                  forceItalic={msg.kind === "action"}
+                />
+                {notSent}
+              </>
+            )}
+          </NameText>
+        ) : (
+          <text>
+            {body}
+            {notSent}
+          </text>
+        )}
       </box>
     </box>
   );
@@ -256,6 +264,7 @@ export function ChatPane({
   onSubmit,
   onPasteLines,
   onSelectUser,
+  onJoinChannel,
   onOpenLink = openLink,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
@@ -399,6 +408,31 @@ export function ChatPane({
     const at = buffer.messages.findIndex((m) => m.id === lastSeenId);
     newBelow = buffer.messages.slice(at + 1).filter(isChatLine).length;
   }
+  // The nicks a click in a message can open. Rows read them through a ref, so a
+  // join or a part does not render every row again. The lookup map is built on
+  // the first hover after the user list changes, not on every join and part.
+  const users = buffer?.users ?? NO_USERS;
+  const myNick = server?.nick ?? "";
+  const nicksRef = useRef<{ users: NickEntry[]; myNick: string; byKey?: Map<string, string> }>({
+    users,
+    myNick,
+  });
+  if (nicksRef.current.users !== users || nicksRef.current.myNick !== myNick) {
+    nicksRef.current = { users, myNick };
+  }
+  const findNick = useCallback((word: string) => {
+    const nicks = nicksRef.current;
+    if (!nicks.byKey) {
+      nicks.byKey = new Map(nicks.users.map((u) => [nameKey(u.nick), u.nick]));
+      nicks.byKey.delete(nameKey(nicks.myNick));
+    }
+    return nicks.byKey.get(nameKey(word));
+  }, []);
+  const names = useMemo(
+    (): NameActions => ({ findNick, openNick: onSelectUser, openChannel: onJoinChannel }),
+    [findNick, onSelectUser, onJoinChannel],
+  );
+
   const jumpToBottom = () => scrollRef.current?.scrollTo(scrollRef.current.scrollHeight);
 
   const title = buffer ? buffer.name : STATUS_BUFFER;
@@ -508,7 +542,7 @@ export function ChatPane({
                   msg={msg}
                   grouped={grouped}
                   highlightMentions={buffer.kind === "channel"}
-                  onSelectUser={onSelectUser}
+                  names={names}
                 />
               </box>
             );

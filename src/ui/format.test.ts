@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { theme } from "../theme.ts";
-import { parseIrcText, plainSegments, truncateSegments } from "./format.tsx";
+import { parseIrcText, plainSegments, truncateSegments, underlineRange } from "./format.tsx";
 
 const plain = (text: string) =>
   plainSegments(text)
@@ -90,4 +90,17 @@ test("a link with right-to-left letters is still one link", () => {
   expect(plainSegments(url)).toEqual([
     { text: url, href: "https://he.wikipedia.org/wiki/%D7%A2%D7%91" },
   ]);
+});
+
+test("underlineRange underlines a range that crosses segments", () => {
+  const segs = underlineRange(parseIrcText("hi \x02bob\x02: yo"), { start: 2, end: 6 });
+  expect(segs.map(({ text, bold, underline }) => ({ text, bold, underline }))).toEqual([
+    { text: "hi", bold: undefined, underline: undefined },
+    { text: " ", bold: undefined, underline: true },
+    { text: "bob", bold: true, underline: true },
+    { text: ": yo", bold: undefined, underline: undefined },
+  ]);
+  // Nothing changes for a range outside the text, such as one moved before it.
+  const plain = parseIrcText("hi");
+  expect(underlineRange(plain, { start: -4, end: -1 })).toEqual(plain);
 });

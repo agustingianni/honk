@@ -13,6 +13,9 @@ export function isUserSender(from: string): boolean {
   return from !== "" && from !== UNKNOWN_SENDER && !from.includes(".");
 }
 
+/** One character that a nick can hold (RFC 2812, with digits and "-" anywhere). */
+export const NICK_CHAR = /[\w[\]\\`^{}|-]/;
+
 export function isChannelName(name: string): boolean {
   return /^[#&+!]/.test(name);
 }

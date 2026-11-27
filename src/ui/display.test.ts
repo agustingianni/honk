@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cellWidth, setWidthMethod, truncate } from "./display.ts";
+import { cellWidth, indexAtCell, setWidthMethod, truncate } from "./display.ts";
 
 const FAMILY = "👨‍👩‍👧‍👦";
 
@@ -59,4 +59,13 @@ test("control characters take no cells, as <text> hides them", () => {
 test("a tab takes 2 cells, as <text> draws it", () => {
   expect(cellWidth("a\tb")).toBe(4);
   expect(truncate("rules:\tbe nice", 9)).toBe("rules:\t…");
+});
+
+test("indexAtCell finds the character that covers a cell", () => {
+  expect(indexAtCell("abc", 1)).toBe(1);
+  expect(indexAtCell("abc", 3)).toBe(-1);
+  // Each of these takes 2 cells.
+  expect([0, 1, 2, 3, 4].map((col) => indexAtCell("日本a", col))).toEqual([0, 0, 1, 1, 2]);
+  // The family emoji is 11 code units and 2 cells.
+  expect(indexAtCell(`${FAMILY}x`, 2)).toBe(FAMILY.length);
 });
