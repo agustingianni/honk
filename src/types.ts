@@ -66,6 +66,8 @@ export interface ChatMessage {
   id: string;
   msgid?: string;
   timestamp: Date;
+  /** True if `timestamp` is the server's (a time tag), not honk's clock. See src/irc/replay.ts. */
+  timeFromServer?: boolean;
   kind: MessageKind;
   from?: string;
   text: string;

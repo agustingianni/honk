@@ -19,6 +19,13 @@
  * Counting: if History holds "lol" twice in one second and honk keeps it once, the
  * first copy is a Replay and the second is new.
  *
+ * Some kept Lines have a time from honk's own clock: your line whose Echo never came,
+ * or a live line without a time tag. That clock can be a little off from the server's,
+ * so in rule 2 such a Line matches History less than 2 seconds away instead:
+ *
+ *   kept:    "lol" at 21:35:07.950, honk's clock
+ *   History: "lol" at 21:35:08.100, the server's    -> Replay
+ *
  * The code here reads Lines and changes nothing, so the screen and a Log on disk can
  * use it the same way: pass the kept Lines that could match, and act on the verdict.
  */
@@ -31,6 +38,8 @@ export interface ReplayLine {
   from?: string;
   text: string;
   timestamp: Date;
+  /** True if `timestamp` came from the server, false or unset if from honk's clock. */
+  timeFromServer?: boolean;
   msgid?: string;
   isHistory?: boolean;
 }
@@ -68,37 +77,45 @@ function matchKey(line: ReplayLine): MatchKey {
   };
 }
 
-/** True if `line` has the match key `key`. The cheap fields are compared first. */
-function hasKey(line: ReplayLine, key: MatchKey): boolean {
-  return (
-    line.kind === key.kind &&
-    (line.from ?? "") === key.from &&
-    wholeSecond(line.timestamp) === key.second &&
-    stripIrcFormatting(line.text) === key.plain
-  );
+/** How far apart a time from honk's clock and the server's time can be. */
+export const LOCAL_CLOCK_WINDOW_MS = 2000;
+
+/**
+ * True if the kept Line `kept` matches `line`, whose match key is `key`. Whole seconds
+ * when both times came from the server, else within LOCAL_CLOCK_WINDOW_MS. The cheap
+ * fields are compared first.
+ */
+function matches(kept: ReplayLine, line: ReplayLine, key: MatchKey): boolean {
+  if (kept.kind !== key.kind || (kept.from ?? "") !== key.from) return false;
+  const sameTime =
+    kept.timeFromServer && line.timeFromServer
+      ? wholeSecond(kept.timestamp) === key.second
+      : Math.abs(kept.timestamp.getTime() - line.timestamp.getTime()) < LOCAL_CLOCK_WINDOW_MS;
+  return sameTime && stripIrcFormatting(kept.text) === key.plain;
 }
 
 /**
  * The History Lines of one batch, such as one CHATHISTORY batch, for one Buffer.
  *
- * The Lines of a batch arrive one at a time, and a Line the batch keeps is in the
- * kept Lines when the next one is checked. So the second "lol" of a batch would match
- * the first one, and be dropped. The batch remembers, per match key, how many copies
- * it has seen and how many it kept, so that only Lines from before it are counted:
+ * The Lines of a batch arrive one at a time, and a Line the batch keeps is in the kept
+ * Lines when the next one is checked. A full Buffer can also drop its oldest Lines
+ * during the batch. So the batch counts against the kept Lines as they were when it
+ * first saw each match key: how many matched then ("before"), and how many copies it
+ * has seen since. A copy is a Replay while the copies seen are no more than "before":
  *
  *   kept before: "lol"         batch: "lol", "lol"
- *   1st copy: 1 match before it, copy 1  -> Replay
- *   2nd copy: 1 match before it, copy 2  -> new
+ *   1st copy: seen 1, before 1  -> Replay
+ *   2nd copy: seen 2, before 1  -> new
  */
 export class HistoryBatch {
-  private copies = new Map<string, { seen: number; kept: number }>();
+  private copies = new Map<string, { seen: number; before: number }>();
 
-  /** The counts for one match key. */
-  count(key: MatchKey): { seen: number; kept: number } {
+  /** The counts for one match key. `before` is used the first time the key comes. */
+  count(key: MatchKey, before: number): { seen: number; before: number } {
     const k = [key.kind, key.from, key.plain, key.second].join("\0");
     let c = this.copies.get(k);
     if (!c) {
-      c = { seen: 0, kept: 0 };
+      c = { seen: 0, before };
       this.copies.set(k, c);
     }
     return c;
@@ -108,7 +125,7 @@ export class HistoryBatch {
 /**
  * Decides what to do with `line`, coming into a Buffer that keeps `kept` (oldest
  * first). `kept` may be the whole Buffer, or only the Lines that could match: the same
- * msgid, or the same kind, nick, text without formatting, and whole second.
+ * msgid, or the same kind, nick, and text without formatting, at about the same time.
  *
  * `batch` holds the counts for History that comes in several Lines. The caller must
  * act on each verdict before it checks the next Line of the batch. Without a batch,
@@ -119,23 +136,20 @@ export function checkReplay<T extends ReplayLine>(
   line: ReplayLine,
   batch: HistoryBatch = new HistoryBatch(),
 ): ReplayVerdict<T> {
-  // Rule 1.
+  // Rule 1. Not counted in the batch: a Line with a known msgid takes no other's place.
   if (line.msgid && kept.some((k) => k.msgid === line.msgid)) return { type: "replay" };
   // Rule 4, and a live Line with a msgid honk does not have.
   if (!line.isHistory) return { type: "new" };
 
   const key = matchKey(line);
-  const copies = batch.count(key);
+  const same = kept.filter((k) => matches(k, line, key));
+  const copies = batch.count(key, same.length);
   copies.seen++;
-  const matches = kept.filter((k) => hasKey(k, key));
-  // Rule 3.
-  if (line.msgid) {
-    const without = matches.find((k) => !k.msgid);
-    if (without) return { type: "give-msgid", line: without, msgid: line.msgid };
-  } else if (copies.seen <= matches.length - copies.kept) {
-    // Rule 2. Lines this batch kept came after the copies it is counting.
-    return { type: "replay" };
-  }
-  copies.kept++;
-  return { type: "new" };
+  // More copies than honk had before the batch: this one is new.
+  if (copies.seen > copies.before) return { type: "new" };
+  // Rule 2.
+  if (!line.msgid) return { type: "replay" };
+  // Rule 3. A kept Line with another msgid is another Line, so this one is new.
+  const without = same.find((k) => !k.msgid);
+  return without ? { type: "give-msgid", line: without, msgid: line.msgid } : { type: "new" };
 }

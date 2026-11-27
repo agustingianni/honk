@@ -15,6 +15,7 @@ function line(overrides: Partial<ChatMessage> = {}): ChatMessage {
     from: "alice",
     text: "lol",
     timestamp: new Date(T),
+    timeFromServer: true,
     ...overrides,
   };
 }
@@ -24,14 +25,16 @@ const history = (overrides: Partial<ChatMessage> = {}) => line({ isHistory: true
 /**
  * Runs Lines through the rule the way a Buffer would: a new Line is kept, a Replay is
  * dropped, and a msgid given to a kept Line is set on it. One HistoryBatch per call,
- * like one CHATHISTORY batch. Returns the kept Lines.
+ * like one CHATHISTORY batch. With `limit`, the oldest Lines are trimmed after each
+ * one, as a full Buffer does. Returns the kept Lines.
  */
-function receive(kept: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+function receive(kept: ChatMessage[], incoming: ChatMessage[], limit = Infinity): ChatMessage[] {
   const lines = [...kept];
   const batch = new HistoryBatch();
   for (const l of incoming) {
     const verdict = checkReplay(lines, l, batch);
     if (verdict.type === "new") lines.push(l);
+    if (lines.length > limit) lines.splice(0, lines.length - limit);
     if (verdict.type === "give-msgid") {
       const at = lines.indexOf(verdict.line);
       lines[at] = { ...verdict.line, msgid: verdict.msgid };
@@ -148,10 +151,50 @@ describe("checkReplay", () => {
       expect(summary(after)).toEqual(["alice lol -", "bob lol -", "alice lol -"]);
     });
 
+    test("trimming a full Buffer during a batch does not change the count", () => {
+      // bob's new Line trims the oldest "lol", but the batch still had two before it.
+      const kept = [line(), line()];
+      const after = receive(kept, [history(), history({ from: "bob" }), history()], 2);
+      expect(summary(after)).toEqual(["alice lol -", "bob lol -"]);
+    });
+
+    test.each([
+      ["nothing", []],
+      ["lol", [line()]],
+      ["lol#A", [line({ msgid: "A" })]],
+      ["lol#A and lol", [line({ msgid: "A" }), line()]],
+    ] as const)("a mixed batch gives the same result in any order, kept: %s", (_name, kept) => {
+      const one = receive([...kept], [history(), history({ msgid: "A" })]);
+      const two = receive([...kept], [history({ msgid: "A" }), history()]);
+      expect(one).toHaveLength(two.length);
+      expect(one.filter((l) => l.msgid === "A")).toHaveLength(1);
+    });
+
     test("without a batch, each History Line is counted alone", () => {
       const kept = [line()];
       expect(checkReplay(kept, history()).type).toBe("replay");
       expect(checkReplay(kept, history()).type).toBe("replay");
+    });
+  });
+
+  describe("a kept Line whose time came from honk's clock", () => {
+    // Honk's clock and the server's can be a little apart, so whole seconds can differ.
+    const local = (ms: number) => line({ timestamp: new Date(ms), timeFromServer: false });
+    const at = (iso: string) => history({ timestamp: new Date(iso) });
+
+    test("matches History within 2 seconds, even in another second", () => {
+      const kept = [local(Date.parse("2026-11-27T21:35:07.950Z"))];
+      expect(receive(kept, [at("2026-11-27T21:35:08.100Z")])).toHaveLength(1);
+    });
+
+    test("does not match History 2 seconds or more away", () => {
+      const kept = [local(Date.parse("2026-11-27T21:35:07.950Z"))];
+      expect(receive(kept, [at("2026-11-27T21:35:09.950Z")])).toHaveLength(2);
+    });
+
+    test("a kept Line with the server's time matches whole seconds only", () => {
+      const kept = [line({ timestamp: new Date("2026-11-27T21:35:07.950Z") })];
+      expect(receive(kept, [at("2026-11-27T21:35:08.100Z")])).toHaveLength(2);
     });
   });
 
@@ -274,6 +317,32 @@ describe("through the manager", () => {
     const whole = new Date(Math.floor(serverTime.getTime() / 1000) * 1000).toISOString();
     await replay("r1", [`time=${whole} :goose!goose@fake PRIVMSG #honk :hi`]);
     expect(lines().filter((l) => l.text === "hi")).toHaveLength(1);
+  });
+
+  test("your own line without an Echo is not shown again by History a second later", async () => {
+    await inHonk();
+    m.setActive("alpha", "#honk");
+    irc.holdEchoes = true; // the Echo never comes, so the line keeps honk's time
+    m.handleInput("hi");
+    await until(() => lines().some((l) => l.text === "hi"));
+    const sent = lines().find((l) => l.text === "hi")!.timestamp.getTime();
+    // The server's time is in the next second, but less than 2 seconds later.
+    const serverTime = new Date((Math.floor(sent / 1000) + 1) * 1000 + 100).toISOString();
+    await replay("r1", [`time=${serverTime} :goose!goose@fake PRIVMSG #honk :hi`]);
+    expect(lines().filter((l) => l.text === "hi")).toHaveLength(1);
+  });
+
+  test("the Echo's time puts your line in time order", async () => {
+    await inHonk();
+    m.setActive("alpha", "#honk");
+    irc.holdEchoes = true;
+    m.handleInput("hi");
+    await until(() => irc.heldEchoCount === 1);
+    const now = Date.now();
+    irc.sendRaw(`@time=${new Date(now + 1000).toISOString()} :bob!b@host PRIVMSG #honk :later`);
+    irc.sendRaw(`@time=${new Date(now + 2000).toISOString()} :goose!goose@fake PRIVMSG #honk :hi`);
+    await until(() => lines().some((l) => l.text === "hi" && l.timestamp.getTime() === now + 2000));
+    expect(lines().map((l) => l.text).slice(-2)).toEqual(["later", "hi"]);
   });
 
   test("History gives its msgid to a line shown without one", async () => {

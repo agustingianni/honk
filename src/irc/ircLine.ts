@@ -172,8 +172,18 @@ export function timestampParam(ms: number): string {
  * the date formatting in the chat.
  */
 export function tagTime(tags?: { time?: string }): Date {
+  return lineTime(tags).timestamp;
+}
+
+/**
+ * A Line's time as tagTime gives it, and whether it came from the server's tag. A time
+ * from honk's own clock can be a little off. See replay.ts.
+ */
+export function lineTime(tags?: { time?: string }): { timestamp: Date; timeFromServer?: true } {
   const ms = tags?.time ? Date.parse(tags.time) : NaN;
-  return new Date(Number.isNaN(ms) ? Date.now() : ms);
+  return Number.isNaN(ms)
+    ? { timestamp: new Date() }
+    : { timestamp: new Date(ms), timeFromServer: true };
 }
 
 /** The time in ms of a "timestamp=..." parameter. Undefined for "*" or anything else. */

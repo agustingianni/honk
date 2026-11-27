@@ -182,6 +182,19 @@ describe("FakeIrcd", () => {
     expect(await c.wait(/CHATHISTORY TARGETS/)).toMatch(/CHATHISTORY TARGETS dave timestamp=/);
   });
 
+  test("sendRaw passes only the tags the client asked for", async () => {
+    irc = await FakeIrcd.start();
+    const plain = client();
+    const tagged = client();
+    await plain.register("goose");
+    await tagged.register("gander", ["server-time", "message-tags"]);
+    irc.sendRaw("@msgid=AB12;time=2026-11-27T21:35:07.000Z;other=x :alice!a@h PRIVMSG #honk :lol");
+    expect(await plain.wait(/PRIVMSG #honk :lol/)).toBe(":alice!a@h PRIVMSG #honk :lol");
+    expect(await tagged.wait(/PRIVMSG #honk :lol/)).toBe(
+      "@time=2026-11-27T21:35:07.000Z;msgid=AB12 :alice!a@h PRIVMSG #honk :lol",
+    );
+  });
+
   test("SASL PLAIN logs in", async () => {
     irc = await FakeIrcd.start();
     const c = client();

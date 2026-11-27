@@ -58,7 +58,7 @@ import {
   whoisLines,
   type Endpoint,
 } from "./replies.ts";
-import { commandOf, MAX_LINE_BYTES, parseLine, tagTime, timestampParam } from "./ircLine.ts";
+import { commandOf, lineTime, MAX_LINE_BYTES, parseLine, timestampParam } from "./ircLine.ts";
 import {
   isAfterMarker,
   isMarkedRead,
@@ -1461,7 +1461,7 @@ export class IrcManager {
           makeMessage(msgKind, text, {
             from,
             msgid: raw.tags?.msgid,
-            timestamp: tagTime(raw.tags),
+            ...lineTime(raw.tags),
             isSelf,
             isHistory: true,
           }),
@@ -1508,7 +1508,8 @@ export class IrcManager {
         const echo = { kind, text: msg.params.text };
         const shownId = this.echoes.take(serverId, this.bufferKey(serverId, target), echo);
         if (shownId) {
-          const time = tags?.time ? tagTime(tags) : undefined;
+          const { timestamp, timeFromServer } = lineTime(tags);
+          const time = timeFromServer ? timestamp : undefined;
           this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid, time);
           return;
         }
@@ -1520,7 +1521,7 @@ export class IrcManager {
         makeMessage(kind, msg.params.text, {
           from,
           msgid: tags?.msgid,
-          timestamp: tagTime(tags),
+          ...lineTime(tags),
           isMention,
           isSelf,
           isHistory,
@@ -1553,7 +1554,7 @@ export class IrcManager {
         makeMessage("notice", msg.params.text, {
           from,
           msgid: tags?.msgid,
-          timestamp: tagTime(tags),
+          ...lineTime(tags),
           isHistory: isHistoryBatch(tags),
         }),
       );
@@ -1728,9 +1729,8 @@ export class IrcManager {
   /**
    * The echo of a line you sent: the line shows the text the server has (trimmed, or
    * the first part of a split line) and gets its msgid and time, so history doesn't add
-   * it again. History is matched by the server's time (see replay.ts), and honk's clock
-   * can be off by a second or more. The line stays where it was shown, even if the new
-   * time is a little before or after its neighbors.
+   * it again. With the server's time it also moves to its place in time order: History
+   * is matched by the server's time (see replay.ts), and honk's clock can be off.
    */
   private applyEcho(
     serverId: string,
@@ -1740,13 +1740,31 @@ export class IrcManager {
     msgid: string | undefined,
     time: Date | undefined,
   ): void {
-    this.updateMessages(serverId, this.bufferKey(serverId, target), new Set([messageId]), (m) => ({
+    const bufferName = this.bufferKey(serverId, target);
+    this.updateMessages(serverId, bufferName, new Set([messageId]), (m) => ({
       ...m,
       text,
       ...(msgid ? { msgid } : {}),
-      ...(time ? { timestamp: time } : {}),
+      ...(time ? { timestamp: time, timeFromServer: true } : {}),
     }));
+    if (time) this.moveToTimeOrder(serverId, bufferName, messageId);
     this.emit();
+  }
+
+  /** Moves one line whose time changed to its place in time order, as pushMessage puts lines. */
+  private moveToTimeOrder(serverId: string, bufferName: string, messageId: string): void {
+    const server = this.servers.get(serverId);
+    const buf = server?.buffers[bufferName];
+    const from = buf?.messages.findLastIndex((m) => m.id === messageId) ?? -1;
+    if (!server || !buf || from < 0) return;
+    const messages = [...buf.messages];
+    const [line] = messages.splice(from, 1);
+    const t = line!.timestamp.getTime();
+    let at = messages.length;
+    while (at > 0 && messages[at - 1]!.timestamp.getTime() > t) at--;
+    if (at === from) return;
+    messages.splice(at, 0, line!);
+    server.buffers = { ...server.buffers, [bufferName]: { ...buf, messages } };
   }
 
   /** Sets the delivery state of sent lines. `undefined` means the server has them. */
