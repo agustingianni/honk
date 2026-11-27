@@ -75,6 +75,14 @@ describe("bundled themes", () => {
         const [worst, surface] = worstContrast(t, color);
         expect(worst, `${label} on ${surface}`).toBeGreaterThanOrEqual(min);
       }
+      // Secondary text (the nicklist), muted text (timestamps, hints) and dim
+      // text (join and part lines) get weaker in that order.
+      expect(contrast(t.fgMuted, t.bgBase), "fgMuted weaker than fgSecondary").toBeLessThan(
+        contrast(t.fgSecondary, t.bgBase),
+      );
+      expect(contrast(t.fgDim, t.bgBase), "fgDim weaker than fgMuted").toBeLessThan(
+        contrast(t.fgMuted, t.bgBase),
+      );
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);
       // The active channel, and the omnibox row that Enter picks, must be easy to see.
@@ -140,6 +148,14 @@ describe("schemeToTheme", () => {
     const t = schemeToTheme(r.scheme);
     expect(t.bgSidebar).toBe(mix("#1e1e2e", "#000000", 0.15));
     expect(t.red).toBe("#f38ba8");
+  });
+
+  test("muted text is weaker than secondary text when base03 is brighter than base04", () => {
+    const r = checkScheme(scheme16({ ...PALETTE16, base03: "#909090", base04: "#707070" }));
+    if (!r.ok) throw new Error(r.problems.join("; "));
+    const t = schemeToTheme(r.scheme);
+    expect(t.fgSecondary).toBe("#707070");
+    expect(contrast(t.fgMuted, t.bgBase)).toBeLessThan(contrast(t.fgSecondary, t.bgBase));
   });
 
   test("ignores base24 backgrounds far from base00", () => {
