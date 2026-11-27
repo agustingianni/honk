@@ -49,6 +49,23 @@ describe("truncateSegments", () => {
     expect(shown(segs)).toBe("red and…");
   });
 
+  test("a colored text that does not fit is cut at the room, and keeps its colors", () => {
+    const segs = parseIrcText("\x0304red\x03 \x0309green\x03 \x0312blue\x03 rules: be nice");
+    const cut = truncateSegments(segs, 12);
+    expect(cut.map((s) => s.text)).toEqual(["red", " ", "green", " ", "b…"]);
+    expect(cut.map((s) => s.fg)).toEqual(segs.slice(0, 5).map((s) => s.fg));
+  });
+
+  test("a wide colored text is cut between graphemes, and keeps its color", () => {
+    // 4 cells, then 10 cells of CJK.
+    const segs = parseIrcText("\x0304red \x0312日本語です");
+    const cut = truncateSegments(segs, 9);
+    expect(shown(cut)).toBe("red 日本…");
+    expect(cut[1]!.fg).toBe(segs[1]!.fg);
+    // An even room cannot fit a wide character before the ellipsis: one cell short.
+    expect(shown(truncateSegments(segs, 10))).toBe("red 日本…");
+  });
+
   test("a segment that fills the room exactly still ends in an ellipsis", () => {
     const segs = truncateSegments(parseIrcText("\x02abcd\x02efgh"), 4);
     expect(shown(segs)).toBe("abc…");

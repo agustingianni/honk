@@ -180,6 +180,16 @@ test("a wide channel name and topic fit the header", async () => {
   );
 });
 
+test("the color codes of a topic take no room in the header", async () => {
+  // 29 cells shown, 41 characters with the codes.
+  const topic = "\x0304red\x03 \x0309green\x03 \x0312blue\x03 rules: be nice";
+  // At width 50 the topic has exactly 29 cells, beside "#honk" and "0 users".
+  const header = async (width: number) =>
+    (await renderLines({ topic }, width)).find((line) => line.includes("#honk"));
+  expect(await header(50)).toBe("  #honk — red green blue rules: be nice  0 users  ");
+  expect(await header(49)).toBe("  #honk — red green blue rules: be ni…  0 users  ");
+});
+
 test("a click opens a link in a message and in the topic", async () => {
   const opened: string[] = [];
   const { screen, mockMouse, destroy } = await renderPane(
