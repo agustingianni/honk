@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
-import { act } from "react";
+import { act, useState } from "react";
 import type { BufferState, ChatMessage } from "../types.ts";
 import { ChatPane } from "./ChatPane.tsx";
 
@@ -139,18 +139,66 @@ test("a click opens a link in a message and in the topic", async () => {
   }
 });
 
-test("a click on a topic link that is cut to fit opens the whole URL", async () => {
+test("a topic link that is cut to fit is not a link", async () => {
+  // "https://github.com…" must not open https://github.com.evil.example/.
   const opened: string[] = [];
-  const url = "https://honk.example/docs/a/very/long/path";
-  const { screen, mockMouse, destroy } = await renderPane({ topic: `docs at ${url}` }, 40, (href) =>
-    opened.push(href),
+  const { screen, mockMouse, destroy } = await renderPane(
+    { topic: "docs at https://github.com.evil.example/login" },
+    48,
+    (href) => opened.push(href),
   );
   try {
     const y = screen.findIndex((line) => line.includes("https://"));
-    expect(screen[y]).toContain("…");
+    expect(screen[y]).toContain("https://github.com…");
     await act(() => mockMouse.click(screen[y]!.indexOf("https://") + 2, y));
-    expect(opened).toEqual([url]);
+    expect(opened).toEqual([]);
   } finally {
     destroy();
+  }
+});
+
+test("after the topic changes, a click opens the link it shows now", async () => {
+  // OpenTUI reads a link's URL only when it creates it, so a reused link kept the old one.
+  const opened: string[] = [];
+  let setTopic: (topic: string) => void = () => {};
+  function Pane() {
+    const [topic, set] = useState("docs: https://evil.example/phish");
+    setTopic = set;
+    const buffer: BufferState = {
+      name: "#honk",
+      kind: "channel",
+      topic,
+      messages: [],
+      users: [],
+      unread: 0,
+      hasMention: false,
+    };
+    return (
+      <ChatPane
+        server={undefined}
+        buffer={buffer}
+        inputFocused={false}
+        paneWidth={80}
+        onSubmit={() => {}}
+        onPasteLines={() => {}}
+        onSelectUser={() => {}}
+        onOpenLink={(href) => opened.push(href)}
+      />
+    );
+  }
+  const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(<Pane />, {
+    width: 80,
+    height: 12,
+  });
+  try {
+    await renderOnce();
+    await act(async () => setTopic("docs: https://github.com/agustingianni/honk"));
+    await renderOnce();
+    const screen = captureCharFrame().split("\n");
+    const y = screen.findIndex((line) => line.includes("https://github.com"));
+    await act(() => mockMouse.click(screen[y]!.indexOf("https://github.com") + 3, y));
+    expect(opened).toEqual(["https://github.com/agustingianni/honk"]);
+  } finally {
+    act(() => renderer.destroy());
   }
 });

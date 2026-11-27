@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { theme, useThemeVersion } from "../theme.ts";
+import { safeLinkUrl } from "../openUrl.ts";
 import { cellWidth, truncate } from "./display.ts";
 
 // Standard mIRC 0-15 colors (tuned slightly for dark TrueColor backgrounds)
@@ -94,14 +95,13 @@ function splitSegmentUrls(seg: FormattedSegment): FormattedSegment[] {
       out.push({ ...seg, text: seg.text.slice(lastIdx, match.index) });
     }
     const { url, trailing } = trimUrlTrailingPunct(match[0]);
-    if (url) {
-      out.push({
-        ...seg,
-        text: url,
-        href: url,
-        underline: true,
-        fg: seg.fg ?? theme.cyan,
-      });
+    const href = url ? safeLinkUrl(url) : undefined;
+    if (href) {
+      // Always the link color on the normal background: the sender's colors
+      // could make a link invisible, so that a click on "empty" space opens it.
+      out.push({ ...seg, text: url, href, underline: true, fg: theme.cyan, bg: undefined });
+    } else if (url) {
+      out.push({ ...seg, text: url });
     }
     if (trailing) {
       out.push({ ...seg, text: trailing });
@@ -229,8 +229,7 @@ export function parseIrcText(input: string): FormattedSegment[] {
 
 /**
  * Cuts the shown text of `segments` to at most `max` terminal cells, with "…"
- * at the end when it cuts. A link that is cut keeps its full href, so a click
- * on what is left still opens the whole URL.
+ * at the end when it cuts. A link that is cut stops being a link.
  */
 export function truncateSegments(segments: FormattedSegment[], max: number): FormattedSegment[] {
   const total = segments.reduce((sum, seg) => sum + cellWidth(seg.text), 0);
@@ -247,7 +246,14 @@ export function truncateSegments(segments: FormattedSegment[], max: number): For
     }
     // More text follows, so this segment must end in "…". The extra space makes
     // truncate() cut even when the segment alone fills the room exactly.
-    out.push({ ...seg, text: truncate(`${seg.text} `, room) });
+    const cut = { ...seg, text: truncate(`${seg.text} `, room) };
+    // A cut link is not a link: "https://github.com…" could hide the real host,
+    // as in "https://github.com.evil.example/".
+    if (cut.href) {
+      delete cut.href;
+      delete cut.underline;
+    }
+    out.push(cut);
     break;
   }
   return out;
@@ -311,7 +317,9 @@ function Segments({
 
         if (seg.href) {
           return (
-            <a key={idx} href={seg.href} fg={seg.fg ?? theme.cyan} bg={seg.bg}>
+            // Keyed by the URL too: OpenTUI reads `href` only when it creates
+            // the link, so a reused <a> would show new text but open the old URL.
+            <a key={`${idx}:${seg.href}`} href={seg.href} fg={seg.fg ?? theme.cyan} bg={seg.bg}>
               {node}
             </a>
           );

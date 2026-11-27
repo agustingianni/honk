@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { MousePointerStyle } from "@opentui/core";
 import { MouseButtons } from "@opentui/core/testing";
 import { useRenderer } from "@opentui/react";
-import { act } from "react";
+import { act, useState } from "react";
 import { testRender } from "@opentui/react/test-utils";
 import { Clickable, isPlainClick, LinkArea, PointerTracker } from "./Clickable.tsx";
 
@@ -172,6 +172,37 @@ describe("LinkArea", () => {
     await act(() => mockMouse.moveTo(6, 0));
     await act(() => mockMouse.click(6, 0));
     expect(pointers).toEqual([]);
+    await act(() => dispose());
+  });
+
+  test("a link that moved under the mouse after the press does not open", async () => {
+    // New lines scroll the feed: the press was on plain text, the release is on a link.
+    const opened: string[] = [];
+    let setText: (text: string) => void = () => {};
+    function Feed() {
+      const [text, set] = useState("plain text");
+      setText = set;
+      return (
+        <LinkArea onOpenLink={(href) => opened.push(href)} width={30}>
+          <text>{text.startsWith("https://") ? <a href={text}>{text}</a> : text}</text>
+        </LinkArea>
+      );
+    }
+    const { mockMouse, renderOnce, dispose } = await testRender(<Feed />, { width: 30, height: 3 });
+    await renderOnce();
+    await act(() => mockMouse.pressDown(2, 0));
+    await act(async () => setText("https://evil.example/"));
+    await renderOnce();
+    await act(() => mockMouse.release(2, 0));
+    expect(opened).toEqual([]);
+    await act(() => dispose());
+  });
+
+  test("the click that focuses the terminal window does not open a link", async () => {
+    const { mockMouse, opened, renderer, dispose } = await setup();
+    renderer.emit("focus");
+    await act(() => mockMouse.click(6, 0));
+    expect(opened).toEqual([]);
     await act(() => dispose());
   });
 });

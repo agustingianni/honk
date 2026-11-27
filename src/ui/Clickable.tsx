@@ -1,6 +1,6 @@
 import type { CliRenderer, MouseEvent, MousePointerStyle } from "@opentui/core";
 import { useRenderer, type BoxProps } from "@opentui/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /**
  * Decides the mouse pointer from how many clickable elements are under the
@@ -146,9 +146,12 @@ export function Clickable({ hoverColor, children, ...props }: ClickableProps) {
   );
 }
 
+/** A click this soon after the terminal window got focus may be the click that focused it. */
+const FOCUS_CLICK_MS = 500;
+
 type LinkAreaProps = Omit<
   BoxProps,
-  "onMouseOver" | "onMouseOut" | "onMouseMove" | "onMouseUp"
+  "onMouseOver" | "onMouseOut" | "onMouseMove" | "onMouseDown" | "onMouseUp"
 > & {
   /** Opens a link. Without it (over SSH), links get no hand pointer and a click is left to the terminal. */
   onOpenLink: ((href: string) => void) | undefined;
@@ -163,6 +166,15 @@ type LinkAreaProps = Omit<
  * A drag across a link still selects text, and Shift, Alt, or Ctrl with a
  * click leaves the link to the terminal (Cmd+click in most of them).
  *
+ * The links come from other people, so a click opens one only when it is
+ * clearly meant for it:
+ *
+ * - The same link is under the mouse at press and at release. New lines can
+ *   scroll the feed in between, and someone flooding links could otherwise
+ *   slide their link under a click that started on plain text.
+ * - The terminal window did not just get focus: some terminals pass the click
+ *   that focuses the window on to honk.
+ *
  * The pointer is checked only when the mouse moves. After a wheel scroll or a
  * new line under a still mouse, it is updated on the next move.
  */
@@ -170,6 +182,20 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
   const renderer = useRenderer();
   const [overLink, setOverLink] = useState(false);
   usePointer(overLink, setOverLink);
+
+  // The link under the mouse when the button went down.
+  const pressedLink = useRef<string | null>(null);
+  const focusedAt = useRef(0);
+
+  useEffect(() => {
+    const onFocus = () => {
+      focusedAt.current = performance.now();
+    };
+    renderer.on("focus", onFocus);
+    return () => {
+      renderer.off("focus", onFocus);
+    };
+  }, [renderer]);
 
   // Only whether there is a link: the id is enough, without copying its URL.
   const check = (event: MouseEvent) =>
@@ -183,10 +209,15 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
       onMouseOver={check}
       onMouseMove={check}
       onMouseOut={() => setOverLink(false)}
+      onMouseDown={(event) => {
+        pressedLink.current = renderer.getLinkAt(event.x, event.y);
+      }}
       onMouseUp={(event) => {
-        if (!onOpenLink || !isPlainClick(renderer, event)) return;
-        const href = renderer.getLinkAt(event.x, event.y);
-        if (href) onOpenLink(href);
+        const pressed = pressedLink.current;
+        pressedLink.current = null;
+        if (!onOpenLink || !pressed || !isPlainClick(renderer, event)) return;
+        if (performance.now() - focusedAt.current < FOCUS_CLICK_MS) return;
+        if (renderer.getLinkAt(event.x, event.y) === pressed) onOpenLink(pressed);
       }}
     >
       {children}
