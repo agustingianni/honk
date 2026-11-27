@@ -13,7 +13,9 @@
 // - The gray text slots (base03, base04) and the bright text (base06, base07)
 //   are used only when they are readable and really gray.
 // - The accent slots (base08 red, ..., base0E magenta) keep their hue, but one
-//   below 3:1 on base00 is moved toward the bright text until it reaches 3:1.
+//   below 3:1 on any background that text is drawn on (the chat, the panels,
+//   selected and hovered rows) is moved toward the bright text until it
+//   reaches 3:1 on all of them. Muted text is moved the same way to 2:1.
 // There is no hue check: Gruvbox's yellow-green "green" or Rose Pine's teal
 // cannot be told apart from a mistake.
 
@@ -203,8 +205,12 @@ export function schemeToTheme(scheme: Scheme): Theme {
     p.base08, p.base09, p.base0A, p.base0B, p.base0C, p.base0D, p.base0E,
     p.base12, p.base13, p.base14, p.base15, p.base16, p.base17,
   ];
+  // Nicks are drawn on the same backgrounds as accents (mention rows, the
+  // nicklist, the omnibox), so they get the same adjustment.
   const nickPalette = [
-    ...new Set(accents.filter((c): c is string => c !== undefined && contrast(c, bg) >= 3)),
+    ...new Set(
+      accents.filter((c): c is string => c !== undefined && contrast(c, bg) >= 3).map(readable),
+    ),
   ];
 
   return {

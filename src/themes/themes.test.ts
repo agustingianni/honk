@@ -75,7 +75,8 @@ describe("bundled themes", () => {
       const [muted, surface] = worstContrast(t, t.fgMuted);
       expect(muted, `fgMuted on ${surface}`).toBeGreaterThanOrEqual(MIN_MUTED_CONTRAST);
       for (const c of t.nickPalette) {
-        expect(contrast(c, t.bgBase), c).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
+        const [worst, surface] = worstContrast(t, c);
+        expect(worst, `nick color ${c} on ${surface}`).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
       }
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);
