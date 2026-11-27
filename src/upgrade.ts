@@ -27,7 +27,7 @@ import { TARGET, VERSION } from "./version.ts";
 export const REPO = "agustingianni/honk";
 const INSTALL_COMMAND = "curl -fsSL https://agustingianni.github.io/honk/install.sh | sh";
 /** A download that sends no data for this long fails. */
-export const IDLE_TIMEOUT_MS = 30_000;
+const IDLE_TIMEOUT_MS = 30_000;
 
 /** An error with a message for the user, printed without a stack trace. */
 export class UpgradeError extends Error {}
@@ -95,8 +95,7 @@ export async function latestRelease(githubUrl: string, signal?: AbortSignal): Pr
   try {
     res = await fetch(pageUrl, { method: "HEAD", redirect: "manual", signal });
   } catch (err) {
-    // An aborted fetch() rejects with the signal's reason, but say it either way.
-    const reason = networkReason(signal?.aborted ? signal.reason : err);
+    const reason = failureReason(err, signal);
     throw new UpgradeError(`could not find the latest release (${pageUrl}: ${reason})`);
   }
   const location = res.headers.get("location");
@@ -161,6 +160,12 @@ function networkReason(err: unknown): string {
   return text.replace(/ For more information, pass `verbose: true`[\s\S]*$/, "");
 }
 
+/** The text of a network error, or the abort reason when `signal` caused it. */
+function failureReason(err: unknown, signal?: AbortSignal): string {
+  // An aborted fetch() rejects with the signal's reason, but say it either way.
+  return networkReason(signal?.aborted ? signal.reason : err);
+}
+
 /**
  * Aborts a request when no data arrives for `ms`. Each chunk that arrives
  * restarts the timer, so it covers a server that never answers and a download
@@ -168,87 +173,33 @@ function networkReason(err: unknown): string {
  */
 class IdleTimeout {
   private readonly controller = new AbortController();
+  readonly signal = this.controller.signal;
+  private readonly reason: Error;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  readonly reason: string;
 
   constructor(private readonly ms: number) {
     const seconds = ms / 1000;
-    this.reason = `no data for ${seconds} second${seconds === 1 ? "" : "s"}`;
+    this.reason = new Error(`no data for ${seconds} second${seconds === 1 ? "" : "s"}`);
     this.restart();
-  }
-
-  get signal(): AbortSignal {
-    return this.controller.signal;
-  }
-
-  get expired(): boolean {
-    return this.controller.signal.aborted;
   }
 
   restart(): void {
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.controller.abort(new Error(this.reason)), this.ms);
+    this.timer = setTimeout(() => this.controller.abort(this.reason), this.ms);
   }
 
   stop(): void {
     clearTimeout(this.timer);
   }
-
-  /** The text for a network error, or the timeout when that caused it. */
-  why(err: unknown): string {
-    return this.expired ? this.reason : networkReason(err);
-  }
 }
 
-async function fetchOk(url: string, idle: IdleTimeout): Promise<Response> {
-  let res: Response;
+/** Runs `fn` with an IdleTimeout of `ms`, and stops the timer when `fn` ends. */
+async function withIdleTimeout<T>(ms: number, fn: (idle: IdleTimeout) => Promise<T>): Promise<T> {
+  const idle = new IdleTimeout(ms);
   try {
-    res = await fetch(url, { signal: idle.signal });
-  } catch (err) {
-    throw new UpgradeError(`download failed: ${url}: ${idle.why(err)}`);
-  }
-  // The headers are data too: the wait for the first body chunk starts now.
-  idle.restart();
-  if (!res.ok) {
-    res.body?.cancel().catch(() => {});
-    throw new UpgradeError(`download failed: ${url} answered ${res.status}`);
-  }
-  return res;
-}
-
-/**
- * Reads the body of `res` and passes each chunk to `onChunk`. Each chunk
- * restarts the idle timer. An error that `onChunk` throws passes through as is.
- * Returns the number of bytes read.
- */
-async function readBody(
-  url: string,
-  res: Response,
-  idle: IdleTimeout,
-  onChunk: (chunk: Uint8Array) => void | Promise<void>,
-): Promise<number> {
-  if (!res.body) return 0;
-  const reader = res.body.getReader();
-  let received = 0;
-  for (;;) {
-    let next: Awaited<ReturnType<typeof reader.read>>;
-    try {
-      next = await reader.read();
-    } catch (err) {
-      throw new UpgradeError(`download failed: ${url}: ${idle.why(err)}`);
-    }
-    if (next.done) return received;
-    received += next.value.length;
-    // A slow disk is not a network stall: the timer waits while the chunk is written.
+    return await fn(idle);
+  } finally {
     idle.stop();
-    try {
-      await onChunk(next.value);
-    } catch (err) {
-      // Close the connection too, not only the file.
-      reader.cancel().catch(() => {});
-      throw err;
-    }
-    idle.restart();
   }
 }
 
@@ -275,20 +226,64 @@ export function checkLength(url: string, res: Response, received: number) {
   }
 }
 
+/**
+ * Downloads `url` and passes each chunk of the body to `onChunk`. It fails when
+ * no data arrives for `idleMs`. An error that `onChunk` throws passes through
+ * as is.
+ */
+function download(
+  url: string,
+  idleMs: number,
+  onChunk: (chunk: Uint8Array) => void | Promise<void>,
+): Promise<void> {
+  return withIdleTimeout(idleMs, async (idle) => {
+    const failed = (err: unknown) =>
+      new UpgradeError(`download failed: ${url}: ${failureReason(err, idle.signal)}`);
+    let res: Response;
+    try {
+      res = await fetch(url, { signal: idle.signal });
+    } catch (err) {
+      throw failed(err);
+    }
+    // The headers are data too: the wait for the first body chunk starts now.
+    idle.restart();
+    if (!res.ok) {
+      res.body?.cancel().catch(() => {});
+      throw new UpgradeError(`download failed: ${url} answered ${res.status}`);
+    }
+    let received = 0;
+    const reader = res.body?.getReader();
+    while (reader) {
+      let next: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        next = await reader.read();
+      } catch (err) {
+        throw failed(err);
+      }
+      if (next.done) break;
+      received += next.value.length;
+      // A slow disk is not a network stall: the timer waits while the chunk is written.
+      idle.stop();
+      try {
+        await onChunk(next.value);
+      } catch (err) {
+        // Close the connection too, not only the file.
+        reader.cancel().catch(() => {});
+        throw err;
+      }
+      idle.restart();
+    }
+    checkLength(url, res, received);
+  });
+}
+
 /** Downloads a small text file, such as SHA256SUMS. */
 async function downloadText(url: string, idleMs: number): Promise<string> {
-  const idle = new IdleTimeout(idleMs);
-  try {
-    const res = await fetchOk(url, idle);
-    const chunks: Uint8Array[] = [];
-    const received = await readBody(url, res, idle, (chunk) => {
-      chunks.push(chunk);
-    });
-    checkLength(url, res, received);
-    return new TextDecoder().decode(Buffer.concat(chunks));
-  } finally {
-    idle.stop();
-  }
+  const chunks: Uint8Array[] = [];
+  await download(url, idleMs, (chunk) => {
+    chunks.push(chunk);
+  });
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 function cannotWrite(path: string, err: unknown): UpgradeError {
@@ -300,46 +295,29 @@ function cannotWrite(path: string, err: unknown): UpgradeError {
 }
 
 /**
- * Downloads `url` into the file `path`. It reads the body chunk by chunk
- * instead of using Bun.write(path, res), because Bun.write reports no progress,
- * and the idle timer needs to see each chunk arrive.
+ * Downloads `url` into the file `path`. It writes each chunk itself instead of
+ * using Bun.write(path, res), because Bun.write reports no progress, and the
+ * idle timer needs to see each chunk arrive.
  */
 async function downloadFile(url: string, path: string, idleMs: number): Promise<void> {
-  const idle = new IdleTimeout(idleMs);
+  const toCannotWrite = (err: unknown): never => {
+    throw cannotWrite(path, err);
+  };
+  const file = await open(path, "w").catch(toCannotWrite);
   try {
-    const res = await fetchOk(url, idle);
-    let file: Awaited<ReturnType<typeof open>>;
-    try {
-      file = await open(path, "w");
-    } catch (err) {
-      throw cannotWrite(path, err);
-    }
-    try {
-      const received = await readBody(url, res, idle, async (chunk) => {
-        try {
-          // One write() may write only part of the chunk.
-          for (let done = 0; done < chunk.length; ) {
-            done += (await file.write(chunk, done)).bytesWritten;
-          }
-        } catch (err) {
-          throw cannotWrite(path, err);
-        }
-      });
-      checkLength(url, res, received);
-    } catch (err) {
-      // The first error is the one to report, not one from closing.
-      await file.close().catch(() => {});
-      throw err;
-    }
-    // close() can report a write that failed late, such as on a full disk.
-    try {
-      await file.close();
-    } catch (err) {
-      throw cannotWrite(path, err);
-    }
-  } finally {
-    idle.stop();
+    await download(url, idleMs, async (chunk) => {
+      // One write() may write only part of the chunk.
+      for (let done = 0; done < chunk.length; ) {
+        done += (await file.write(chunk, done).catch(toCannotWrite)).bytesWritten;
+      }
+    });
+  } catch (err) {
+    // The first error is the one to report, not one from closing.
+    await file.close().catch(() => {});
+    throw err;
   }
+  // close() can report a write that failed late, such as on a full disk.
+  await file.close().catch(toCannotWrite);
 }
 
 /** Checks the attestation with gh, like install.sh does. Skips it when gh is missing or logged out. */
@@ -376,13 +354,9 @@ export async function upgrade(o: UpgradeOptions): Promise<void> {
   }
 
   o.log("checking for a new release");
-  const pageIdle = new IdleTimeout(o.idleTimeoutMs);
-  let latest: string;
-  try {
-    latest = await latestRelease(o.githubUrl, pageIdle.signal);
-  } finally {
-    pageIdle.stop();
-  }
+  const latest = await withIdleTimeout(o.idleTimeoutMs, (idle) =>
+    latestRelease(o.githubUrl, idle.signal),
+  );
   // NaN (a tag we cannot compare) is not <= 0, so a different tag still upgrades.
   if (compareVersions(latest, o.version) <= 0) {
     o.log(`honk ${o.version} is up to date (the latest release is ${latest})`);

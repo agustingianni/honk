@@ -114,6 +114,12 @@ const server = Bun.serve({
 const githubUrl = server.url.origin;
 
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
+
+/** Makes `bytes` the release's honk-linux-x64.gz, with a matching SHA256SUMS. */
+function setAsset(bytes: typeof release.asset) {
+  release.asset = bytes;
+  release.sums = `${sha256(bytes)}  honk-linux-x64.gz\n`;
+}
 const root = mkdtempSync(join(tmpdir(), "honk-upgrade-test-"));
 let dir: string;
 let binary: string;
@@ -229,8 +235,7 @@ describe("upgrade", () => {
   });
 
   test("keeps the old binary when the download is not valid gzip", async () => {
-    release.asset = new TextEncoder().encode("not gzip data");
-    release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n`;
+    setAsset(new TextEncoder().encode("not gzip data"));
     await expect(upgrade(options())).rejects.toThrow(/could not unpack honk-linux-x64\.gz/);
     expect(binaryText()).toBe("old honk binary");
     expect(leftovers()).toEqual([]);
@@ -248,8 +253,7 @@ describe("upgrade", () => {
     ["a small", 100],
     ["a big", 4_000_000],
   ])("names the download when the connection breaks halfway through %s download", async (_, size) => {
-    release.asset = crypto.getRandomValues(new Uint8Array(size));
-    release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n`;
+    setAsset(crypto.getRandomValues(new Uint8Array(size)));
     release.broken = { file: "asset", how: "cut" };
     const message = await failure();
     expect(message?.startsWith(`download failed: ${assetUrl()}: `)).toBe(true);
@@ -273,25 +277,15 @@ describe("upgrade", () => {
   const idleOptions = () => options({ idleTimeoutMs: IDLE_MS });
   const noData = "no data for 0.3 seconds";
 
-  test("gives up on a download that stops sending data halfway", async () => {
-    release.asset = crypto.getRandomValues(new Uint8Array(100_000));
-    release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n`;
-    release.broken = { file: "asset", how: "stall" };
-    expect(await failure(idleOptions())).toBe(`download failed: ${assetUrl()}: ${noData}`);
+  const sumsUrl = () => `${githubUrl}/${REPO}/releases/download/v0.3.0/SHA256SUMS`;
+  test.each([
+    ["a download that stops sending data halfway", "asset", "stall", assetUrl],
+    ["SHA256SUMS when it stops sending data halfway", "sums", "stall", sumsUrl],
+    ["a download host that never answers", "asset", "silent", assetUrl],
+  ] as const)("gives up on %s", async (_, file, how, url) => {
+    release.broken = { file, how };
+    expect(await failure(idleOptions())).toBe(`download failed: ${url()}: ${noData}`);
     expect(binaryText()).toBe("old honk binary");
-    expect(leftovers()).toEqual([]);
-  });
-
-  test("gives up on SHA256SUMS when it stops sending data halfway", async () => {
-    release.broken = { file: "sums", how: "stall" };
-    expect(await failure(idleOptions())).toBe(
-      `download failed: ${githubUrl}/${REPO}/releases/download/v0.3.0/SHA256SUMS: ${noData}`,
-    );
-  });
-
-  test("gives up on a download host that never answers", async () => {
-    release.broken = { file: "asset", how: "silent" };
-    expect(await failure(idleOptions())).toBe(`download failed: ${assetUrl()}: ${noData}`);
     expect(leftovers()).toEqual([]);
   });
 
@@ -303,8 +297,7 @@ describe("upgrade", () => {
 
   test("keeps a slow download going while data still arrives", async () => {
     // 5 parts, 100 ms apart: the whole download takes longer than the idle timeout.
-    release.asset = Bun.gzipSync(new TextEncoder().encode(`new honk binary${" ".repeat(50_000)}`));
-    release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n`;
+    setAsset(Bun.gzipSync(new TextEncoder().encode(`new honk binary${" ".repeat(50_000)}`)));
     release.broken = { file: "asset", how: "slow" };
     const started = Date.now();
     await upgrade(idleOptions());
