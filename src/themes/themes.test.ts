@@ -61,6 +61,8 @@ describe("bundled themes", () => {
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);
       // The active channel, and the omnibox row that Enter picks, must be easy to see.
       expect(contrast(t.bgActiveRow, t.bgSidebar)).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
+      // bgActiveRow is also the "new messages below" bar over the chat.
+      expect(contrast(t.bgActiveRow, t.bgBase)).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
       expect(contrast(t.bgOverlaySel, t.bgOverlay)).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
       // A row under the mouse shows, but looks weaker than the selected row.
       // Where the selection color is itself faint, the hover stays at the

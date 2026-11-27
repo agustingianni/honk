@@ -278,35 +278,39 @@ export function hoverColor(background: string, selection: string, text: string):
   const half = mix(background, selection, 0.5);
   if (contrast(half, background) >= MIN_HOVER_CONTRAST) return half;
   const toward = contrast(selection, background) > MIN_HOVER_CONTRAST ? selection : text;
-  return smallestStep(background, toward, MIN_HOVER_CONTRAST);
+  return smallestStep(background, toward, background, MIN_HOVER_CONTRAST);
 }
 
 /**
  * The background of the selected row: the selection color when it is a clear
- * step from the other rows toward the text color. Otherwise (broadcast's is
+ * step from the other rows toward the text color. When it is on that side but
+ * too faint (gotham's blue active channel is 1.074:1), it moves toward the
+ * text color until it is clear, and keeps its hue. Otherwise (broadcast's is
  * 1.015:1 on the omnibox, and batman's active channel is a darker row, which
- * looks like a hole) the smallest clear step toward the text color.
+ * looks like a hole) the smallest clear step from the row color toward the
+ * text color.
  */
 function selectedColor(background: string, selection: string, text: string): string {
   const lb = luminance(background);
   const towardText = luminance(selection) > lb === luminance(text) > lb;
-  return towardText && contrast(selection, background) >= MIN_SELECTION_CONTRAST
-    ? selection
-    : smallestStep(background, text, MIN_SELECTION_CONTRAST);
+  return smallestStep(towardText ? selection : background, text, background, MIN_SELECTION_CONTRAST);
 }
 
 /**
  * The color nearest `from`, on the way to `to`, with `target` contrast against
- * `from`. stepUntil moves in 1% steps of the whole distance, and toward the
- * text color one step can overshoot a small target such as 1.04:1 by half;
- * this bisects instead.
+ * `bg`. `from` must already be on the side of `bg` that `to` is on, so the
+ * contrast only grows along the way. Returns `from` if it is already there.
+ * stepUntil moves in 1% steps of the whole distance, and toward the text
+ * color one step can overshoot a small target such as 1.04:1 by half; this
+ * bisects instead.
  */
-function smallestStep(from: string, to: string, target: number): string {
+function smallestStep(from: string, to: string, bg: string, target: number): string {
+  if (contrast(from, bg) >= target) return from;
   let low = 0;
   let high = 1;
   for (let i = 0; i < 20; i++) {
     const middle = (low + high) / 2;
-    if (contrast(mix(from, to, middle), from) >= target) high = middle;
+    if (contrast(mix(from, to, middle), bg) >= target) high = middle;
     else low = middle;
   }
   return mix(from, to, high);
