@@ -17,7 +17,7 @@ set -eu
 zero=0000000000000000000000000000000000000000
 
 bun run typecheck
-bun test
+bun run test
 
 # git writes one line per pushed ref: <local ref> <local sha> <remote ref> <remote sha>
 while read -r _local_ref local_sha remote_ref remote_sha; do
