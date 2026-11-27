@@ -46,21 +46,24 @@ function padNick(nick: string): string {
   return truncate(nick, NICK_COL_WIDTH).padStart(NICK_COL_WIDTH, " ");
 }
 
+/**
+ * A red rule with " new " in the middle. Each half holds a full pane width of
+ * dashes, and flex layout clips them, so the rule fits whatever width the feed
+ * has, with or without its scrollbar. Each half keeps at least one dash.
+ */
 function UnreadDivider({ paneWidth }: { paneWidth: number }) {
-  const label = " new ";
-  const innerWidth = Math.max(label.length + 4, paneWidth - 2);
-  const sideTotal = Math.max(4, innerWidth - label.length);
-  const left = Math.floor(sideTotal / 2);
-  const right = sideTotal - left;
+  const half = (
+    <text flexGrow={1} flexShrink={1} flexBasis={0} minWidth={1} wrapMode="none" fg={theme.red}>
+      {"─".repeat(Math.max(1, paneWidth))}
+    </text>
+  );
   return (
-    <box width="100%" paddingLeft={1} paddingRight={1} marginTop={1} marginBottom={1}>
-      <text>
-        <span fg={theme.red}>{"─".repeat(left)}</span>
-        <span fg={theme.red}>
-          <strong>{label}</strong>
-        </span>
-        <span fg={theme.red}>{"─".repeat(right)}</span>
+    <box flexDirection="row" paddingLeft={1} paddingRight={1} marginTop={1} marginBottom={1}>
+      {half}
+      <text flexShrink={0} fg={theme.red}>
+        <strong>{" new "}</strong>
       </text>
+      {half}
     </box>
   );
 }
