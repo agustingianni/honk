@@ -160,14 +160,15 @@ describe("schemeToTheme", () => {
       const r = checkScheme({ ...scheme16(palette), variant });
       if (!r.ok) throw new Error(r.problems.join("; "));
       const t = schemeToTheme(r.scheme);
-      for (const [selected, background] of [
-        [t.bgActiveRow, t.bgSidebar],
-        [t.bgOverlaySel, t.bgOverlay],
+      // The active row sits on the sidebar and, as the new-messages bar, on the chat.
+      for (const [selected, backgrounds] of [
+        [t.bgActiveRow, [t.bgSidebar, t.bgBase]],
+        [t.bgOverlaySel, [t.bgOverlay]],
       ] as const) {
-        const shown = contrast(selected, background);
+        const shown = Math.min(...backgrounds.map((b) => contrast(selected, b)));
         expect(shown).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
         expect(shown).toBeLessThan(MIN_SELECTION_CONTRAST + 0.03);
-        expect(lighter(selected, background)).toBe(variant === "dark");
+        for (const b of backgrounds) expect(lighter(selected, b)).toBe(variant === "dark");
       }
     }
   });

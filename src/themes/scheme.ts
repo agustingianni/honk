@@ -157,7 +157,9 @@ export function schemeToTheme(scheme: Scheme): Theme {
   // puts a strong gray there).
   const selection = nearBg(p.base02) ?? mix(bg, p.base02!, 0.4);
   const overlay = mix(bg, fg, 0.05);
-  const activeRow = selectedColor(darker, selection, fg);
+  // The active channel row is also the "new messages below" bar over the
+  // chat, so it must be clear on both.
+  const activeRow = selectedColor(bg, selectedColor(darker, selection, fg), fg);
   const overlaySel = selectedColor(overlay, selection, fg);
 
   // Use a text slot only when it is readable and gray; otherwise fade the
@@ -282,13 +284,10 @@ export function hoverColor(background: string, selection: string, text: string):
 }
 
 /**
- * The background of the selected row: the selection color when it is a clear
- * step from the other rows toward the text color. When it is on that side but
- * too faint (gotham's blue active channel is 1.074:1), it moves toward the
- * text color until it is clear, and keeps its hue. Otherwise (broadcast's is
- * 1.015:1 on the omnibox, and batman's active channel is a darker row, which
- * looks like a hole) the smallest clear step from the row color toward the
- * text color.
+ * The background of the selected row: steps toward the text color until it
+ * is a clear step from the row color. It starts from the selection color when
+ * that is on the text's side, which keeps its hue (gotham's blue), and from
+ * the row color otherwise (batman's darker selection looks like a hole).
  */
 function selectedColor(background: string, selection: string, text: string): string {
   const lb = luminance(background);
