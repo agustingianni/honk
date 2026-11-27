@@ -27,36 +27,37 @@ perf: start faster with many channels in the config
 
 The changelog only shows the subject, so a subject such as
 `feat: add ServerPool class` tells a user nothing. Put the implementation
-details in the commit body.
+details in the pull request description.
 
-Make one commit per user-visible change, so each change gets its own changelog
-line. Tests, docs, and refactors that belong to a change go in that change's
-commit.
+Make one pull request per user-visible change, so each change gets its own
+changelog line. Tests, docs, and refactors that belong to a change go in that
+change's pull request.
 
-When one commit holds several user-visible changes, add one more Conventional
-Commit message per change at the bottom of the body, each after a blank line.
-Each one becomes its own changelog line:
+A pull request is squash merged into one commit on main. Its title becomes the
+commit subject, and the commit gets no body. When a pull request holds several
+user-visible changes anyway, list every changelog line, the title's one too, in
+an override block at the bottom of its description. release-please reads the
+block instead of the commit, and each message in it becomes one changelog line:
 
 ```
+BEGIN_COMMIT_OVERRIDE
 feat: run omnibox actions on any server, not only the active one
-
-"+ Join #x" and "Message nick" rows show for each connected server.
 
 feat: rank omnibox matches like fzf and highlight the matched letters
 
 feat: rank the omnibox actions you used last first
+END_COMMIT_OVERRIDE
 ```
 
-release-please reads every body line that starts with `word: ` as one more
-message, even inside a paragraph. Wrap body text so that only the extra
-messages start that way: "A second word picks the server: #rust beta" must
-not wrap right before "server:".
+Write each message on one line, however long. release-please reads the block of
+a merged pull request too, so a wrong changelog line is fixed by editing the
+description and then running release-please again: `gh run rerun` on the last
+run of the release-please workflow.
 
-A pull request is squash merged: its title becomes the commit subject, and its
-description becomes the commit body. So the title follows the rules above, the
-extra messages go at the bottom of the description, and the description is
-wrapped the same way. Any description line that starts with `feat: `, `fix: `
-or `perf: ` is a changelog line.
+A commit pushed straight to main (see below) keeps its body, and release-please
+reads every body line that starts with `word: ` as one more message, even inside
+a paragraph. Wrap that body so no line starts that way: "A second word picks the
+server: #rust beta" must not wrap right before "server:".
 
 CI checks the subjects, and so does the pre-push hook (see below).
 
@@ -64,8 +65,8 @@ CI checks the subjects, and so does the pre-push hook (see below).
 
 Each change that gets a changelog line (`feat`, `fix`, `perf`) goes on its
 own short-lived branch and lands through a pull request. The squash merge
-turns the branch into one commit made of the pull request's title and
-description, so commits on the branch can say anything, such as `wip`.
+turns the branch into one commit with the pull request's title, so commits on
+the branch can say anything, such as `wip`.
 
 ```
 git switch -c join-key
@@ -73,9 +74,6 @@ git switch -c join-key
 git push -u origin join-key
 gh pr create --title "fix: /join now accepts a channel key" --body-file pr.md
 ```
-
-Pass the description with `--body` or `--body-file`. `--fill` copies the
-branch's commit messages into it, and from there into the commit on main.
 
 A pull request merges only after `Typecheck and build` and
 `Check commit messages` pass. The user reviews it and then merges it, or runs
