@@ -15,11 +15,13 @@ import {
   contrast,
   MIN_ACCENT_CONTRAST,
   MIN_HOVER_CONTRAST,
+  MIN_MUTED_CONTRAST,
   MIN_PANEL_CONTRAST,
   MIN_SELECTION_CONTRAST,
   MIN_TEXT_CONTRAST,
   mix,
   schemeToTheme,
+  type Theme,
 } from "./scheme.ts";
 
 // A valid Base16 palette (Catppuccin Mocha).
@@ -29,6 +31,20 @@ const PALETTE16 = {
   base08: "#f38ba8", base09: "#fab387", base0A: "#f9e2af", base0B: "#a6e3a1",
   base0C: "#94e2d5", base0D: "#89b4fa", base0E: "#cba6f7", base0F: "#f2cdcd",
 };
+
+// Every background that text is drawn on.
+const SURFACES = [
+  "bgBase", "bgSidebar", "bgNicklist", "bgHeader", "bgFooter", "bgInput", "bgActiveRow",
+  "bgMention", "bgOverlay", "bgOverlaySel", "bgRowHover", "bgActiveRowHover", "bgOverlayHover",
+] as const;
+const ACCENTS = ["accent", "accentAlt", "red", "green", "yellow", "cyan", "orange"] as const;
+
+/** The lowest contrast of `color` on any surface of `t`, and that surface. */
+function worstContrast(t: Theme, color: string): [number, string] {
+  return SURFACES.map((s): [number, string] => [contrast(color, t[s]), s]).reduce((a, b) =>
+    b[0] < a[0] ? b : a,
+  );
+}
 
 function scheme16(palette: Record<string, string> = PALETTE16) {
   return { system: "base16", name: "Test", author: "me", variant: "dark", palette };
@@ -51,9 +67,13 @@ describe("bundled themes", () => {
     test(`${entry.id} has readable text, visible panels and only hex colors`, () => {
       const t = entry.theme;
       expect(contrast(t.fgPrimary, t.bgBase)).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST);
-      for (const key of ["accent", "accentAlt", "red", "green", "yellow", "cyan", "orange"] as const) {
-        expect(contrast(t[key], t.bgBase), key).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
+      // Accents and muted text are drawn on every surface, selected rows included.
+      for (const key of ACCENTS) {
+        const [worst, surface] = worstContrast(t, t[key]);
+        expect(worst, `${key} on ${surface}`).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
       }
+      const [muted, surface] = worstContrast(t, t.fgMuted);
+      expect(muted, `fgMuted on ${surface}`).toBeGreaterThanOrEqual(MIN_MUTED_CONTRAST);
       for (const c of t.nickPalette) {
         expect(contrast(c, t.bgBase), c).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
       }
@@ -173,15 +193,16 @@ describe("schemeToTheme", () => {
     }
   });
 
-  test("moves a hard-to-read accent toward the text until it reaches 3:1", () => {
+  test("moves a hard-to-read accent toward the text until it reaches 3:1 everywhere", () => {
     // A dark blue accent on a dark background.
     const r = checkScheme(scheme16({ ...PALETTE16, base0D: "#1e3050" }));
     if (!r.ok) throw new Error(r.problems.join("; "));
-    const accent = schemeToTheme(r.scheme).accent;
-    expect(accent).not.toBe("#1e3050");
-    expect(contrast(accent, "#1e1e2e")).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
-    // Only just: the color moves no further than it needs to.
-    expect(contrast(accent, "#1e1e2e")).toBeLessThan(MIN_ACCENT_CONTRAST + 0.2);
+    const t = schemeToTheme(r.scheme);
+    expect(t.accent).not.toBe("#1e3050");
+    // On the hardest surface, and only just: the color moves no further than it needs to.
+    const [worst] = worstContrast(t, t.accent);
+    expect(worst).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
+    expect(worst).toBeLessThan(MIN_ACCENT_CONTRAST + 0.2);
   });
 
   test("does not use a colorful base06 as bright text", () => {

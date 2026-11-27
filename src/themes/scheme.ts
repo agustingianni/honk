@@ -68,8 +68,10 @@ const HEX = /^#[0-9a-fA-F]{6}$/;
 
 /** WCAG level for normal text. A scheme whose base05 on base00 is below this is rejected. */
 export const MIN_TEXT_CONTRAST = 4.5;
-/** Accent colors are moved toward the bright text until they reach this. */
+/** Accent colors are moved toward the bright text until they reach this on every background. */
 export const MIN_ACCENT_CONTRAST = 3;
+/** Muted text (timestamps, hints) is moved toward the text color until it reaches this on every background. */
+export const MIN_MUTED_CONTRAST = 2;
 /** A row under the mouse has at least this contrast with its normal background. */
 export const MIN_HOVER_CONTRAST = 1.04;
 /** A selected row (active channel, omnibox) has at least this contrast with the other rows, so it stays stronger than hover. */
@@ -169,7 +171,8 @@ export function schemeToTheme(scheme: Scheme): Theme {
       ? color
       : mix(fg, bg, fade);
   const fgSecondary = grayText(p.base04, 3, 0.25);
-  const fgMuted = grayText(p.base03, 2, 0.5);
+  // Borders and fgDim are made from this gray; fgMuted itself is adjusted below.
+  const muted = grayText(p.base03, 2, 0.5);
 
   // The brightest gray among base05..base07 (in catppuccin-latte, base06 and
   // base07 are accents; in rose-pine-dawn, base07 is a background).
@@ -179,9 +182,22 @@ export function schemeToTheme(scheme: Scheme): Theme {
     fg,
   );
 
+  const mention = mix(bg, p.base08!, 0.15);
+  const rowHover = hoverColor(darker, activeRow, fg);
+  const activeRowHover = hoverColor(activeRow, activeRow, fg);
+  const overlayHover = hoverColor(overlay, overlaySel, fg);
+  // Every background that text is drawn on. Accents are at 3:1 on the chat
+  // and only a little more on a selected row, so each text color is checked
+  // against all of them (breeze's accentAlt was 1.79:1 on the selected row).
+  const surfaces = [
+    bg, darker, darkest, input, activeRow, mention, overlay, overlaySel,
+    rowHover, activeRowHover, overlayHover,
+  ];
+
   // Accents are used as text (channel names, notices, links), so they must
   // be readable.
-  const readable = (color: string) => stepUntil(color, fgBright, bg, MIN_ACCENT_CONTRAST);
+  const readable = (color: string) => stepUntil(color, fgBright, surfaces, MIN_ACCENT_CONTRAST);
+  const fgMuted = stepUntil(muted, fg, surfaces, MIN_MUTED_CONTRAST);
 
   const accents = [
     p.base08, p.base09, p.base0A, p.base0B, p.base0C, p.base0D, p.base0E,
@@ -199,20 +215,20 @@ export function schemeToTheme(scheme: Scheme): Theme {
     bgFooter: darkest,
     bgInput: input,
     bgActiveRow: activeRow,
-    bgMention: mix(bg, p.base08!, 0.15),
+    bgMention: mention,
     bgOverlay: overlay,
     bgOverlaySel: overlaySel,
-    bgRowHover: hoverColor(darker, activeRow, fg),
-    bgActiveRowHover: hoverColor(activeRow, activeRow, fg),
-    bgOverlayHover: hoverColor(overlay, overlaySel, fg),
-    borderOverlay: mix(bg, fgMuted, 0.6),
-    gutter: mix(bg, fgMuted, 0.6),
+    bgRowHover: rowHover,
+    bgActiveRowHover: activeRowHover,
+    bgOverlayHover: overlayHover,
+    borderOverlay: mix(bg, muted, 0.6),
+    gutter: mix(bg, muted, 0.6),
 
     fgPrimary: fg,
     fgBright,
     fgSecondary,
     fgMuted,
-    fgDim: mix(fgMuted, bg, 0.35),
+    fgDim: mix(muted, bg, 0.35),
 
     accent: readable(p.base0D!),
     accentAlt: readable(p.base0E!),
@@ -259,13 +275,19 @@ function luminance(hex: string): number {
 
 /**
  * Mixes `from` toward `to` in small steps, and returns the first color whose
- * contrast with `bg` is at least `target`. Returns `from` if it is already
- * there, and `to` if no step reaches it.
+ * contrast with `bg` (with each of them, for a list) is at least `target`.
+ * Returns `from` if it is already there, and `to` if no step reaches it.
  */
-export function stepUntil(from: string, to: string, bg: string, target: number): string {
+export function stepUntil(
+  from: string,
+  to: string,
+  bg: string | readonly string[],
+  target: number,
+): string {
+  const backgrounds = typeof bg === "string" ? [bg] : bg;
   for (let i = 0; i <= 100; i++) {
     const color = mix(from, to, i / 100);
-    if (contrast(color, bg) >= target) return color;
+    if (backgrounds.every((b) => contrast(color, b) >= target)) return color;
   }
   return to;
 }
