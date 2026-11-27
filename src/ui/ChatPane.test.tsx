@@ -199,8 +199,9 @@ test("after the topic changes, a click opens the link it shows now", async () =>
     await act(async () => setTopic("docs: https://github.com/agustingianni/honk"));
     await renderOnce();
     const screen = captureCharFrame().split("\n");
-    const y = screen.findIndex((line) => line.includes("https://github.com"));
-    await act(() => mockMouse.click(screen[y]!.indexOf("https://github.com") + 3, y));
+    // A few cells into the URL, which starts after "docs: ".
+    const y = screen.findIndex((line) => line.includes("docs: "));
+    await act(() => mockMouse.click(screen[y]!.indexOf("docs: ") + 9, y));
     await Bun.sleep(400);
     expect(opened).toEqual(["https://github.com/agustingianni/honk"]);
   } finally {
