@@ -11,6 +11,9 @@ type LineListener = (line: string) => void;
 /** Called with a line, and what the LineListener threw for it. */
 type LineErrorListener = (line: string, err: unknown) => void;
 
+/** Called when the server sends a line longer than MAX_LINE_BYTES, which is dropped. */
+type TooLongListener = () => void;
+
 /**
  * Calls `onLine` for each line, and gives what it throws to `onLineError`.
  *
@@ -72,13 +75,15 @@ class NodeSocketConn implements Conn {
   private ended = false;
   private error: unknown = null;
 
-  constructor(socket: Socket, onLine: LineListener) {
+  constructor(socket: Socket, onLine: LineListener, onTooLong: TooLongListener) {
     this.socket = socket;
-    const lines = new LineSplitter(onLine);
+    const lines = new LineSplitter(onLine, onTooLong);
 
     socket.on("data", (chunk: Buffer) => {
-      const bytes = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-      lines.push(bytes);
+      // irc-client-ts gets only whole lines, without the ones that were too long. Its
+      // own buffer for an unfinished line has no limit, so it must never get one.
+      const bytes = lines.push(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      if (bytes.length === 0) return;
       if (this.pendingRead) {
         const req = this.pendingRead;
         this.pendingRead = null;
@@ -89,7 +94,7 @@ class NodeSocketConn implements Conn {
         }
         req.resolve(len);
       } else {
-        this.chunks.push(new Uint8Array(bytes));
+        this.chunks.push(bytes);
       }
     });
 
@@ -169,6 +174,7 @@ function whenConnected(
   connectEvent: "connect" | "secureConnect",
   signal: AbortSignal | undefined,
   onLine: LineListener,
+  onTooLong: TooLongListener,
 ): Promise<Conn> {
   return new Promise((resolve, reject) => {
     const onAbort = () => {
@@ -185,7 +191,7 @@ function whenConnected(
     };
     socket.once(connectEvent, () => {
       cleanup();
-      resolve(new NodeSocketConn(socket, onLine));
+      resolve(new NodeSocketConn(socket, onLine, onTooLong));
     });
     socket.once("error", onError);
     if (signal?.aborted) onAbort();
@@ -197,16 +203,27 @@ function whenConnected(
  * A node:net / node:tls runtime for irc-client-ts. Aborting `signal` cancels a pending
  * connect. `onLine` sees every line from the server first (see IrcManager.onRawLine).
  * When it throws, `onLineError` gets the line and the error, and the connection goes on.
+ * A line longer than MAX_LINE_BYTES is dropped, and `onTooLong` is called.
  */
 export function createNodeRuntime(
   signal: AbortSignal | undefined,
   onLine: LineListener,
   onLineError: LineErrorListener,
+  onTooLong: TooLongListener = () => {},
 ) {
   onLine = guardLines(onLine, onLineError);
+  // Called inside the socket's "data" listener too, so it must not throw either.
+  const reportTooLong = onTooLong;
+  onTooLong = () => {
+    try {
+      reportTooLong();
+    } catch {
+      // Dropped: it must never end honk.
+    }
+  };
   return {
     connect(opts: { hostname: string; port: number }): Promise<Conn> {
-      return whenConnected(netConnect(opts.port, opts.hostname), "connect", signal, onLine);
+      return whenConnected(netConnect(opts.port, opts.hostname), "connect", signal, onLine, onTooLong);
     },
 
     connectTls(opts: {
@@ -224,7 +241,7 @@ export function createNodeRuntime(
         ...(opts.cert ? { cert: opts.cert } : {}),
         ...(opts.key ? { key: opts.key } : {}),
       };
-      return whenConnected(tlsConnect(tlsOpts), "secureConnect", signal, onLine);
+      return whenConnected(tlsConnect(tlsOpts), "secureConnect", signal, onLine, onTooLong);
     },
 
     ...sharedRuntime,

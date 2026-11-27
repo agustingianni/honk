@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   commandOf,
   LineSplitter,
+  MAX_LINE_BYTES,
   parseLine,
   parseTimestampParam,
   timestampParam,
@@ -24,6 +25,69 @@ test("LineSplitter cuts on \\n, drops \\r, and keeps a split UTF-8 character who
   split.push(bytes.subarray(0, 16)); // ends inside the two bytes of "é"
   split.push(bytes.subarray(16));
   expect(lines).toEqual(["PRIVMSG #a :café", "PING x"]);
+});
+
+describe("LineSplitter with a line that is too long", () => {
+  const encode = (text: string) => new TextEncoder().encode(text);
+  const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+  function splitter() {
+    const lines: string[] = [];
+    let tooLong = 0;
+    const split = new LineSplitter(
+      (l) => lines.push(l),
+      () => tooLong++,
+    );
+    const pendingBytes = () => (split as unknown as { pendingBytes: number }).pendingBytes;
+    return { split, lines, tooLong: () => tooLong, pendingBytes };
+  }
+
+  test("keeps at most MAX_LINE_BYTES of a line with no newline, and drops it", () => {
+    const { split, lines, tooLong, pendingBytes } = splitter();
+    const kilobyte = encode("x".repeat(1024));
+    for (let i = 0; i < 100; i++) {
+      split.push(kilobyte);
+      expect(pendingBytes()).toBeLessThanOrEqual(MAX_LINE_BYTES);
+    }
+    // "ok" is the end of the long line, so it goes too. The next line comes through.
+    split.push(encode("ok\r\n"));
+    split.push(encode("PING next\r\n"));
+    expect(lines).toEqual(["PING next"]);
+    expect(tooLong()).toBe(1);
+    expect(pendingBytes()).toBe(0);
+  });
+
+  test("drops a long line inside one chunk, and keeps the lines around it", () => {
+    const { split, lines, tooLong } = splitter();
+    const returned = split.push(encode(`PING a\r\n${"x".repeat(100_000)}\r\nPING b\r\n`));
+    expect(lines).toEqual(["PING a", "PING b"]);
+    expect(decode(returned)).toBe("PING a\r\nPING b\r\n");
+    expect(tooLong()).toBe(1);
+  });
+
+  test("keeps a line of exactly MAX_LINE_BYTES, and drops one byte more", () => {
+    const { split, lines, tooLong } = splitter();
+    const fits = `@${"t".repeat(MAX_LINE_BYTES - 3)}\r\n`;
+    const over = `@${"t".repeat(MAX_LINE_BYTES - 2)}\r\n`;
+    split.push(encode(fits.slice(0, 5000)));
+    split.push(encode(fits.slice(5000)));
+    split.push(encode(over));
+    expect(lines).toEqual([fits.slice(0, -2)]);
+    expect(tooLong()).toBe(1);
+  });
+
+  test("keeps a U+FEFF at the start of a line", () => {
+    const { split, lines } = splitter();
+    split.push(encode("PING a\r\n\uFEFFPING b\r\n"));
+    expect(lines).toEqual(["PING a", "\uFEFFPING b"]);
+  });
+
+  test("returns only the bytes of whole lines", () => {
+    const { split } = splitter();
+    expect(decode(split.push(encode("PING a\r\nPI")))).toBe("PING a\r\n");
+    expect(decode(split.push(encode("NG b")))).toBe("");
+    expect(decode(split.push(encode("\r\n")))).toBe("PING b\r\n");
+  });
 });
 
 test("commandOf finds the same command as parseLine", () => {

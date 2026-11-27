@@ -85,6 +85,46 @@ test("a line listener that throws does not stop the data for irc-client-ts", asy
   }
 });
 
+test("irc-client-ts does not get a line that is too long", async () => {
+  const port = await serve(`one\r\n${"x".repeat(100_000)}\r\ntwo\r\n`);
+  const seen: string[] = [];
+  let tooLong = 0;
+  const runtime = createNodeRuntime(
+    undefined,
+    (line) => seen.push(line),
+    () => {},
+    () => tooLong++,
+  );
+
+  const conn = await runtime.connect({ hostname: "127.0.0.1", port });
+  try {
+    expect(await readUntil(conn, "two\r\n")).toBe("one\r\ntwo\r\n");
+    expect(seen).toEqual(["one", "two"]);
+    expect(tooLong).toBe(1);
+  } finally {
+    conn.close();
+  }
+});
+
+test("an onTooLong that throws does not stop the data for irc-client-ts", async () => {
+  const port = await serve(`${"x".repeat(100_000)}\r\ntwo\r\n`);
+  const runtime = createNodeRuntime(
+    undefined,
+    () => {},
+    () => {},
+    () => {
+      throw new Error("cannot report it");
+    },
+  );
+
+  const conn = await runtime.connect({ hostname: "127.0.0.1", port });
+  try {
+    expect(await readUntil(conn, "two\r\n")).toBe("two\r\n");
+  } finally {
+    conn.close();
+  }
+});
+
 describe("describeLineError", () => {
   function throwInOnNumeric(message: string): unknown {
     function onNumeric() {

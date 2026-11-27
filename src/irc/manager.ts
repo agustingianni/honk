@@ -56,7 +56,7 @@ import {
   whoisLines,
   type Endpoint,
 } from "./replies.ts";
-import { commandOf, parseLine, timestampParam } from "./ircLine.ts";
+import { commandOf, MAX_LINE_BYTES, parseLine, timestampParam } from "./ircLine.ts";
 import {
   isAfterMarker,
   isMarkedRead,
@@ -867,6 +867,7 @@ export class IrcManager {
     // one kind, such as each NAMES reply, would otherwise push everything else out of
     // *status.
     const reported = new Set<string>();
+    let reportedTooLong = false;
     (client as unknown as { runtime: ReturnType<typeof createNodeRuntime> }).runtime =
       createNodeRuntime(
         abort.signal,
@@ -881,6 +882,19 @@ export class IrcManager {
           if (reported.has(key) || reported.size >= MAX_LINE_ERROR_REPORTS) return;
           reported.add(key);
           this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
+        },
+        // Once per connection: a broken server may send many.
+        () => {
+          if (this.clients.get(serverId) !== client || reportedTooLong) return;
+          reportedTooLong = true;
+          this.pushMessage(
+            serverId,
+            STATUS_BUFFER,
+            makeMessage(
+              "system",
+              `The server sent a line longer than ${MAX_LINE_BYTES} bytes. honk dropped it, and drops any more like it.`,
+            ),
+          );
         },
       );
 
