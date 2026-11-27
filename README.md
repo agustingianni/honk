@@ -117,6 +117,9 @@ If you installed into another folder with `HONK_INSTALL_DIR`, delete `honk`
 from there instead. If you set `XDG_STATE_HOME` or `XDG_CACHE_HOME`, the other
 two folders are `$XDG_STATE_HOME/honk` and `$XDG_CACHE_HOME/honk`.
 
+The log of your chats is in `~/.local/share/honk/` (or `$XDG_DATA_HOME/honk/`).
+Delete it too if you don't want to keep it.
+
 Your config is in `~/.config/honk/`. It can hold server passwords, so delete it
 too if you don't need it. If you installed honk another way, remove it that way.
 
@@ -172,8 +175,8 @@ arrow key types no character.
 ### What honk does not do yet
 
 - Run on Windows.
-- Save logs. Scrollback is gone when you quit. A bouncer, or a network with
-  chat history, keeps it for you.
+- Search the log, or load scrollback from it. honk writes the log (see
+  [Log](#log)), but you can't read it inside honk yet.
 - Ignore a user.
 - Moderation commands such as `/kick`, `/ban` and `/mode`. Send them with
   `/raw` for now, such as `/raw KICK #channel nick`.
@@ -206,9 +209,51 @@ curl -fL -o ~/.config/honk/config.json \
   https://raw.githubusercontent.com/agustingianni/honk/main/honk.example.json
 ```
 
-Each server takes `host`, `nick`, and optionally `port`, `tls`, `channels`,
-`username`, `realname`, `password`, `serverPassword`, `authMethod`
-(`sasl`, `saslExternal` or `NickServ`) and `autoConnect`.
+Each server takes `id`, `host`, `nick`, and optionally `port`, `tls`,
+`channels`, `username`, `realname`, `password`, `serverPassword`, `authMethod`
+(`sasl`, `saslExternal` or `NickServ`), `autoConnect` and `logExclude`.
+
+Set `id` on each server, and don't change it later. The log files each line
+under the server's `id`. Without an `id`, honk uses the `name` or the `host`, so
+renaming the server would start a new log for it.
+
+### Log
+
+honk keeps a log of your chats on disk, in one SQLite file:
+`~/.local/share/honk/logs.db`, or `$XDG_DATA_HOME/honk/logs.db`. It holds the
+messages, actions, notices and topic changes of your channels and DMs, the
+lines you sent once the server confirmed them, and joins, parts, quits, nick
+changes and kicks. It does not hold `*status`, lines that failed to send, or
+anything from `--demo`. Only you can read the file (mode 0600).
+
+After a reconnect, or when honk starts again, honk asks for the channel lines
+it missed, if the network or bouncer keeps chat history (such as Ergo or soju).
+It adds each line to the log once. DMs you missed while honk was closed are not
+fetched yet.
+
+The settings go at the top level of the config file. These are the defaults:
+
+```json
+{
+  "logs": { "enabled": true, "retentionDays": 0, "eventRetentionDays": 30, "exclude": [] },
+  "servers": [{ "id": "libera", "host": "irc.libera.chat", "nick": "you", "logExclude": [] }]
+}
+```
+
+- `enabled`: `false` keeps no log.
+- `retentionDays`: days to keep chat lines. `0` keeps them forever.
+- `eventRetentionDays`: days to keep joins, parts, quits, nick changes and
+  kicks. `0` keeps them forever.
+- `exclude`: channels and nicks never logged on any server, such as
+  `["nickserv"]`. A server's `logExclude` adds names for that server only,
+  such as `["#secret"]`.
+
+Only one honk writes the log. A second honk running at the same time says so
+in `*status` and does not write to it.
+
+To back the log up, copy `logs.db` together with `logs.db-wal` and
+`logs.db-shm` when they exist, or run
+`sqlite3 ~/.local/share/honk/logs.db "VACUUM INTO 'backup.db'"`.
 
 ### Notifications
 

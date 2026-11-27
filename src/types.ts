@@ -1,4 +1,5 @@
 import type { Casemapping } from "./irc/names.ts";
+import type { LogSettings } from "./log/log.ts";
 
 export type AuthMethod = "sasl" | "saslExternal" | "NickServ";
 
@@ -17,6 +18,8 @@ export interface ServerConfig {
   authMethod?: AuthMethod;
   channels?: string[];
   autoConnect?: boolean;
+  /** Buffer names this Server never writes to the Log, such as "#secret". */
+  logExclude?: string[];
 }
 
 export interface AppConfig {
@@ -40,6 +43,8 @@ export interface AppConfig {
    * honk decides from TERM. See src/ui/glyphs.ts.
    */
   ascii?: boolean;
+  /** The Log of your chats on disk. See src/log/log.ts. */
+  logs?: LogSettings;
   /**
    * The config file: the one honk read, or the --config path even if that file
    * does not exist yet. Settings saved from the UI go there. Set by loadConfig,
