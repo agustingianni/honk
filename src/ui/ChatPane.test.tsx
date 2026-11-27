@@ -273,9 +273,11 @@ describe("names in messages", () => {
       onOpenLink: (href) => clicked.push(`open ${href}`),
     });
     const at = (text: string, nth = 0, dx = 1) => cellOf(pane.screen, text, nth, dx);
+    /** A click, then the wait for a possible second click, after which it opens. */
     const click = async (text: string, nth = 0, dx = 1) => {
       const { x, y } = at(text, nth, dx);
       await act(() => pane.mockMouse.click(x, y));
+      await Bun.sleep(400);
     };
     return { ...pane, clicked, at, click };
   }
@@ -309,7 +311,6 @@ describe("names in messages", () => {
       expect(clicked).toEqual(["dm bob"]);
       clicked.length = 0;
       await click("example.com/bob", 0, 13); // a nick inside a link is the link
-      await Bun.sleep(400); // a link waits for a possible second click
       expect(clicked).toEqual(["open https://example.com/bob"]);
     } finally {
       destroy();

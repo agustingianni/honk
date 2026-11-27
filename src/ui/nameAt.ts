@@ -22,8 +22,9 @@ const NICK_WRAPPERS = /^[[{]*(.*?)[\]}]*$/;
  * The nick or channel name at `index` in `text`, if there is one.
  *
  * A channel name is a word that starts with "#", such as "#rust" or "##linux",
- * without the punctuation around it. "#1" is not one: a number after "#" is
- * more often an issue number than a channel.
+ * without the punctuation around it. Only "#": the other prefixes IRC allows
+ * start ordinary words in chat ("+1", "!help", "&"). "#1" is not one either: a
+ * number after "#" is more often an issue number than a channel.
  *
  * A nick is a run of nick characters that `findNick` knows, so "bob" in
  * "bob: hi", "@bob" and "[bob]" counts when bob is in the channel, and "hello"

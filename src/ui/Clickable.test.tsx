@@ -235,6 +235,8 @@ describe("LinkArea", () => {
 });
 
 describe("NameText", () => {
+  // A click waits this long for a second one before it opens the name.
+  const DOUBLE_CLICK_MS = 100;
   const names = (opened: string[]): NameActions => ({
     findNick: (word) => (word === "bob" ? "bob" : undefined),
     openNick: (nick) => opened.push(`dm ${nick}`),
@@ -249,7 +251,7 @@ describe("NameText", () => {
       const [text, set] = useState("plain text");
       setText = set;
       return (
-        <NameText names={names(opened)} namesEnd={text.length}>
+        <NameText names={names(opened)} namesEnd={text.length} doubleClickMs={DOUBLE_CLICK_MS}>
           {() => text}
         </NameText>
       );
@@ -260,14 +262,36 @@ describe("NameText", () => {
     await act(async () => setText("#evil"));
     await renderOnce();
     await act(() => mockMouse.release(2, 0));
+    await Bun.sleep(DOUBLE_CLICK_MS * 3);
     expect(opened).toEqual([]);
+    await act(() => dispose());
+  });
+
+  test("a double-click on a name, to select it, does not open it", async () => {
+    const opened: string[] = [];
+    const { mockMouse, renderOnce, dispose } = await testRender(
+      <NameText names={names(opened)} namesEnd={9} doubleClickMs={DOUBLE_CLICK_MS}>
+        {() => "bob #rust"}
+      </NameText>,
+      { width: 30, height: 3 },
+    );
+    await renderOnce();
+    await act(() => mockMouse.doubleClick(6, 0, MouseButtons.LEFT, { delayMs: 1 }));
+    await Bun.sleep(DOUBLE_CLICK_MS * 3);
+    expect(opened).toEqual([]);
+    // A later single click still opens it, after the wait.
+    await Bun.sleep(600);
+    await act(() => mockMouse.click(6, 0));
+    expect(opened).toEqual([]);
+    await Bun.sleep(DOUBLE_CLICK_MS * 3);
+    expect(opened).toEqual(["join #rust"]);
     await act(() => dispose());
   });
 
   test("the click that focuses the terminal window does not open a name", async () => {
     const opened: string[] = [];
     const { mockMouse, renderOnce, renderer, dispose } = await testRender(
-      <NameText names={names(opened)} namesEnd={9}>
+      <NameText names={names(opened)} namesEnd={9} doubleClickMs={DOUBLE_CLICK_MS}>
         {() => "bob #rust"}
       </NameText>,
       { width: 30, height: 3 },
@@ -280,7 +304,9 @@ describe("NameText", () => {
     expect(opened).toEqual([]);
     await Bun.sleep(550);
     await act(() => mockMouse.click(1, 0));
+    await Bun.sleep(DOUBLE_CLICK_MS * 3);
     await act(() => mockMouse.click(6, 0));
+    await Bun.sleep(DOUBLE_CLICK_MS * 3);
     expect(opened).toEqual(["dm bob", "join #rust"]);
     await act(() => dispose());
   });
