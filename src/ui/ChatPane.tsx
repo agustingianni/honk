@@ -1,10 +1,10 @@
 import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
-import { useKeyboard, usePaste } from "@opentui/react";
+import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { sameNick, STATUS_BUFFER } from "../irc/names.ts";
+import { isUserSender, sameNick, STATUS_BUFFER } from "../irc/names.ts";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
-import { Clickable } from "./Clickable.tsx";
+import { Clickable, isPlainClick } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
 import { HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { FormattedText, LinkedText } from "./format.tsx";
@@ -17,6 +17,8 @@ interface ChatPaneProps {
   onSubmit: (value: string) => void;
   /** A paste of several lines: each line is sent as its own message. */
   onPasteLines: (lines: string[]) => void;
+  /** A click on a sender's nick: open a DM with them, as in the nick list. */
+  onSelectUser: (nick: string) => void;
 }
 
 const NICK_COL_WIDTH = 12;
@@ -77,11 +79,13 @@ const MessageRow = memo(function MessageRow({
   msg,
   grouped,
   highlightMentions,
+  onSelectUser,
 }: {
   msg: ChatMessage;
   grouped: boolean;
   /** False in a DM: every line there is to you, so painting each one adds nothing. */
   highlightMentions: boolean;
+  onSelectUser: (nick: string) => void;
 }) {
   useThemeVersion(); // re-render when the theme changes
   const mention = highlightMentions && Boolean(msg.isMention);
@@ -93,11 +97,14 @@ const MessageRow = memo(function MessageRow({
   let labelFg: string;
   let body: ReactNode;
   let bg: string | undefined;
+  // The sender of a message, when a click on the nick opens a DM with them.
+  let clickableNick: string | undefined;
 
   switch (msg.kind) {
     case "message":
       label = <strong>{padNick(sender)}</strong>;
       labelFg = senderColor;
+      if (!msg.isSelf && isUserSender(sender)) clickableNick = sender;
       bg = mention ? theme.bgMention : theme.bgBase;
       body = (
         <FormattedText
@@ -166,19 +173,27 @@ const MessageRow = memo(function MessageRow({
       paddingRight={1}
       backgroundColor={bg}
     >
-      <box width={LABEL_COL_WIDTH} flexShrink={0}>
-        <text>
-          {grouped ? (
+      <box width={LABEL_COL_WIDTH} flexShrink={0} flexDirection="row">
+        {grouped ? (
+          <text>
             <span fg={theme.fgDim}>
               {BLANK_TIME} {BLANK_NICK}
             </span>
-          ) : (
-            <>
+          </text>
+        ) : clickableNick ? (
+          <>
+            <text>
               <span fg={theme.fgMuted}>{formatTime(msg.timestamp)} </span>
-              <span fg={labelFg}>{label}</span>
-            </>
-          )}
-        </text>
+              {padNick(clickableNick).slice(0, -truncate(clickableNick, NICK_COL_WIDTH).length)}
+            </text>
+            <NickLabel nick={clickableNick} color={labelFg} onSelect={onSelectUser} />
+          </>
+        ) : (
+          <text>
+            <span fg={theme.fgMuted}>{formatTime(msg.timestamp)} </span>
+            <span fg={labelFg}>{label}</span>
+          </text>
+        )}
       </box>
       <box
         flexGrow={1}
@@ -194,6 +209,39 @@ const MessageRow = memo(function MessageRow({
   );
 });
 
+/**
+ * A sender's nick in the chat log. It is underlined under the mouse, and a
+ * click opens a DM with them. It opens on mouse up, and only for a plain
+ * click, so a drag that starts on the nick still selects text to copy.
+ */
+function NickLabel({
+  nick,
+  color,
+  onSelect,
+}: {
+  nick: string;
+  color: string;
+  onSelect: (nick: string) => void;
+}) {
+  const renderer = useRenderer();
+  const shown = truncate(nick, NICK_COL_WIDTH);
+  return (
+    <Clickable
+      onMouseUp={(event) => {
+        if (isPlainClick(renderer, event)) onSelect(nick);
+      }}
+    >
+      {(hovered) => (
+        <text>
+          <span fg={color}>
+            <strong>{hovered ? <u>{shown}</u> : shown}</strong>
+          </span>
+        </text>
+      )}
+    </Clickable>
+  );
+}
+
 export function ChatPane({
   server,
   buffer,
@@ -201,6 +249,7 @@ export function ChatPane({
   paneWidth,
   onSubmit,
   onPasteLines,
+  onSelectUser,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
@@ -450,6 +499,7 @@ export function ChatPane({
                   msg={msg}
                   grouped={grouped}
                   highlightMentions={buffer.kind === "channel"}
+                  onSelectUser={onSelectUser}
                 />
               </box>
             );

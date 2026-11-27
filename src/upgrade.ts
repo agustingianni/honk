@@ -83,7 +83,12 @@ export function readReceipt(path: string): string | undefined {
  */
 export async function latestRelease(githubUrl: string, signal?: AbortSignal): Promise<string> {
   const pageUrl = `${githubUrl}/${REPO}/releases/latest`;
-  const res = await fetch(pageUrl, { method: "HEAD", redirect: "manual", signal });
+  let res: Response;
+  try {
+    res = await fetch(pageUrl, { method: "HEAD", redirect: "manual", signal });
+  } catch (err) {
+    throw new UpgradeError(`could not find the latest release (${pageUrl}: ${networkReason(err)})`);
+  }
   const location = res.headers.get("location");
   if (res.status < 300 || res.status >= 400 || !location) {
     throw new UpgradeError(`could not find the latest release (${pageUrl} answered ${res.status})`);
@@ -136,10 +141,88 @@ async function sha256OfFile(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/**
+ * The text of a network error, without the advice Bun adds for developers:
+ * "The socket connection was closed unexpectedly. For more information, pass
+ * `verbose: true` in the second argument to fetch()" -> its first sentence.
+ */
+function networkReason(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  return text.replace(/ For more information, pass `verbose: true`[\s\S]*$/, "");
+}
+
 async function fetchOk(url: string): Promise<Response> {
-  const res = await fetch(url);
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    throw new UpgradeError(`download failed: ${url}: ${networkReason(err)}`);
+  }
   if (!res.ok) throw new UpgradeError(`download failed: ${url} answered ${res.status}`);
   return res;
+}
+
+/**
+ * Throws when the number of bytes that arrived differs from Content-Length.
+ * Bun 1.4.5 reports a connection that closes early as an error, but older
+ * versions sometimes ended the body as if it were complete.
+ */
+export function checkLength(url: string, res: Response, received: number) {
+  // With a Content-Encoding, fetch() unpacks the body, and Content-Length
+  // counts the packed bytes. GitHub sends release assets without one.
+  if (res.headers.get("content-encoding")) return;
+  const promised = Number(res.headers.get("content-length"));
+  if (!(promised > 0)) return; // no Content-Length
+  if (received < promised) {
+    throw new UpgradeError(
+      `download failed: ${url}: the connection closed after ${received} of ${promised} bytes`,
+    );
+  }
+  if (received > promised) {
+    throw new UpgradeError(
+      `download failed: ${url}: got ${received} bytes, but the server said ${promised}`,
+    );
+  }
+}
+
+/** Downloads a small text file, such as SHA256SUMS. */
+async function downloadText(url: string): Promise<string> {
+  const res = await fetchOk(url);
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await res.arrayBuffer());
+  } catch (err) {
+    throw new UpgradeError(`download failed: ${url}: ${networkReason(err)}`);
+  }
+  checkLength(url, res, bytes.length);
+  return new TextDecoder().decode(bytes);
+}
+
+function cannotWrite(path: string, err: unknown): UpgradeError {
+  const code = (err as NodeJS.ErrnoException).code;
+  const sudo = code === "EACCES" || code === "EPERM" || code === "EROFS";
+  return new UpgradeError(
+    `cannot write to ${dirname(path)} (${code ?? String(err)}).${sudo ? " honk upgrade never uses sudo." : ""}`,
+  );
+}
+
+/**
+ * Downloads `url` into the file `path`. Bun.write streams the body to the file.
+ * With Bun 1.3.10 it never returned on the release download from GitHub
+ * (oven-sh/bun#13237). It works with Bun 1.4.5, which the release needs.
+ */
+async function downloadFile(url: string, path: string): Promise<void> {
+  const res = await fetchOk(url);
+  let written: number;
+  try {
+    written = await Bun.write(path, res);
+  } catch (err) {
+    // A file system error names its system call, such as "open" or "write".
+    // A network error has none.
+    if ((err as NodeJS.ErrnoException).syscall) throw cannotWrite(path, err);
+    throw new UpgradeError(`download failed: ${url}: ${networkReason(err)}`);
+  }
+  checkLength(url, res, written);
 }
 
 /** Checks the attestation with gh, like install.sh does. Skips it when gh is missing or logged out. */
@@ -189,7 +272,7 @@ export async function upgrade(o: UpgradeOptions): Promise<void> {
   const base = `${o.githubUrl}/${REPO}/releases/download/${encodeURIComponent(latest)}`;
 
   // The small file first, so a release without this asset fails before the big download.
-  const sums = await (await fetchOk(`${base}/SHA256SUMS`)).text();
+  const sums = await downloadText(`${base}/SHA256SUMS`);
   const expected = checksumFor(sums, asset);
   if (!expected) throw new UpgradeError(`the ${latest} SHA256SUMS has no entry for ${asset}`);
 
@@ -200,15 +283,7 @@ export async function upgrade(o: UpgradeOptions): Promise<void> {
   const tmp = join(dir, `.honk.new-${process.pid}`);
   try {
     o.log(`downloading ${asset} ${latest}`);
-    try {
-      await Bun.write(gz, await fetchOk(`${base}/${asset}`));
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
-        throw new UpgradeError(`cannot write to ${dir} (${code}). honk upgrade never uses sudo.`);
-      }
-      throw err;
-    }
+    await downloadFile(`${base}/${asset}`, gz);
 
     const actual = await sha256OfFile(gz);
     if (actual !== expected) {

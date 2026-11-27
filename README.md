@@ -88,6 +88,11 @@ Then it replaces the binary. A honk that is already running keeps working.
 `~/.local/state/honk/receipt.json`. If you installed honk another way, upgrade
 it that way, or run the install script again.
 
+In honk v0.2.0 and older, `honk upgrade` hangs after
+`downloading honk-...gz`. Upgrade those once with the install script above,
+with the same `HONK_INSTALL_DIR` if you set one. Later versions upgrade
+themselves.
+
 Once a day at most, honk asks GitHub in the background for the latest release
 tag. When there is a newer one, the status bar at the bottom shows it, such as
 `v0.3.0 available: honk upgrade`, and the status buffer explains it. It only

@@ -12,10 +12,12 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type AttestationResult,
+  checkLength,
   checksumFor,
   compareVersions,
   defaultReceiptPath,
@@ -29,8 +31,31 @@ const release = {
   tag: "v0.3.0" as string | undefined, // undefined: the repo has no releases
   asset: new Uint8Array(), // the bytes of honk-linux-x64.gz
   sums: "", // filled from `asset` unless a test sets it
+  // Which download breaks halfway: the server sends half of it, then closes.
+  cut: undefined as "asset" | "sums" | undefined,
+  refused: false, // true: the asset download goes to a port where nothing listens
 };
 const requests: string[] = [];
+
+// A server that promises a whole file with Content-Length, sends half of it,
+// and closes: what a connection that breaks halfway looks like. Bun.serve
+// cannot do this, because it fixes up the Content-Length. node:net, because
+// its write() buffers all the bytes and end() sends them before it closes.
+const cutServer = createServer((socket) => {
+  socket.once("data", (request) => {
+    const whole = request.toString().startsWith("GET /sums ")
+      ? new TextEncoder().encode(release.sums)
+      : release.asset;
+    socket.write(`HTTP/1.1 200 OK\r\nContent-Length: ${whole.length}\r\n\r\n`);
+    socket.end(whole.subarray(0, Math.floor(whole.length / 2)));
+  });
+});
+await new Promise<void>((resolve) => cutServer.listen(0, "127.0.0.1", resolve));
+const cutUrl = `http://127.0.0.1:${(cutServer.address() as AddressInfo).port}`;
+
+// A URL where nothing listens. The OS never hands out port 1 as a free port,
+// and almost nothing listens on it.
+const refusedUrl = "http://127.0.0.1:1";
 
 const server = Bun.serve({
   port: 0,
@@ -43,8 +68,16 @@ const server = Bun.serve({
       return new Response(null, { status: 302, headers: { location: `${origin}${to}` } });
     }
     const download = `/${REPO}/releases/download/${release.tag}/`;
-    if (path === `${download}SHA256SUMS`) return new Response(release.sums);
-    if (path === `${download}honk-linux-x64.gz`) return new Response(release.asset);
+    // GitHub redirects downloads to another host. Send the one to break to cutServer.
+    if (path === `${download}SHA256SUMS`) {
+      if (release.cut === "sums") return Response.redirect(`${cutUrl}/sums`, 302);
+      return new Response(release.sums);
+    }
+    if (path === `${download}honk-linux-x64.gz`) {
+      if (release.cut === "asset") return Response.redirect(`${cutUrl}/asset.gz`, 302);
+      if (release.refused) return Response.redirect(`${refusedUrl}/asset.gz`, 302);
+      return new Response(release.asset);
+    }
     return new Response("not found", { status: 404 });
   },
 });
@@ -78,6 +111,8 @@ beforeEach(() => {
   release.tag = "v0.3.0";
   release.asset = Bun.gzipSync("new honk binary");
   release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n${"0".repeat(64)}  honk-darwin-arm64.gz\n`;
+  release.cut = undefined;
+  release.refused = false;
   requests.length = 0;
   logs = [];
   // realpath, because macOS puts tmpdir behind the /var -> /private/var symlink.
@@ -92,6 +127,7 @@ beforeEach(() => {
 
 afterAll(() => {
   server.stop(true);
+  cutServer.close();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -168,6 +204,43 @@ describe("upgrade", () => {
     expect(leftovers()).toEqual([]);
   });
 
+  // The error that upgrade() throws, or undefined.
+  const failure = (opts = options()) => upgrade(opts).then(() => undefined, (err: Error) => err.message);
+  const assetUrl = () => `${githubUrl}/${REPO}/releases/download/v0.3.0/honk-linux-x64.gz`;
+
+  // Bun can report the break from fetch() itself or while it reads the body.
+  // Two sizes make both likely. Older Bun versions sometimes ended a short
+  // body without an error instead. Then checkLength reports it, so these tests
+  // still pass, and the checkLength tests below check its messages.
+  test.each([
+    ["a small", 100],
+    ["a big", 4_000_000],
+  ])("names the download when the connection breaks halfway through %s download", async (_, size) => {
+    release.asset = crypto.getRandomValues(new Uint8Array(size));
+    release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n`;
+    release.cut = "asset";
+    const message = await failure();
+    expect(message?.startsWith(`download failed: ${assetUrl()}: `)).toBe(true);
+    expect(message).not.toContain("verbose: true"); // Bun's advice for developers
+    expect(binaryText()).toBe("old honk binary");
+    expect(leftovers()).toEqual([]);
+  });
+
+  test("names SHA256SUMS when the connection breaks halfway through it", async () => {
+    release.cut = "sums";
+    expect(await failure()).toStartWith(`download failed: ${githubUrl}/${REPO}/releases/download/v0.3.0/SHA256SUMS: `);
+  });
+
+  test("names the release page when GitHub cannot be reached", async () => {
+    const message = await failure(options({ githubUrl: refusedUrl }));
+    expect(message).toStartWith(`could not find the latest release (${refusedUrl}/${REPO}/releases/latest: `);
+  });
+
+  test("names the download when its host cannot be reached", async () => {
+    release.refused = true;
+    expect(await failure()).toStartWith(`download failed: ${assetUrl()}: `);
+  });
+
   test("checks the attestation of the unpacked binary", async () => {
     let checked = "";
     const opts = options({
@@ -231,6 +304,35 @@ describe("compareVersions", () => {
   test("returns NaN for tags it cannot read", () => {
     expect(compareVersions("nightly", "v1.0.0")).toBeNaN();
     expect(compareVersions("nightly", "nightly")).toBe(0);
+  });
+});
+
+// Bun 1.4.5 reports a connection that breaks halfway as an error, so the
+// upgrade tests above cannot reach this check. It is there for a Bun that
+// ends a cut body as if it were complete, as some versions did.
+describe("checkLength", () => {
+  const response = (headers: Record<string, string>) => new Response(null, { headers });
+
+  test("throws when fewer bytes arrived than Content-Length promised", () => {
+    expect(() => checkLength("https://x/a.gz", response({ "content-length": "10" }), 4)).toThrow(
+      "download failed: https://x/a.gz: the connection closed after 4 of 10 bytes",
+    );
+  });
+
+  test("throws when more bytes arrived than Content-Length promised", () => {
+    expect(() => checkLength("https://x/a.gz", response({ "content-length": "10" }), 12)).toThrow(
+      "download failed: https://x/a.gz: got 12 bytes, but the server said 10",
+    );
+  });
+
+  test("accepts the promised length, and a response without one", () => {
+    expect(() => checkLength("u", response({ "content-length": "10" }), 10)).not.toThrow();
+    expect(() => checkLength("u", response({}), 4)).not.toThrow();
+  });
+
+  test("skips the check when fetch() unpacked a Content-Encoding", () => {
+    const gzipped = response({ "content-length": "10", "content-encoding": "gzip" });
+    expect(() => checkLength("u", gzipped, 40)).not.toThrow();
   });
 });
 

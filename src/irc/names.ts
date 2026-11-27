@@ -2,6 +2,17 @@ import type { BufferKind } from "../types.ts";
 
 export const STATUS_BUFFER = "*status";
 
+/** The sender of a message whose source has no name. */
+export const UNKNOWN_SENDER = "unknown";
+
+/**
+ * True when a message's sender is a person you could message. A server name
+ * (irc.example.net) has a dot, and a nick cannot (RFC 2812).
+ */
+export function isUserSender(from: string): boolean {
+  return from !== "" && from !== UNKNOWN_SENDER && !from.includes(".");
+}
+
 export function isChannelName(name: string): boolean {
   return /^[#&+!]/.test(name);
 }

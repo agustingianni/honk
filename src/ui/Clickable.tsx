@@ -1,6 +1,6 @@
-import type { MousePointerStyle } from "@opentui/core";
+import type { CliRenderer, MouseEvent, MousePointerStyle } from "@opentui/core";
 import { useRenderer, type BoxProps } from "@opentui/react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 /**
  * Decides the mouse pointer from how many clickable elements are under the
@@ -41,44 +41,84 @@ export class PointerTracker {
   }
 }
 
-// honk has one renderer, so one tracker, set up on the first hover.
-let tracker: PointerTracker | undefined;
-// How to clear each row under the mouse. A terminal sends no mouse event when
-// its window loses focus, so on the renderer's "blur", every row is cleared.
-const hoveredRows = new Set<() => void>();
+interface RendererHover {
+  tracker: PointerTracker;
+  /**
+   * How to clear each row under the mouse. A terminal sends no mouse event
+   * when its window loses focus, so on the renderer's "blur", every row is
+   * cleared.
+   */
+  rows: Set<() => void>;
+}
 
-type ClickableProps = Omit<BoxProps, "onMouseOver" | "onMouseOut" | "onMouseMove"> & {
+// One per renderer, set up on its first hover. honk has one renderer; the
+// tests make a new one for each test.
+const hoverByRenderer = new WeakMap<CliRenderer, RendererHover>();
+
+function hoverFor(renderer: CliRenderer): RendererHover {
+  let hover = hoverByRenderer.get(renderer);
+  if (!hover) {
+    const rows = new Set<() => void>();
+    hover = {
+      rows,
+      tracker: new PointerTracker((shape) => {
+        // The pointer is picked a microtask later; the renderer may be gone by then.
+        if (!renderer.isDestroyed) renderer.setMousePointer(shape);
+      }),
+    };
+    renderer.on("blur", () => {
+      for (const clear of rows) clear();
+    });
+    hoverByRenderer.set(renderer, hover);
+  }
+  return hover;
+}
+
+/**
+ * True for a mouse up that ends a plain left click on text: no drag, no
+ * double-click, no modifier key. A press on text always starts a selection,
+ * so a click arrives with `isDragging` too; a selection that is still at its
+ * start in "cell" mode means the mouse never moved. A mouse up without
+ * `isDragging` did not start on this text (a press elsewhere, released here),
+ * so it is not a click. Use it in `onMouseUp` on text that people may also
+ * want to select and copy. (The same rule as opencode's plainClick.)
+ */
+export function isPlainClick(renderer: CliRenderer, event: MouseEvent): boolean {
+  if (!event.isDragging) return false;
+  if (event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return false;
+  const selection = renderer.getSelection();
+  return selection?.isStart === true && selection.behavior === "cell";
+}
+
+type ClickableProps = Omit<BoxProps, "onMouseOver" | "onMouseOut" | "onMouseMove" | "children"> & {
   /** The background under the mouse, from the theme. Leave it out to keep `backgroundColor`, as for the selected row. */
   hoverColor?: string;
+  /** A function gets whether the mouse is over the box, to change the text (an underline). */
+  children?: ReactNode | ((hovered: boolean) => ReactNode);
 };
 
 /**
  * A box that shows it can be clicked: under the mouse, it gets `hoverColor`
  * and the terminal shows the hand pointer. Terminals without the pointer
- * escape (OSC 22) ignore it. A box without `onMouseDown` does nothing on a
- * click (your own nick), so it gets no hover look.
+ * escape (OSC 22) ignore it. A box without `onMouseDown` or `onMouseUp` does
+ * nothing on a click (your own nick), so it gets no hover look.
  */
-export function Clickable({ hoverColor, ...props }: ClickableProps) {
+export function Clickable({ hoverColor, children, ...props }: ClickableProps) {
   const renderer = useRenderer();
   const [mouseOver, setMouseOver] = useState(false);
-  const hovered = mouseOver && props.onMouseDown !== undefined;
+  const hovered =
+    mouseOver && (props.onMouseDown !== undefined || props.onMouseUp !== undefined);
 
   useEffect(() => {
     if (!hovered) return;
-    if (!tracker) {
-      tracker = new PointerTracker((shape) => renderer.setMousePointer(shape));
-      renderer.on("blur", () => {
-        for (const clear of hoveredRows) clear();
-      });
-    }
-    const rowTracker = tracker;
+    const { tracker, rows } = hoverFor(renderer);
     const clear = () => setMouseOver(false);
-    hoveredRows.add(clear);
-    rowTracker.enter();
+    rows.add(clear);
+    tracker.enter();
     // Also runs when the box goes away while the mouse is over it.
     return () => {
-      hoveredRows.delete(clear);
-      rowTracker.leave();
+      rows.delete(clear);
+      tracker.leave();
     };
   }, [hovered, renderer]);
 
@@ -93,6 +133,8 @@ export function Clickable({ hoverColor, ...props }: ClickableProps) {
       // After a blur cleared the row, OpenTUI still counts the mouse as over it
       // and sends no new "over" when the mouse comes back. A move lights it again.
       onMouseMove={() => setMouseOver(true)}
-    />
+    >
+      {typeof children === "function" ? children(hovered) : children}
+    </box>
   );
 }
