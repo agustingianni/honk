@@ -183,13 +183,12 @@ test("history requests without a label start with the command, not an empty tag 
   // The fetch on join never has a label, and /history has one only with labeled-response.
   irc.labeledResponse = false;
   await inHonk();
-  await until(() => irc.received.some((l) => l.command === "CHATHISTORY"));
   m.handleInput("/history 5");
   await until(
     () => irc.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk").length >= 2,
   );
   const sent = irc.received.filter((l) => l.command === "CHATHISTORY");
-  expect(sent.map((l) => l.raw.split(" ")[0])).toEqual(sent.map(() => "CHATHISTORY"));
+  expect(sent.filter((l) => !l.raw.startsWith("CHATHISTORY "))).toEqual([]);
 });
 
 test.each([true, false])(
