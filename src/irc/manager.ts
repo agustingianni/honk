@@ -216,6 +216,40 @@ function timeOrderIndex(messages: readonly ChatMessage[], t: number): number {
   return at;
 }
 
+/**
+ * Moves your line `id`, whose time the Echo just set, to its place in time order among
+ * other people's lines. It never passes another line of yours, because the server got
+ * your lines in the order you sent them:
+ *
+ *   before: hi, one (t), two (t), between (t+3)      echoes say t+5
+ *   after:  hi, between, one, two
+ *
+ * When the line moves, your line next to it on the side it left may now follow, so
+ * that one is placed again too. Changes `messages`; returns true if a line moved.
+ */
+function placeOwnLine(messages: ChatMessage[], id: string): boolean {
+  const from = messages.findLastIndex((m) => m.id === id);
+  if (from < 0) return false;
+  const line = messages[from]!;
+  const t = line.timestamp.getTime();
+  // How far it may go: up to, not past, your next line on either side.
+  let first = from;
+  while (first > 0 && !messages[first - 1]!.isSelf) first--;
+  let last = from;
+  while (last < messages.length - 1 && !messages[last + 1]!.isSelf) last++;
+
+  let at = from;
+  while (at < last && messages[at + 1]!.timestamp.getTime() <= t) at++;
+  if (at === from) while (at > first && messages[at - 1]!.timestamp.getTime() > t) at--;
+  if (at === from) return false;
+  messages.splice(from, 1);
+  messages.splice(at, 0, line);
+
+  const neighbor = at > from ? messages[first - 1] : messages[last + 1];
+  if (neighbor?.timeFromServer) placeOwnLine(messages, neighbor.id);
+  return true;
+}
+
 let nextMsgId = 1;
 function makeMessage(
   kind: MessageKind,
@@ -1759,21 +1793,13 @@ export class IrcManager {
     this.emit();
   }
 
-  /** Moves one line whose time changed to its place in time order, as pushMessage puts lines. */
+  /** Moves your line whose Echo set its time to its place among other lines. See placeOwnLine. */
   private moveToTimeOrder(serverId: string, bufferName: string, messageId: string): void {
     const server = this.servers.get(serverId);
     const buf = server?.buffers[bufferName];
-    const from = buf?.messages.findLastIndex((m) => m.id === messageId) ?? -1;
-    if (!server || !buf || from < 0) return;
-    const line = buf.messages[from]!;
-    const t = line.timestamp.getTime();
-    const prev = buf.messages[from - 1];
-    const next = buf.messages[from + 1];
-    const inOrder =
-      (!prev || prev.timestamp.getTime() <= t) && (!next || next.timestamp.getTime() >= t);
-    if (inOrder) return;
-    const messages = buf.messages.filter((m) => m !== line);
-    messages.splice(timeOrderIndex(messages, t), 0, line);
+    if (!server || !buf) return;
+    const messages = [...buf.messages];
+    if (!placeOwnLine(messages, messageId)) return;
     server.buffers = { ...server.buffers, [bufferName]: { ...buf, messages } };
   }
 
