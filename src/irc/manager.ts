@@ -57,6 +57,14 @@ import {
   type Endpoint,
 } from "./replies.ts";
 import { commandOf, parseLine } from "./ircLine.ts";
+import {
+  isAfterMarker,
+  markReadParam,
+  newestServerTime,
+  parseMarkRead,
+  READ_MARKER_CAP,
+  unreadAfter,
+} from "./readMarker.ts";
 import { createNodeRuntime, describeLineError } from "./runtime.ts";
 
 /** Messages kept per buffer from live traffic. */
@@ -114,6 +122,13 @@ interface ServerControl {
    * "is away" once, not per message.
    */
   awayShown: Map<string, Map<string, string>>;
+  /**
+   * How far you have read each buffer (ms), by buffer name (see nameKey). Set by the
+   * server's MARKREAD and by the ones honk sends. Kept across reconnects. See readMarker.ts.
+   */
+  readMarkers: Map<string, number>;
+  /** Waits before sending MARKREAD, so a burst of lines sends one. */
+  markReadTimer: ReturnType<typeof setTimeout> | null;
 }
 
 function createControl(): ServerControl {
@@ -132,6 +147,8 @@ function createControl(): ServerControl {
     pendingWhois: new Set(),
     historyRequests: [],
     awayShown: new Map(),
+    readMarkers: new Map(),
+    markReadTimer: null,
   };
 }
 
@@ -140,6 +157,11 @@ function createControl(): ServerControl {
  * after the last missed mention before reporting them, so they go out as one summary.
  */
 const MISSED_REPORT_DELAY_MS = 3_000;
+/**
+ * How long honk waits before sending MARKREAD for the buffer on screen, so a burst of
+ * lines, or flipping through buffers, sends one. See readMarker.ts.
+ */
+const MARK_READ_DELAY_MS = 1_000;
 
 /**
  * The TLS error code if the server's certificate was rejected (self-signed, expired,
@@ -388,6 +410,8 @@ export class IrcManager {
   private listeners = new Set<() => void>();
   private mentionListeners = new Set<(event: MentionEvent) => void>();
   private missedListeners = new Set<(events: MentionEvent[]) => void>();
+  /** Whether the terminal window has focus. See setFocused. */
+  private focused = true;
   /** Confirms that the lines you send reach the server. See delivery.ts. */
   private delivery = new DeliveryTracker({
     delivered: (serverId, lines) => this.setDelivery(serverId, lines, undefined),
@@ -520,6 +544,10 @@ export class IrcManager {
     if (ctrl.stableTimer) {
       clearTimeout(ctrl.stableTimer);
       ctrl.stableTimer = null;
+    }
+    if (ctrl.markReadTimer) {
+      clearTimeout(ctrl.markReadTimer);
+      ctrl.markReadTimer = null;
     }
   }
 
@@ -779,6 +807,10 @@ export class IrcManager {
     // lines inside the history batch, which the batch handler skips.
     if (!client.state.caps.requested.includes("draft/event-playback")) {
       client.state.caps.requested.push("draft/event-playback");
+    }
+    // The server keeps how far you have read each buffer. See readMarker.ts.
+    if (!client.state.caps.requested.includes(READ_MARKER_CAP)) {
+      client.state.caps.requested.push(READ_MARKER_CAP);
     }
 
     this.clients.set(serverId, client);
@@ -1612,12 +1644,19 @@ export class IrcManager {
   }
 
   /**
-   * A raw line from the server, before irc-client-ts parses it. Only numerics the library
-   * doesn't know are handled here, because it drops their number. See replies.ts.
+   * A raw line from the server, before irc-client-ts parses it. Handled here: numerics
+   * the library doesn't know, because it drops their number (see replies.ts), and
+   * MARKREAD, which it doesn't know at all (see readMarker.ts).
    */
   private onRawLine(serverId: string, line: string): void {
     // Every line passes here, so look at the command before parsing the whole line.
-    const name = NUMERICS_MISSING_FROM_LIBRARY[commandOf(line)];
+    const command = commandOf(line);
+    if (command === "MARKREAD") {
+      const mark = parseMarkRead(parseLine(line).params);
+      if (mark?.time != null) this.onReadMarker(serverId, mark.target, mark.time);
+      return;
+    }
+    const name = NUMERICS_MISSING_FROM_LIBRARY[command];
     if (!name) return;
     const { params } = parseLine(line);
     // ":srv 470 goose #old #new :Forwarding": your nick first, the text last.
@@ -1829,9 +1868,13 @@ export class IrcManager {
     }
 
     // A history line that arrived while the connection was down counts as unread, and
-    // as a mention if it is for you. See missed.ts.
+    // as a mention if it is for you. See missed.ts. Not if your read marker is past it:
+    // you read it on another client. See readMarker.ts.
     const ctrl = this.controls.get(serverId);
-    const missed = isMissedLine(ctrl?.missed, bufferName, message);
+    const marker = ctrl?.readMarkers.get(nameKey(bufferName));
+    const missed =
+      isMissedLine(ctrl?.missed, bufferName, message) &&
+      (marker === undefined || message.timestamp.getTime() > marker);
     if (missed && isMissedMention(ctrl!.missed!, buf.kind, message, server.nick, mentionsNick)) {
       message = { ...message, isMention: true };
     }
@@ -1855,11 +1898,26 @@ export class IrcManager {
 
     const isActive =
       this.active?.serverId === serverId && this.active.buffer === bufferName;
-    const countsAsUnread =
-      !isActive &&
-      (!message.isHistory || missed) &&
+    // A history line is unread if it is newer than your read marker, or if it came
+    // while the connection was down.
+    const afterMarker = isAfterMarker(marker, message);
+    const isUnreadLine =
+      (message.kind === "message" || message.kind === "action") &&
       !message.isSelf &&
-      (message.kind === "message" || message.kind === "action");
+      (!message.isHistory || afterMarker || missed);
+    const countsAsUnread = !isActive && isUnreadLine;
+    // The buffer on screen gets the divider for history you have not read, but no badge.
+    // History can arrive out of order, so the divider goes on the oldest unread line.
+    const firstUnread = buf.firstUnreadId
+      ? messages.find((m) => m.id === buf.firstUnreadId)
+      : undefined;
+    const movesDivider =
+      (countsAsUnread || (isActive && afterMarker && Boolean(message.isHistory))) &&
+      (!buf.firstUnreadId ||
+        (firstUnread !== undefined && message.timestamp < firstUnread.timestamp));
+    const isForYou =
+      Boolean(message.isMention) ||
+      (afterMarker && (buf.kind === "dm" || mentionsNick(message.text, server.nick)));
 
     server.buffers = {
       ...server.buffers,
@@ -1868,12 +1926,12 @@ export class IrcManager {
         messages,
         messageLimit: limit,
         unread: countsAsUnread ? buf.unread + 1 : buf.unread,
-        hasMention: countsAsUnread && message.isMention ? true : buf.hasMention,
-        firstUnreadId:
-          countsAsUnread && !buf.firstUnreadId ? message.id : buf.firstUnreadId,
+        hasMention: countsAsUnread && isForYou ? true : buf.hasMention,
+        firstUnreadId: movesDivider ? message.id : buf.firstUnreadId,
       },
     };
     this.emit();
+    if (isActive) this.scheduleMarkRead(serverId);
 
     if (message.isMention && !message.isHistory && !message.isSelf) {
       const event: MentionEvent = {
@@ -1897,6 +1955,79 @@ export class IrcManager {
         isActiveBuffer: isActive,
       });
     }
+  }
+
+  /**
+   * The server says how far you have read `target`, at connect or because another
+   * client of yours moved the marker. A buffer you are not looking at gets its badge
+   * and divider from the lines after the marker. See readMarker.ts.
+   */
+  private onReadMarker(serverId: string, target: string, time: number): void {
+    const ctrl = this.getControl(serverId);
+    const key = nameKey(target);
+    const known = ctrl.readMarkers.get(key);
+    if (known !== undefined && known >= time) return;
+    ctrl.readMarkers.set(key, time);
+
+    const server = this.servers.get(serverId);
+    const bufferName = this.bufferKey(serverId, target);
+    const buf = server?.buffers[bufferName];
+    if (!server || !buf) return;
+    if (this.active?.serverId === serverId && this.active.buffer === bufferName) return;
+    const state = unreadAfter(
+      buf.messages,
+      time,
+      (m) =>
+        Boolean(m.isMention) || buf.kind === "dm" || mentionsNick(m.text, server.nick),
+    );
+    if (
+      state.unread === buf.unread &&
+      state.hasMention === buf.hasMention &&
+      state.firstUnreadId === buf.firstUnreadId
+    ) {
+      return;
+    }
+    server.buffers = { ...server.buffers, [bufferName]: { ...buf, ...state } };
+    this.emit();
+  }
+
+  /**
+   * Tells honk whether the terminal window has focus. While it doesn't, the buffer on
+   * screen is not being read, so honk does not move its read marker. A terminal that
+   * does not report focus is treated as focused.
+   */
+  setFocused(focused: boolean): void {
+    this.focused = focused;
+    if (focused && this.active) this.scheduleMarkRead(this.active.serverId);
+  }
+
+  /** Sends MARKREAD for the buffer on screen soon, once a burst of lines is over. */
+  private scheduleMarkRead(serverId: string): void {
+    const ctrl = this.getControl(serverId);
+    if (ctrl.markReadTimer) return;
+    ctrl.markReadTimer = setTimeout(() => {
+      ctrl.markReadTimer = null;
+      this.sendMarkRead(serverId);
+    }, MARK_READ_DELAY_MS);
+  }
+
+  /**
+   * Moves your read marker for the buffer on screen up to its newest line, if you are
+   * looking at it. The server tells your other clients, so they stop showing it as unread.
+   */
+  private sendMarkRead(serverId: string): void {
+    if (!this.focused || this.active?.serverId !== serverId) return;
+    const client = this.clients.get(serverId);
+    const ctrl = this.getControl(serverId);
+    const bufferName = this.active.buffer;
+    const buf = this.servers.get(serverId)?.buffers[bufferName];
+    if (!client || !ctrl.registered || !buf || buf.kind === "status") return;
+    if (!client.state.caps.enabled.has(READ_MARKER_CAP)) return;
+    const time = newestServerTime(buf.messages);
+    const known = ctrl.readMarkers.get(nameKey(bufferName));
+    if (time === undefined || (known !== undefined && time <= known)) return;
+    ctrl.readMarkers.set(nameKey(bufferName), time);
+    void client.send("MARKREAD" as never, bufferName as never, markReadParam(time) as never);
   }
 
   /** Remembers what honk knew when a registered connection is lost. See missed.ts. */
@@ -1949,6 +2080,7 @@ export class IrcManager {
     }
 
     this.active = { serverId, buffer: bufferName };
+    this.scheduleMarkRead(serverId);
     if (buf.unread > 0 || buf.hasMention) {
       server.buffers = {
         ...server.buffers,

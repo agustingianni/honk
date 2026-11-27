@@ -100,6 +100,10 @@ if (!g.__ircHot) {
   });
   const root = createRoot(renderer);
 
+  // The buffer on screen counts as read only while the window has focus. See readMarker.ts.
+  renderer.on("focus", () => manager.setFocused(true));
+  renderer.on("blur", () => manager.setFocused(false));
+
   // Mentions and DMs become desktop notifications, shown by the terminal. See src/notify.ts.
   if (notifications.enabled) {
     const notifier = new Notifier((message, title) =>
