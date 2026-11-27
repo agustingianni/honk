@@ -179,6 +179,18 @@ test("/history sends a label, and a FAIL for one channel leaves another /history
   expect(sent.slice(-2).every((l) => l.raw.startsWith("@label="))).toBe(true);
 });
 
+test("history requests without a label start with the command, not an empty tag section", async () => {
+  // The fetch on join never has a label, and /history has one only with labeled-response.
+  irc.labeledResponse = false;
+  await inHonk();
+  m.handleInput("/history 5");
+  await until(
+    () => irc.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk").length >= 2,
+  );
+  const sent = irc.received.filter((l) => l.command === "CHATHISTORY");
+  expect(sent.filter((l) => !l.raw.startsWith("CHATHISTORY "))).toEqual([]);
+});
+
 test.each([true, false])(
   "a failed /history shows its error once, where it was typed (labeled-response: %p)",
   async (labeledResponse) => {
