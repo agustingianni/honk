@@ -154,6 +154,27 @@ const FOCUS_CLICK_MS = 500;
 /** How long a click on a link waits for a second click, which makes it a double-click. */
 const DOUBLE_CLICK_MS = 250;
 
+/**
+ * A function that is true when the terminal window got focus less than
+ * FOCUS_CLICK_MS ago: some terminals pass the click that focuses the window
+ * on to honk, and it should not open anything.
+ */
+function useJustFocused(): () => boolean {
+  const renderer = useRenderer();
+  // When the window last got focus; never, until it does.
+  const focusedAt = useRef(Number.NEGATIVE_INFINITY);
+  useEffect(() => {
+    const onFocus = () => {
+      focusedAt.current = performance.now();
+    };
+    renderer.on("focus", onFocus);
+    return () => {
+      renderer.off("focus", onFocus);
+    };
+  }, [renderer]);
+  return () => performance.now() - focusedAt.current < FOCUS_CLICK_MS;
+}
+
 type LinkAreaProps = Omit<
   BoxProps,
   "onMouseOver" | "onMouseOut" | "onMouseMove" | "onMouseDown" | "onMouseUp"
@@ -200,8 +221,7 @@ export function LinkArea({
 
   // The link under the mouse when the button went down.
   const pressedLink = useRef<string | null>(null);
-  // When the window last got focus; never, until it does.
-  const focusedAt = useRef(Number.NEGATIVE_INFINITY);
+  const justFocused = useJustFocused();
   // The open that waits to see whether a second click comes.
   const pendingOpen = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cancelOpen = () => {
@@ -210,16 +230,6 @@ export function LinkArea({
   };
   // A link must not open after the pane is gone.
   useEffect(() => cancelOpen, []);
-
-  useEffect(() => {
-    const onFocus = () => {
-      focusedAt.current = performance.now();
-    };
-    renderer.on("focus", onFocus);
-    return () => {
-      renderer.off("focus", onFocus);
-    };
-  }, [renderer]);
 
   // Only whether there is a link: the id is enough, without copying its URL.
   const check = (event: MouseEvent) =>
@@ -241,7 +251,7 @@ export function LinkArea({
         const pressed = pressedLink.current;
         pressedLink.current = null;
         if (!onOpenLink || !pressed || !isPlainClick(renderer, event)) return;
-        if (performance.now() - focusedAt.current < FOCUS_CLICK_MS) return;
+        if (justFocused()) return;
         if (renderer.getLinkAt(event.x, event.y) !== pressed) return;
         pendingOpen.current = setTimeout(() => {
           pendingOpen.current = undefined;
@@ -302,7 +312,10 @@ type NameTextProps = {
  * opens a DM with the nick or joins the channel. The text is drawn as usual,
  * not as terminal links, so the terminal's own Cmd+click never sees them.
  *
- * As with LinkArea, the hover is checked only when the mouse moves.
+ * Names come from other people's messages, so a click guards like LinkArea:
+ * the same name must be under the mouse at press and at release, and a click
+ * that may have focused the window opens nothing. As with LinkArea, the hover
+ * is checked only when the mouse moves.
  */
 export function NameText({ names, namesEnd, children }: NameTextProps) {
   const renderer = useRenderer();
@@ -310,6 +323,9 @@ export function NameText({ names, namesEnd, children }: NameTextProps) {
   const [hovered, setHovered] = useState<TextRange | undefined>(undefined);
   const clear = useCallback(() => setHovered(undefined), []);
   usePointer(hovered !== undefined, clear);
+  // The name under the mouse when the button went down.
+  const pressed = useRef<NameInText | undefined>(undefined);
+  const justFocused = useJustFocused();
 
   const at = (event: MouseEvent) =>
     ref.current
@@ -326,11 +342,17 @@ export function NameText({ names, namesEnd, children }: NameTextProps) {
       onMouseOver={check}
       onMouseMove={check}
       onMouseOut={clear}
+      onMouseDown={(event) => {
+        pressed.current = at(event);
+      }}
       onMouseUp={(event) => {
-        if (!isPlainClick(renderer, event)) return;
+        const before = pressed.current;
+        pressed.current = undefined;
+        if (!before || !isPlainClick(renderer, event) || justFocused()) return;
         const name = at(event);
-        if (name?.kind === "nick") names.openNick(name.name);
-        else if (name?.kind === "channel") names.openChannel(name.name);
+        if (name?.start !== before.start || name.name !== before.name) return;
+        if (name.kind === "nick") names.openNick(name.name);
+        else names.openChannel(name.name);
       }}
     >
       {children(hovered)}
