@@ -28,7 +28,7 @@ import { systemClock, type Clock } from "../clock.ts";
 import { stripIrcFormatting } from "../notify.ts";
 import { type Casemapping, DEFAULT_CASEMAPPING, nameKey } from "../irc/names.ts";
 import { checkReplay, type HistoryBatch, type ReplayLine } from "../irc/replay.ts";
-import { CHAT_KINDS, checkSqlite, EVENT_KINDS, NewerSchemaError, prepare } from "./schema.ts";
+import { CHAT_KINDS, checkSqlite, EVENT_KINDS, NewerSchemaError, prepare, sqlList } from "./schema.ts";
 
 /** The `logs` settings in the config file. */
 export interface LogSettings {
@@ -76,6 +76,7 @@ export interface LogLine {
   history?: boolean;
 }
 
+/** The Buffer a Line goes in. The Log folds `name` with the Network's CASEMAPPING. */
 export interface LogBuffer {
   /** As the server sent it, such as "#Honk" or "Alice". */
   name: string;
@@ -93,16 +94,22 @@ export interface LogNetwork {
   exclude: string[];
 }
 
+/** Where the Log lives: `$XDG_DATA_HOME/honk/logs.db`, or `~/.local/share/honk/logs.db`. */
 export function defaultLogPath(env: Record<string, string | undefined> = process.env): string {
   const base = env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   return join(base, "honk", "logs.db");
 }
 
-/** Lines that wait in memory before a write. */
-const FLUSH_ROWS = 100;
+/** How many Lines wait in memory before a write. */
+const FLUSH_LINES = 100;
 const FLUSH_MS = 1000;
-/** Rows one retention step deletes, so a long delete never stalls the screen. */
+/** How many Lines one retention step deletes, so a long delete never stalls the screen. */
 const PRUNE_BATCH = 500;
+/**
+ * How many redactions are kept for Lines the Log does not have yet. A REDACT can come
+ * before its Line: in a History batch, the Lines are written when the batch ends.
+ */
+const MAX_EARLY_REDACTIONS = 500;
 const PRUNE_PAUSE_MS = 50;
 /** How often old Lines are removed while honk runs. */
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -160,6 +167,7 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/** What `openLog` takes besides the path and the settings. Tests replace the defaults. */
 export interface OpenOptions {
   pid?: number;
   clock?: Clock;
@@ -178,12 +186,14 @@ export function openLog(
   path: string,
   settings: LogSettings,
   options: OpenOptions = {},
-): { log?: MessageLog; notices: string[] } {
+): { log?: Log; notices: string[] } {
   if (!settings.enabled) return { notices: [] };
   const created = !existsSync(path);
   let db: Database | undefined;
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    // Also when the folder existed: mkdir sets the mode only on a new one.
+    chmodSync(dirname(path), 0o700);
     // The file holds private messages. SQLite gives the -wal and -shm files the same mode.
     if (created) closeSync(openSync(path, "a", 0o600));
     chmodSync(path, 0o600);
@@ -200,7 +210,7 @@ export function openLog(
       err instanceof NewerSchemaError ? `${path} ${err.message}` : (err as Error).message;
     return { notices: [`honk keeps no log: ${reason}.`] };
   }
-  const log = new MessageLog(db, settings, options);
+  const log = new Log(db, settings, options);
   const notices: string[] = [];
   if (created) notices.push(`honk keeps a log of your chats in ${path}.`);
   if (log.otherWriter !== undefined) {
@@ -211,7 +221,11 @@ export function openLog(
   return { log, notices };
 }
 
-export class MessageLog {
+/**
+ * An open Log. `add` queues a Line; `flush` writes the queue in one transaction. See the
+ * top of this file.
+ */
+export class Log {
   /** The process that writes the file, when it is not this one. */
   readonly otherWriter: number | undefined;
   private readonly clock: Clock;
@@ -225,6 +239,8 @@ export class MessageLog {
   private networks = new Map<string, NetworkSnapshot>();
   private networkIds = new Map<string, number>();
   private bufferIds = new Map<string, number>();
+  /** Redactions whose Line is not in the Log yet, by network id and msgid. */
+  private earlyRedactions = new Map<string, { by: string; time: number }>();
 
   constructor(
     private readonly db: Database,
@@ -263,7 +279,7 @@ export class MessageLog {
   }
 
   /** Updates what the Log knows about a Server's Network. Lines added later use it. */
-  network(serverId: string, info: Partial<LogNetwork>): void {
+  setNetwork(serverId: string, info: Partial<LogNetwork>): void {
     const prev = this.networkOf(serverId);
     this.networks.set(serverId, { ...prev, ...info, serverId });
   }
@@ -327,7 +343,7 @@ export class MessageLog {
 
   private push(op: Op): void {
     this.queue.push(op);
-    if (this.queue.length >= FLUSH_ROWS) this.flush();
+    if (this.queue.length >= FLUSH_LINES) this.flush();
     else if (this.flushTimer === undefined) {
       this.flushTimer = this.clock.setTimeout(() => {
         this.flushTimer = undefined;
@@ -374,7 +390,7 @@ export class MessageLog {
     } else if (op.type === "redact") {
       this.applyRedact(networkId, op.msgid, op.by, op.time);
     } else {
-      this.applyLine(this.bufferId(networkId, op.buffer), op.line, op.batch);
+      this.applyLine(networkId, this.bufferId(networkId, op.buffer), op.line, op.batch);
     }
   }
 
@@ -431,7 +447,7 @@ export class MessageLog {
     return rows.map(keptLine);
   }
 
-  private applyLine(bufferId: number, line: LogLine, batch?: HistoryBatch): void {
+  private applyLine(networkId: number, bufferId: number, line: LogLine, batch?: HistoryBatch): void {
     if (line.history) {
       const verdict = checkReplay(
         this.keptNear(bufferId, line),
@@ -452,12 +468,15 @@ export class MessageLog {
         return;
       }
     }
+    // A REDACT that came before this Line.
+    const early = line.msgid ? this.takeEarlyRedaction(networkId, line.msgid) : undefined;
     // A live Line with a msgid the Log has is dropped by the unique index.
     this.db
       .query(
         `INSERT INTO message
-           (buffer_id, ts, ts_server, kind, nick, subject, text, plain, msgid, self, mention)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (buffer_id, ts, ts_server, kind, nick, subject, text, plain, msgid, self, mention,
+            redacted_at, redacted_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT DO NOTHING`,
       )
       .run(
@@ -472,29 +491,41 @@ export class MessageLog {
         line.msgid ?? null,
         line.self ? 1 : 0,
         line.mention ? 1 : 0,
+        early?.time ?? null,
+        early?.by ?? null,
       );
   }
 
+  private takeEarlyRedaction(networkId: number, msgid: string) {
+    const key = `${networkId}\0${msgid}`;
+    const early = this.earlyRedactions.get(key);
+    this.earlyRedactions.delete(key);
+    return early;
+  }
+
   /**
-   * Marks a Line redacted and takes its text out of the index, so search no longer
-   * finds it. The delete trigger skips redacted rows, so the index entry is removed once.
+   * Marks the Line with `msgid` redacted. A trigger takes its text out of the index, so
+   * search no longer finds it. If the Log does not have the Line yet, the redaction
+   * waits for it.
    */
   private applyRedact(networkId: number, msgid: string, by: string, time: number): void {
-    const rows = this.db
+    const { changes } = this.db
       .query(
-        `SELECT m.id, m.kind, m.plain FROM message m JOIN buffer b ON b.id = m.buffer_id
-         WHERE b.network_id = ? AND m.msgid = ? AND m.redacted_at IS NULL`,
+        `UPDATE message SET redacted_at = ?, redacted_by = ?
+         WHERE msgid = ? AND redacted_at IS NULL
+           AND buffer_id IN (SELECT id FROM buffer WHERE network_id = ?)`,
       )
-      .all(networkId, msgid) as { id: number; kind: string; plain: string }[];
-    for (const row of rows) {
-      if ((CHAT_KINDS as readonly string[]).includes(row.kind)) {
-        this.db
-          .query("INSERT INTO message_fts (message_fts, rowid, plain) VALUES ('delete', ?, ?)")
-          .run(row.id, row.plain);
-      }
-      this.db
-        .query("UPDATE message SET redacted_at = ?, redacted_by = ? WHERE id = ?")
-        .run(time, by, row.id);
+      .run(time, by, msgid, networkId);
+    const known = this.db
+      .query(
+        `SELECT 1 FROM message WHERE msgid = ?
+           AND buffer_id IN (SELECT id FROM buffer WHERE network_id = ?)`,
+      )
+      .get(msgid, networkId);
+    if (changes > 0 || known) return;
+    this.earlyRedactions.set(`${networkId}\0${msgid}`, { by, time });
+    if (this.earlyRedactions.size > MAX_EARLY_REDACTIONS) {
+      this.earlyRedactions.delete(this.earlyRedactions.keys().next().value!);
     }
   }
 
@@ -524,7 +555,7 @@ export class MessageLog {
     ];
     for (const [kinds, days] of rules) {
       if (days <= 0 || deleted >= PRUNE_BATCH) continue;
-      const list = kinds.map((k) => `'${k}'`).join(", ");
+      const list = sqlList(kinds);
       deleted += this.db
         .query(
           `DELETE FROM message WHERE id IN (

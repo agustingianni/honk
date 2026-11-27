@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeClock } from "../fakeClock.ts";
@@ -10,14 +10,14 @@ import {
   defaultLogPath,
   type LogLine,
   type LogSettings,
-  type MessageLog,
+  type Log,
   openLog,
-} from "./messageLog.ts";
+} from "./log.ts";
 import { SCHEMA_VERSION } from "./schema.ts";
 
 let dir: string;
 let path: string;
-const opened: MessageLog[] = [];
+const opened: Log[] = [];
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "honk-log-"));
@@ -200,7 +200,7 @@ test("formatting does not hide a Replay", () => {
 
 test("on an rfc1459 server, #a[b] and #A{B} are one Buffer", () => {
   const { log } = open();
-  log.network("libera", { casemapping: "rfc1459" });
+  log.setNetwork("libera", { casemapping: "rfc1459" });
   log.add("libera", { name: "#a[b]", kind: "channel" }, line("one"));
   log.add("libera", { name: "#A{B}", kind: "channel" }, line("two", { time: T + 1 }));
   log.flush();
@@ -209,9 +209,9 @@ test("on an rfc1459 server, #a[b] and #A{B} are one Buffer", () => {
 
 test("each soju network behind one Server has its own Buffers", () => {
   const { log } = open();
-  log.network("soju", { bouncerNetId: "1", display: "Libera.Chat" });
+  log.setNetwork("soju", { bouncerNetId: "1", display: "Libera.Chat" });
   log.add("soju", honk, line("on libera"));
-  log.network("soju", { bouncerNetId: "2", display: "OFTC" });
+  log.setNetwork("soju", { bouncerNetId: "2", display: "OFTC" });
   log.add("soju", honk, line("on oftc"));
   log.flush();
   expect(rows("SELECT config_id, bouncer_net, display FROM network ORDER BY id")).toEqual([
@@ -223,7 +223,7 @@ test("each soju network behind one Server has its own Buffers", () => {
 
 test("excluded Buffers are never logged, folded by the server's casemapping", () => {
   const { log } = open({ exclude: ["NickServ"] });
-  log.network("libera", { exclude: ["#secret"] });
+  log.setNetwork("libera", { exclude: ["#secret"] });
   log.add("libera", { name: "nickserv", kind: "dm" }, line("identify"));
   log.add("libera", { name: "#SECRET", kind: "channel" }, line("shh"));
   log.add("oftc", { name: "#secret", kind: "channel" }, line("not secret here"));
@@ -306,6 +306,25 @@ test("the Sync marker is per Network and never moves back", () => {
   log.setSyncMarker("libera", T);
   log.setSyncMarker("libera", T - 5000);
   expect(log.syncMarker("libera")).toBe(T);
-  log.network("libera", { bouncerNetId: "7" });
+  log.setNetwork("libera", { bouncerNetId: "7" });
   expect(log.syncMarker("libera")).toBeUndefined();
+});
+
+test("a REDACT that comes before its Line marks the Line when it comes", () => {
+  const { log } = open();
+  log.redact("libera", "m9", "alice", T + 5000);
+  log.add("libera", honk, line("too late", { msgid: "m9", history: true }));
+  log.flush();
+  expect(rows("SELECT text, redacted_by FROM message")).toEqual([
+    { text: "too late", redacted_by: "alice" },
+  ]);
+  expect(search("late")).toEqual([]);
+  checkIndex();
+});
+
+test("an existing folder for the Log becomes private too", () => {
+  mkdirSync(join(dir, "honk"), { mode: 0o755 });
+  chmodSync(join(dir, "honk"), 0o755);
+  open();
+  expect(statSync(join(dir, "honk")).mode & 0o777).toBe(0o700);
 });

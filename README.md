@@ -226,9 +226,10 @@ lines you sent once the server confirmed them, and joins, parts, quits, nick
 changes and kicks. It does not hold `*status`, lines that failed to send, or
 anything from `--demo`. Only you can read the file (mode 0600).
 
-After a reconnect, or when honk starts again, honk asks a server with chat
-history (such as soju or Ergo) for the lines it missed, and adds them to the
-log once.
+After a reconnect, or when honk starts again, honk asks for the channel lines
+it missed, if the network or bouncer keeps chat history (such as Ergo or soju).
+It adds each line to the log once. DMs you missed while honk was closed are not
+fetched yet.
 
 The settings go at the top level of the config file. These are the defaults:
 

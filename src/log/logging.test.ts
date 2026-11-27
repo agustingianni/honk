@@ -11,11 +11,11 @@ import { FakeIrcd } from "../../dev/fakeircd/server.ts";
 import { until } from "../../dev/fakeircd/testing.ts";
 import { IrcManager } from "../irc/manager.ts";
 import type { Casemapping } from "../irc/names.ts";
-import { DEFAULT_LOG_SETTINGS, type MessageLog, openLog } from "./messageLog.ts";
+import { DEFAULT_LOG_SETTINGS, type Log, openLog } from "./log.ts";
 
 let irc: FakeIrcd | undefined;
 let m: IrcManager | undefined;
-let log: MessageLog | undefined;
+let log: Log | undefined;
 let dir: string | undefined;
 
 afterEach(async () => {
@@ -40,10 +40,17 @@ interface Row {
 }
 
 async function connect(
-  opts: { withhold?: string[]; casemapping?: Casemapping; channel?: string } = {},
+  opts: {
+    withhold?: string[];
+    /** A server from before IRCv3: no caps, no tags, no History. */
+    noCaps?: boolean;
+    casemapping?: Casemapping;
+    channel?: string;
+  } = {},
 ) {
   irc = await FakeIrcd.start({ casemapping: opts.casemapping ?? "ascii" });
   for (const cap of opts.withhold ?? []) irc.withheldCaps.add(cap);
+  irc.rejectCap = opts.noCaps ?? false;
   dir = mkdtempSync(join(tmpdir(), "honk-logging-"));
   const path = join(dir, "logs.db");
   log = openLog(path, DEFAULT_LOG_SETTINGS).log!;
@@ -187,7 +194,7 @@ test("a Replay with a msgid gives it to the line logged without one", async () =
   expect(texts()).toEqual(["hi"]);
 });
 
-test("the multiline fallback is one row per line, and the first has the msgid", async () => {
+test("each line of the multiline fallback is its own Line, and the first has the msgid", async () => {
   const { fake, rows } = await connect();
   fake.sendRaw(`@msgid=ml1;time=${at(9)} :alice!a@h PRIVMSG #honk :how is`);
   fake.sendRaw(`@time=${at(9)} :alice!a@h PRIVMSG #honk :everyone?`);
@@ -239,4 +246,51 @@ test("after a reconnect, honk asks for the History the Log misses and stores it 
   expect(onScreen).not.toContain("away 1");
   expect(onScreen).toContain("away 60");
   checkIndex();
+});
+
+test("a server without IRCv3: every live Line is logged with honk's time, and no History is asked", async () => {
+  const { fake, rows, texts } = await connect({ noCaps: true });
+  fake.say("alice", "#honk", "plain old irc");
+  fake.say("alice", "#honk", "plain old irc");
+  await until(() => texts().length === 2);
+  expect(rows().filter((r) => r.kind === "message").map((r) => [r.msgid, r.ts_server])).toEqual([
+    [null, 0],
+    [null, 0],
+  ]);
+  expect(fake.received.some((l) => l.command === "CHATHISTORY")).toBe(false);
+});
+
+test("an Echo with changed text: the Log keeps the server's text", async () => {
+  const { fake, manager, rows, texts } = await connect();
+  // The channel strips colors (+c), so the server echoes the line without them.
+  fake.holdEchoes = true;
+  manager.handleInput("\x0304red alert");
+  await until(() => fake.heldEchoCount === 1);
+  fake.sendRaw(`@msgid=e1;time=${new Date().toISOString()} :goose!g@h PRIVMSG #honk :red alert`);
+  await until(() => texts().length === 1);
+  expect(rows().filter((r) => r.kind === "message")).toMatchObject([
+    { text: "red alert", msgid: "e1", self: 1 },
+  ]);
+});
+
+test("a notice to you goes in the DM with its sender; one from the server stays out", async () => {
+  const { fake, rows } = await connect();
+  fake.sendRaw(":NickServ!services@services.fake NOTICE $NICK :You are now identified");
+  fake.sendRaw(":fake.irc NOTICE $NICK :*** Server restarting soon");
+  fake.say("alice", "#honk", "after");
+  await until(() => rows().some((r) => r.text === "after"));
+  expect(rows().filter((r) => r.kind === "notice")).toMatchObject([
+    { buffer: "NickServ", nick: "NickServ", text: "You are now identified", mention: 1 },
+  ]);
+});
+
+test("a REDACT inside a History batch marks a Line of the same batch", async () => {
+  const { fake, rows, search } = await connect();
+  fake.sendRaw(":fake.irc BATCH +r1 chathistory #honk");
+  fake.sendRaw(`@batch=r1;time=${at(1)};msgid=h1 :alice!a@h PRIVMSG #honk :secret token`);
+  fake.sendRaw(`@batch=r1;time=${at(2)};msgid=h2 :alice!a@h REDACT #honk h1`);
+  fake.sendRaw(":fake.irc BATCH -r1");
+  await until(() => rows().some((r) => r.msgid === "h1"));
+  expect(rows().find((r) => r.msgid === "h1")?.redacted_by).toBe("alice");
+  expect(search("token")).toEqual([]);
 });

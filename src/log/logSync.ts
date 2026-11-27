@@ -9,15 +9,18 @@
  *   until a page is empty or reaches 22:40)
  *
  * The marker moves only once no gap waits to be filled. Then, while connected, honk
- * logs every live Line, so the marker follows the last time honk heard from the
- * server (not the clock: a dead connection can look open for a while, and lines sent
- * then never arrived). It never moves back. A crash
- * in the middle of a fill leaves the marker where it was, and the next start asks for
- * the same History again; the Replay rule drops what the Log has.
+ * logs every live Line, so the marker follows the server time of the newest live Line.
+ * It is the server's time, not honk's clock, because fills compare it with the times
+ * of History: with honk's clock 7 minutes fast, a marker from it would skip 7 minutes
+ * of Lines. It never moves back.
+ *
+ * A crash in the middle of a fill leaves the marker where it was, and the next start
+ * asks for the same History again; the Replay rule drops what the Log has. A fill that
+ * stops at MAX_FILL_PAGES also leaves it there, so the gap is not forgotten.
  */
 
 import { systemClock, type Clock } from "../clock.ts";
-import type { MessageLog } from "./messageLog.ts";
+import type { Log } from "./log.ts";
 
 /** Lines asked for in each page of a fill. */
 export const FILL_LIMIT = 100;
@@ -33,20 +36,34 @@ export const SETTLE_MS = 15_000;
 /** How often the marker moves while connected. */
 export const MARK_EVERY_MS = 10_000;
 
-/** A Log-only History request waiting for its batch. */
-export interface Fill {
-  /** The Buffer, as nameKey. */
-  target: string;
-  label?: string;
+/** A Log-only History request to send: CHATHISTORY AFTER <target> timestamp=<after>. */
+export interface FillRequest {
+  after: number;
   /** The oldest Line the screen's batch had: the gap ends there. */
   until: number;
   /** Pages asked for so far, this one included. */
   pages: number;
 }
 
+/** A fill request that was sent and waits for its batch. */
+export interface Fill extends FillRequest {
+  /** The Buffer, as nameKey. */
+  target: string;
+  label?: string;
+}
+
+/** What `batchEnded` says to do next. */
+export type FillStep =
+  | { type: "done" }
+  | { type: "next"; request: FillRequest }
+  /** MAX_FILL_PAGES pages came and the gap is still open. */
+  | { type: "gave-up" };
+
 interface ServerSync {
-  /** The marker when this connection began; null if the Network has none yet. */
-  since: number | null | undefined;
+  /** True once `marker` was read from the Log. */
+  markerRead: boolean;
+  /** The marker when this connection began; undefined if the Network has none yet. */
+  marker?: number;
   registeredAt: number;
   /** Buffers whose gap is not filled yet, as nameKey. */
   pending: Set<string>;
@@ -55,30 +72,23 @@ interface ServerSync {
   lastMarkAt: number;
 }
 
-/** A Log-only History request to send: CHATHISTORY AFTER <target> timestamp=<after>. */
-export interface FillRequest {
-  after: number;
-  until: number;
-  pages: number;
-}
-
 export class LogSync {
   private servers = new Map<string, ServerSync>();
 
   /**
-   * `heardAt(serverId)`: when honk last received anything on that connection, in ms
-   * on `clock`.
+   * `serverTime(serverId)`: the server time of the newest live Line on that connection,
+   * or undefined before the first one.
    */
   constructor(
-    private readonly log: MessageLog,
-    private readonly heardAt: (serverId: string) => number | undefined,
+    private readonly log: Log,
+    private readonly serverTime: (serverId: string) => number | undefined,
     private readonly clock: Clock = systemClock,
   ) {}
 
   /** A connection with chathistory registered. */
   start(serverId: string): void {
     this.servers.set(serverId, {
-      since: undefined,
+      markerRead: false,
       registeredAt: this.clock.now(),
       pending: new Set(),
       fills: [],
@@ -89,31 +99,34 @@ export class LogSync {
 
   /**
    * The connection is gone. If its History was all in the Log, the marker moves to the
-   * last time honk heard from the server.
+   * newest live Line.
    */
   stop(serverId: string): void {
     const s = this.servers.get(serverId);
-    const heard = this.heardAt(serverId);
-    if (s?.synced && heard !== undefined) this.log.setSyncMarker(serverId, heard);
+    const time = this.serverTime(serverId);
+    if (s?.synced && time !== undefined) this.log.setSyncMarker(serverId, time);
     this.servers.delete(serverId);
   }
 
   /** The marker for this connection, read once, after 005 named the bouncer network. */
-  private since(serverId: string, s: ServerSync): number | null {
-    if (s.since === undefined) s.since = this.log.syncMarker(serverId) ?? null;
-    return s.since;
+  private marker(serverId: string, s: ServerSync): number | undefined {
+    if (!s.markerRead) {
+      s.marker = this.log.syncMarker(serverId);
+      s.markerRead = true;
+    }
+    return s.marker;
   }
 
   /** You joined Buffer `target` (nameKey), and honk asked for its latest History. */
   joined(serverId: string, target: string): void {
     const s = this.servers.get(serverId);
-    if (!s || s.synced || this.since(serverId, s) === null) return;
+    if (!s || s.synced || this.marker(serverId, s) === undefined) return;
     s.pending.add(target);
   }
 
-  /** Remembers a fill request that was just sent. */
-  fillSent(serverId: string, fill: Fill): void {
-    this.servers.get(serverId)?.fills.push(fill);
+  /** Remembers a fill request for `target` that was just sent with `label`. */
+  fillSent(serverId: string, target: string, label: string | undefined, request: FillRequest): void {
+    this.servers.get(serverId)?.fills.push({ ...request, target, label });
   }
 
   /**
@@ -133,22 +146,18 @@ export class LogSync {
 
   /**
    * A History batch for `target` ended, with Lines at server times `times`. `fill` is
-   * the fill it answers, if it is one. Returns the next fill to ask for, if any.
+   * the fill it answers, if it is one. Says whether to ask for another page.
    */
-  batchEnded(
-    serverId: string,
-    target: string,
-    times: number[],
-    fill?: Fill,
-  ): FillRequest | undefined {
+  batchEnded(serverId: string, target: string, times: number[], fill?: Fill): FillStep {
     const s = this.servers.get(serverId);
-    if (!s) return undefined;
-    const next = fill ? this.nextPage(fill, times) : this.firstPage(serverId, s, target, times);
-    if (!next) {
+    if (!s) return { type: "done" };
+    const step = fill ? this.nextPage(fill, times) : this.firstPage(serverId, s, target, times);
+    // A gap left open keeps the Buffer pending, so the marker stays before it.
+    if (step.type === "done") {
       s.pending.delete(target);
-      this.check(serverId);
+      this.moveMarker(serverId);
     }
-    return next;
+    return step;
   }
 
   /** The gap between the marker and the oldest Line of the screen's batch, if any. */
@@ -157,36 +166,37 @@ export class LogSync {
     s: ServerSync,
     target: string,
     times: number[],
-  ): FillRequest | undefined {
-    if (!s.pending.has(target)) return undefined;
-    const since = this.since(serverId, s);
+  ): FillStep {
+    if (!s.pending.has(target)) return { type: "done" };
+    const marker = this.marker(serverId, s);
     const oldest = times.length > 0 ? Math.min(...times) : undefined;
-    if (since === null || oldest === undefined || oldest <= since) return undefined;
-    return { after: since - SYNC_FUZZ_MS, until: oldest, pages: 1 };
+    if (marker === undefined || oldest === undefined || oldest <= marker) return { type: "done" };
+    return { type: "next", request: { after: marker - SYNC_FUZZ_MS, until: oldest, pages: 1 } };
   }
 
   /** The page after `fill`, until a page is empty or reaches the screen's batch. */
-  private nextPage(fill: Fill, times: number[]): FillRequest | undefined {
-    if (times.length === 0 || fill.pages >= MAX_FILL_PAGES) return undefined;
+  private nextPage(fill: Fill, times: number[]): FillStep {
+    if (times.length === 0) return { type: "done" };
     const newest = Math.max(...times);
-    if (newest >= fill.until) return undefined;
-    return { after: newest, until: fill.until, pages: fill.pages + 1 };
+    if (newest >= fill.until) return { type: "done" };
+    if (fill.pages >= MAX_FILL_PAGES) return { type: "gave-up" };
+    return { type: "next", request: { after: newest, until: fill.until, pages: fill.pages + 1 } };
   }
 
   /**
-   * Call now and then while connected. Once no gap waits and the joins have settled,
-   * the marker moves to the last time honk heard from the server, at most every
-   * MARK_EVERY_MS.
+   * Moves the marker to the newest live Line, if it may move now: no gap waits, the
+   * joins have settled, and MARK_EVERY_MS passed since the last move. Call it now and
+   * then while connected.
    */
-  check(serverId: string): void {
+  moveMarker(serverId: string): void {
     const s = this.servers.get(serverId);
-    const heard = this.heardAt(serverId);
-    if (!s || heard === undefined || s.pending.size > 0 || s.fills.length > 0) return;
+    const time = this.serverTime(serverId);
+    if (!s || time === undefined || s.pending.size > 0 || s.fills.length > 0) return;
     const now = this.clock.now();
     if (now - s.registeredAt < SETTLE_MS) return;
     if (s.synced && now - s.lastMarkAt < MARK_EVERY_MS) return;
     s.synced = true;
     s.lastMarkAt = now;
-    this.log.setSyncMarker(serverId, heard);
+    this.log.setSyncMarker(serverId, time);
   }
 }

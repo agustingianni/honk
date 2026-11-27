@@ -74,8 +74,9 @@ import {
   unreadAfter,
 } from "./readMarker.ts";
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
-import type { LogLine, MessageLog } from "../log/messageLog.ts";
-import { FILL_LIMIT, LogSync } from "../log/logSync.ts";
+import type { Log } from "../log/log.ts";
+import { FILL_LIMIT } from "../log/logSync.ts";
+import { LogRecorder } from "./logRecorder.ts";
 
 /** Messages kept per buffer from live traffic. */
 const MAX_MESSAGES = 500;
@@ -121,6 +122,8 @@ interface ServerControl {
   stableTimer: ReturnType<typeof setTimeout> | null;
   /** When this connection last received anything from the server (local clock, ms). */
   lastHeardAt?: number;
+  /** The server time of the newest live line on this connection, in ms. See logSync.ts. */
+  newestServerTime?: number;
   /** Set when a registered connection is lost. See missed.ts. */
   missed?: MissedWindow;
   /** Missed mentions found in history, waiting to be reported as one batch. */
@@ -261,23 +264,6 @@ function placeOwnLine(messages: ChatMessage[], id: string): boolean {
   if (neighbor?.timeFromServer) placeOwnLine(messages, neighbor.id);
   return true;
 }
-
-/** A Line's time for the Log, from its time tag or honk's clock. */
-function logTime(tags?: { time?: string }): Pick<LogLine, "time" | "timeFromServer"> {
-  const t = lineTime(tags);
-  return { time: t.timestamp.getTime(), timeFromServer: t.timeFromServer === true };
-}
-
-/** The tags of an event payload from irc-client-ts. Its types leave them out. */
-function tagsOf(msg: unknown): { time?: string; msgid?: string } | undefined {
-  return (msg as { tags?: { time?: string; msgid?: string } }).tags;
-}
-
-/** The IRCv3 cap that sends REDACT, so the Log can mark a deleted Line. */
-const REDACTION_CAP = "draft/message-redaction";
-
-/** Counts the labels of the Log's own History requests. */
-let fillLabels = 0;
 
 let nextMsgId = 1;
 function makeMessage(
@@ -577,7 +563,7 @@ export class IrcManager {
   private delivery = new DeliveryTracker({
     delivered: (serverId, lines) => {
       this.setDelivery(serverId, lines, undefined);
-      this.logDelivered(serverId, lines);
+      this.logRecorder?.delivered(serverId, lines);
     },
     timedOut: (serverId, lines) => this.deliveryTimedOut(serverId, lines),
   });
@@ -591,25 +577,15 @@ export class IrcManager {
   /** Channels the user asked to /join, with when the request expires. The join switches to them. See joinKey. */
   private requestedJoins = new Map<string, number>();
   private lastWakeTick = Date.now();
-  /** The Log of your chats on disk, if honk keeps one. See src/log/messageLog.ts. */
-  private readonly log: MessageLog | undefined;
-  /** Fills the Log's gaps after a reconnect. See src/log/logSync.ts. */
-  private readonly logSync: LogSync | undefined;
-  /**
-   * Your lines whose Echo the Log waits for. The others enter the Log when the delivery
-   * check confirms them. See ADR 0003, rule 5.
-   */
-  private expectsEcho = new Set<string>();
+  /** Writes Lines to the Log, if honk keeps one. See logRecorder.ts. */
+  private readonly logRecorder: LogRecorder | undefined;
 
   /**
    * `markReadDelayMs`: see MARK_READ_DELAY_MS in readMarker.ts. Tests pass a shorter one.
    * `log`: the Log to write Lines to; none keeps no Log.
    */
-  constructor(options: { markReadDelayMs?: number; log?: MessageLog } = {}) {
-    this.log = options.log;
-    this.logSync = this.log
-      ? new LogSync(this.log, (serverId) => this.controls.get(serverId)?.lastHeardAt)
-      : undefined;
+  constructor(options: { markReadDelayMs?: number; log?: Log } = {}) {
+    this.logRecorder = options.log && this.createLogRecorder(options.log);
     this.readMarkerTracker = new ReadMarkerTracker(
       {
         onScreen: () => this.active,
@@ -637,7 +613,7 @@ export class IrcManager {
       if (elapsed > WAKE_JUMP_THRESHOLD_MS) {
         this.handleSystemWake();
       }
-      for (const id of this.serverOrder) this.logSync?.check(id);
+      this.logRecorder?.tick(this.serverOrder);
     }, WAKE_CHECK_INTERVAL_MS);
   }
 
@@ -924,7 +900,7 @@ export class IrcManager {
     if (!this.active) {
       this.active = { serverId: config.id, buffer: STATUS_BUFFER };
     }
-    this.log?.network(config.id, {
+    this.logRecorder?.setNetwork(config.id, {
       display: config.name || config.host,
       exclude: config.logExclude ?? [],
     });
@@ -1059,9 +1035,7 @@ export class IrcManager {
       client.state.caps.requested.push(READ_MARKER_CAP);
     }
     // REDACT, so the Log marks a deleted Line. The screen does not show it yet.
-    if (this.log && !client.state.caps.requested.includes(REDACTION_CAP)) {
-      client.state.caps.requested.push(REDACTION_CAP);
-    }
+    this.logRecorder?.requestCaps(client.state.caps.requested);
 
     // The text of each PRIVMSG as it goes out: irc-client-ts splits a long line into
     // several. The echo has these parts, not what you typed.
@@ -1258,9 +1232,15 @@ export class IrcManager {
     });
 
     // Anything from the server shows the connection worked until now. See missed.ts.
-    client.on("raw", () => {
+    // Lines inside a batch don't come here: the batch plugin keeps them.
+    client.on("raw", (msg) => {
       if (isStale()) return;
-      this.getControl(serverId).lastHeardAt = Date.now();
+      const ctrl = this.getControl(serverId);
+      ctrl.lastHeardAt = Date.now();
+      const time = lineTime((msg as { tags?: { time?: string } }).tags);
+      if (time.timeFromServer) {
+        ctrl.newestServerTime = Math.max(ctrl.newestServerTime ?? 0, time.timestamp.getTime());
+      }
     });
 
     // The PONG for a PING sent after your line: the line reached the server.
@@ -1291,9 +1271,7 @@ export class IrcManager {
       // Each connection starts from the default, whatever an earlier one said: a server
       // that sends no CASEMAPPING uses rfc1459. The 005 lines that follow may change it.
       server.casemapping = DEFAULT_CASEMAPPING;
-      // A bouncer names its network in the 005 lines that follow (BOUNCER_NETID).
-      this.log?.network(serverId, { bouncerNetId: "", casemapping: DEFAULT_CASEMAPPING });
-      if (client.state.caps.enabled.has("draft/chathistory")) this.logSync?.start(serverId);
+      this.logRecorder?.registered(serverId, DEFAULT_CASEMAPPING);
       const isReconnect = ctrl.hasEverConnected;
       ctrl.hasEverConnected = true;
       this.readMarkerTracker.onConnected(serverId);
@@ -1371,14 +1349,15 @@ export class IrcManager {
       if (!server || !net) return;
       server.networkName = net;
       server.name = net;
-      this.log?.network(serverId, { display: net });
+      this.logRecorder?.setNetwork(serverId, { display: net });
       this.emit();
     });
 
     // soju's id for the network behind this connection. Part of the Log's key for the
     // Network (ADR 0002). Same event shape as isupport:network.
     client.on("isupport:bouncer_netid" as "isupport:network", (msg) => {
-      if (live()) this.log?.network(serverId, { bouncerNetId: msg.params.value?.trim() ?? "" });
+      if (!live()) return;
+      this.logRecorder?.setNetwork(serverId, { bouncerNetId: msg.params.value?.trim() ?? "" });
     });
 
     // Which names the server sees as the same (see nameKey). 005 comes right after 001,
@@ -1389,7 +1368,7 @@ export class IrcManager {
       const server = live();
       if (!server) return;
       server.casemapping = parseCasemapping(msg.params.value);
-      this.log?.network(serverId, { casemapping: server.casemapping });
+      this.logRecorder?.setNetwork(serverId, { casemapping: server.casemapping });
       this.settleCasemapping(serverId);
       this.emit();
     });
@@ -1454,7 +1433,7 @@ export class IrcManager {
       const channel = msg.params.channel;
       const who = normalizeNick(msg.source?.name);
       this.ensureBuffer(serverId, channel, "channel");
-      this.logEvent(serverId, channel, msg, { kind: "join", nick: who, text: "" });
+      this.logRecorder?.event(serverId, channel, msg, { kind: "join", nick: who, text: "" });
       if (this.same(serverId, who, server.nick)) {
         // Switch for a /join, or from this server's *status (auto-join at startup).
         // Auto-joins and reconnect re-joins never take focus from another buffer.
@@ -1473,7 +1452,7 @@ export class IrcManager {
         // Fetch recent scrollback from bouncer/server if draft/chathistory is enabled
         if (client.state.caps.enabled.has("draft/chathistory")) {
           requestHistory(client, "LATEST", channel, "*", 50);
-          this.logSync?.joined(serverId, this.key(serverId, channel));
+          this.logRecorder?.joined(serverId, channel);
         }
       } else {
         this.pushMessage(
@@ -1489,7 +1468,7 @@ export class IrcManager {
       if (!server) return;
       const channel = msg.params.channel;
       const who = normalizeNick(msg.source?.name);
-      this.logEvent(serverId, channel, msg, { kind: "part", nick: who, text: msg.params.comment ?? "" });
+      this.logRecorder?.event(serverId, channel, msg, { kind: "part", nick: who, text: msg.params.comment ?? "" });
       if (this.same(serverId, who, server.nick)) {
         this.removeBuffer(serverId, channel);
       } else {
@@ -1509,7 +1488,7 @@ export class IrcManager {
       const reason = msg.params.comment ? ` (${msg.params.comment})` : "";
       for (const bufName of priorChannels.get(msg) ?? channelsWithNick(server, who)) {
         this.pushMessage(serverId, bufName, makeMessage("part", `${who} quit${reason}`));
-        this.logEvent(serverId, bufName, msg, { kind: "quit", nick: who, text: msg.params.comment ?? "" });
+        this.logRecorder?.event(serverId, bufName, msg, { kind: "quit", nick: who, text: msg.params.comment ?? "" });
       }
     });
 
@@ -1519,7 +1498,7 @@ export class IrcManager {
       const { channel, nick, comment } = msg.params;
       const by = normalizeNick(msg.source?.name) || "someone";
       const reason = comment ? ` (${comment})` : "";
-      this.logEvent(serverId, channel, msg, { kind: "kick", nick: by, subject: nick, text: comment ?? "" });
+      this.logRecorder?.event(serverId, channel, msg, { kind: "kick", nick: by, subject: nick, text: comment ?? "" });
       if (this.same(serverId, nick, server.nick)) {
         // The channel's buffer goes away, so say why in *status, where the view lands.
         this.removeBuffer(serverId, channel);
@@ -1555,7 +1534,7 @@ export class IrcManager {
       const event = { kind: "nick", nick: oldNick, subject: newNick, text: "" } as const;
       for (const bufName of priorChannels.get(msg) ?? channelsWithNick(server, oldNick)) {
         this.pushMessage(serverId, bufName, makeMessage("system", line));
-        this.logEvent(serverId, bufName, msg, event);
+        this.logRecorder?.event(serverId, bufName, msg, event);
       }
       // An open DM follows the person to the new nick. If a DM with the new nick is
       // already open, the old one is merged into it, so one person has one DM.
@@ -1566,7 +1545,7 @@ export class IrcManager {
           this.renameBuffer(serverId, oldNick, newNick);
         }
         this.pushMessage(serverId, newNick, makeMessage("system", line));
-        this.logEvent(serverId, newNick, msg, event);
+        this.logRecorder?.event(serverId, newNick, msg, event);
       }
     });
 
@@ -1594,7 +1573,7 @@ export class IrcManager {
       if (!buf) return;
       const who = msg.source?.name ?? "someone";
       buf.topic = msg.params.topic ?? "";
-      this.logEvent(serverId, msg.params.channel, msg, { kind: "topic", nick: who, text: buf.topic });
+      this.logRecorder?.event(serverId, msg.params.channel, msg, { kind: "topic", nick: who, text: buf.topic });
       this.pushMessage(
         serverId,
         msg.params.channel,
@@ -1626,12 +1605,10 @@ export class IrcManager {
       const label =
         batch.params.tags?.label ?? (parentRef && client.state.batches.get(parentRef)?.tags?.label);
       const ctrl = this.getControl(serverId);
-      const targetKey = batchTarget ? this.key(serverId, batchTarget) : undefined;
-      // A request of the Log's own: its Lines go to the Log, not the screen. See logSync.ts.
-      const fill =
-        targetKey === undefined ? undefined : this.logSync?.takeFill(serverId, label, targetKey);
+      // A request of the Log's own goes to the Log only, not the screen. See logRecorder.ts.
+      const logHistory = this.logRecorder?.history(serverId, batchTarget ?? "", label);
       if (
-        !fill &&
+        !logHistory?.isFill &&
         batchTarget &&
         takeHistoryRequest(ctrl.historyRequests, label, this.key(serverId, batchTarget))
       ) {
@@ -1646,11 +1623,8 @@ export class IrcManager {
           );
         }
       }
-      // The Replay counts of this batch, per buffer, on screen and in the Log. See replay.ts.
+      // The Replay counts of this batch, per buffer. See replay.ts.
       const batchReplays = new Map<string, HistoryBatch>();
-      const logReplays = new Map<string, HistoryBatch>();
-      // The server times of its Lines, for the Log's gap check.
-      const times: number[] = [];
       for (const raw of batch.params.messages) {
         const cmd = raw.command;
         if (cmd !== "privmsg" && cmd !== "notice") continue;
@@ -1664,34 +1638,13 @@ export class IrcManager {
 
         // Detect CTCP ACTION (\x01ACTION text\x01)
         const actionMatch = /^\x01ACTION ([\s\S]*?)\x01?$/.exec(rawText);
-        const msgKind: MessageKind =
+        const msgKind =
           cmd === "notice" ? "notice" : actionMatch ? "action" : "message";
         const text = actionMatch ? actionMatch[1]! : rawText;
-        const bufferKey = this.bufferKey(serverId, target);
-        const time = logTime(raw.tags);
-        if (time.timeFromServer) times.push(time.time);
-        let logBatch = logReplays.get(bufferKey);
-        if (!logBatch) logReplays.set(bufferKey, (logBatch = new HistoryBatch()));
-        this.logLine(
-          serverId,
-          target,
-          {
-            kind: msgKind,
-            nick: from,
-            text,
-            ...time,
-            msgid: raw.tags?.msgid,
-            self: isSelf,
-            mention:
-              !isSelf &&
-              (!isChannelName(target) ||
-                mentionsNick(text, server.nick, this.casemapping(serverId))),
-            history: true,
-          },
-          logBatch,
-        );
-        if (fill) continue;
+        logHistory?.add(target, { kind: msgKind, from, text, tags: raw.tags, self: isSelf });
+        if (logHistory?.isFill) continue;
 
+        const bufferKey = this.bufferKey(serverId, target);
         let replays = batchReplays.get(bufferKey);
         if (!replays) batchReplays.set(bufferKey, (replays = new HistoryBatch()));
 
@@ -1708,24 +1661,8 @@ export class IrcManager {
           replays,
         );
       }
-
-      // Ask for the History the Log misses, if any. See logSync.ts.
-      const next =
-        targetKey === undefined
-          ? undefined
-          : this.logSync?.batchEnded(serverId, targetKey, times, fill);
-      if (next && batchTarget && targetKey !== undefined) {
-        const fillLabel = client.state.caps.enabled.has("labeled-response")
-          ? `log-${++fillLabels}`
-          : undefined;
-        requestHistory(client, "AFTER", batchTarget, timestampParam(next.after), FILL_LIMIT, fillLabel);
-        this.logSync?.fillSent(serverId, {
-          target: targetKey,
-          label: fillLabel,
-          until: next.until,
-          pages: next.pages,
-        });
-      }
+      // Asks for the History the Log misses, if any. See logSync.ts.
+      logHistory?.end();
     });
 
     const isHistoryBatch = (tags?: Record<string, string | undefined>): boolean => {
@@ -1754,11 +1691,7 @@ export class IrcManager {
       const isHistory = isHistoryBatch(tags);
       // Someone who writes is back, so their next "is away" shows again, even with the same text.
       if (!isSelf && !isHistory) this.forgetAwayShown(serverId, from);
-      const isMention =
-        !isSelf &&
-        !isHistory &&
-        (!isChannelName(target) ||
-          mentionsNick(msg.params.text, server.nick, this.casemapping(serverId)));
+      const isMention = !isSelf && !isHistory && this.isMentionIn(serverId, target, msg.params.text);
 
       // The echo of a line you sent here takes over the line already shown, so it
       // shows once, with the server's text and msgid. Only the first part of a split
@@ -1786,14 +1719,12 @@ export class IrcManager {
       );
       // History reaches the Log through the batch_end handler.
       if (!isHistory) {
-        this.logLine(serverId, target, {
+        this.logRecorder?.chat(serverId, target, {
           kind,
-          nick: from,
+          from,
           text: msg.params.text,
-          ...logTime(tags),
-          msgid: tags?.msgid,
+          tags,
           self: isSelf,
-          mention: isMention,
         });
       }
     };
@@ -1818,14 +1749,25 @@ export class IrcManager {
         ? msg.params.target
         : STATUS_BUFFER;
       const isHistory = isHistoryBatch(tags);
-      if (!isHistory && target !== STATUS_BUFFER) {
-        this.logLine(serverId, target, {
+      // The screen shows a notice to you in *status. The Log files it in the DM with
+      // the sender; a notice from the server itself ("irc.libera.chat") stays out.
+      const self = this.same(serverId, from, this.servers.get(serverId)?.nick);
+      const logTarget = isChannelName(msg.params.target)
+        ? msg.params.target
+        : self
+          ? msg.params.target
+          : this.same(serverId, msg.params.target, this.servers.get(serverId)?.nick) &&
+              msg.source?.name &&
+              !msg.source.name.includes(".")
+            ? from
+            : undefined;
+      if (!isHistory && logTarget) {
+        this.logRecorder?.chat(serverId, logTarget, {
           kind: "notice",
-          nick: from,
+          from,
           text: msg.params.text,
-          ...logTime(tags),
-          msgid: tags?.msgid,
-          self: this.same(serverId, from, this.servers.get(serverId)?.nick),
+          tags,
+          self,
         });
       }
       this.pushMessage(
@@ -2013,8 +1955,8 @@ export class IrcManager {
       client.state.caps.enabled.has("echo-message") || this.same(serverId, target, nick);
     if (echoed) {
       this.echoes.add(serverId, this.key(serverId, bufferName), message.id, parts);
-      if (this.log) this.expectsEcho.add(message.id);
     }
+    this.logRecorder?.sent(message.id, echoed);
   }
 
   /**
@@ -2039,36 +1981,8 @@ export class IrcManager {
       ...(time.timeFromServer ? time : {}),
     }));
     if (time.timeFromServer) this.moveToTimeOrder(serverId, bufferName, messageId);
-    this.logOwnLine(serverId, bufferName, messageId);
+    this.logRecorder?.echoed(serverId, bufferName, messageId);
     this.emit();
-  }
-
-  /**
-   * Your lines the delivery check confirmed. Those that wait for an Echo enter the Log
-   * with it instead, with the server's text and msgid.
-   */
-  private logDelivered(serverId: string, lines: SentLine[]): void {
-    for (const line of lines) {
-      if (!this.expectsEcho.delete(line.messageId)) {
-        this.logOwnLine(serverId, line.bufferName, line.messageId);
-      }
-    }
-  }
-
-  /** Adds your line `messageId`, as the buffer shows it now, to the Log. */
-  private logOwnLine(serverId: string, bufferName: string, messageId: string): void {
-    const server = this.servers.get(serverId);
-    const m = server?.buffers[bufferName]?.messages.findLast((x) => x.id === messageId);
-    if (!server || !m || (m.kind !== "message" && m.kind !== "action")) return;
-    this.logLine(serverId, bufferName, {
-      kind: m.kind,
-      nick: m.from ?? server.nick,
-      text: m.text,
-      time: m.timestamp.getTime(),
-      timeFromServer: m.timeFromServer === true,
-      msgid: m.msgid,
-      self: true,
-    });
   }
 
   /** Moves your line whose Echo set its time to its place among other lines. See placeOwnLine. */
@@ -2122,13 +2036,13 @@ export class IrcManager {
   private failPendingLines(serverId: string): void {
     this.echoes.drop(serverId);
     const lines = this.delivery.drop(serverId);
-    for (const line of lines) this.expectsEcho.delete(line.messageId);
+    this.logRecorder?.failed(lines);
     this.setDelivery(serverId, lines, "failed");
   }
 
   /** No PONG in time: the connection is dead even though the socket looks open. */
   private deliveryTimedOut(serverId: string, lines: SentLine[]): void {
-    for (const line of lines) this.expectsEcho.delete(line.messageId);
+    this.logRecorder?.failed(lines);
     this.setDelivery(serverId, lines, "failed");
     const client = this.clients.get(serverId);
     const server = this.servers.get(serverId);
@@ -2229,7 +2143,7 @@ export class IrcManager {
     // Every line passes here, so look at the command before parsing the whole line.
     const command = commandOf(line);
     if (command === "REDACT") {
-      this.onRedact(serverId, line);
+      this.logRecorder?.redact(serverId, line);
       return;
     }
     const name = NUMERICS_MISSING_FROM_LIBRARY[command];
@@ -2237,19 +2151,6 @@ export class IrcManager {
     const { params } = parseLine(line);
     // ":srv 470 goose #old #new :Forwarding": your nick first, the text last.
     this.onNumeric(serverId, name, params.slice(1, -1), params.at(-1) ?? "");
-  }
-
-  /**
-   * Someone deleted a Line: "@time=... :alice!a@h REDACT #honk <msgid> :reason". The Log
-   * marks it, and keeps it. Read from the raw line, so a REDACT inside a History batch
-   * counts too.
-   */
-  private onRedact(serverId: string, line: string): void {
-    const { tags, source, params } = parseLine(line);
-    const msgid = params[1];
-    if (!msgid) return;
-    const by = normalizeNick(source?.split("!")[0]);
-    this.log?.redact(serverId, msgid, by, logTime(tags).time);
   }
 
   /**
@@ -2413,29 +2314,40 @@ export class IrcManager {
   }
 
   /**
-   * Adds a Line to the Log of Buffer `bufferName`, unless honk keeps no Log. *status is
-   * never logged. `batch`: see MessageLog.add.
+   * True if a line with `text` in `target` is a Mention: it names your nick, or it is
+   * in a DM. Your own lines never are; the callers check that.
    */
-  private logLine(serverId: string, bufferName: string, line: LogLine, batch?: HistoryBatch): void {
-    if (!this.log || this.same(serverId, bufferName, STATUS_BUFFER)) return;
-    const name = this.bufferKey(serverId, bufferName);
-    this.log.add(serverId, { name, kind: isChannelName(name) ? "channel" : "dm" }, line, batch);
+  private isMentionIn(serverId: string, target: string, text: string): boolean {
+    const nick = this.servers.get(serverId)?.nick;
+    return (
+      !isChannelName(target) ||
+      (nick !== undefined && mentionsNick(text, nick, this.casemapping(serverId)))
+    );
   }
 
-  /** Adds an Event to the Log, with the time and msgid of the IRC line `msg`. */
-  private logEvent(
-    serverId: string,
-    bufferName: string,
-    msg: unknown,
-    event: Pick<LogLine, "kind" | "nick" | "subject" | "text">,
-  ): void {
-    if (!this.log) return;
-    const tags = tagsOf(msg);
-    this.logLine(serverId, bufferName, {
-      ...event,
-      ...logTime(tags),
-      msgid: tags?.msgid,
-      self: this.same(serverId, event.nick, this.servers.get(serverId)?.nick),
+  /** The LogRecorder for `log`, with what it needs to know about each server. */
+  private createLogRecorder(log: Log): LogRecorder {
+    return new LogRecorder(log, {
+      bufferName: (serverId, name) => this.bufferKey(serverId, name),
+      isStatus: (serverId, name) => this.same(serverId, name, STATUS_BUFFER),
+      key: (serverId, name) => this.key(serverId, name),
+      same: (serverId, a, b) => this.same(serverId, a, b),
+      nick: (serverId) => this.servers.get(serverId)?.nick,
+      isMentionIn: (serverId, target, text) => this.isMentionIn(serverId, target, text),
+      shownLine: (serverId, bufferName, messageId) =>
+        this.servers
+          .get(serverId)
+          ?.buffers[bufferName]?.messages.findLast((m) => m.id === messageId),
+      newestServerTime: (serverId) => this.controls.get(serverId)?.newestServerTime,
+      hasCap: (serverId, cap) => this.clients.get(serverId)?.state.caps.enabled.has(cap) === true,
+      requestHistoryAfter: (serverId, target, after, label) => {
+        const client = this.clients.get(serverId);
+        if (client) {
+          requestHistory(client, "AFTER", target, timestampParam(after), FILL_LIMIT, label);
+        }
+      },
+      notice: (serverId, text) =>
+        this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text)),
     });
   }
 
@@ -2621,7 +2533,7 @@ export class IrcManager {
 
   /** Remembers what honk knew when a registered connection is lost. See missed.ts. */
   private noteConnectionLost(serverId: string, ctrl: ServerControl): void {
-    this.logSync?.stop(serverId);
+    this.logRecorder?.connectionLost(serverId);
     const server = this.servers.get(serverId);
     if (!server || !ctrl.registered || ctrl.lastHeardAt === undefined) return;
     ctrl.missed = {

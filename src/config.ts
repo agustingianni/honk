@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { DEFAULT_LOG_SETTINGS, type LogSettings } from "./log/messageLog.ts";
+import { DEFAULT_LOG_SETTINGS, type LogSettings } from "./log/log.ts";
 import type { AppConfig, AuthMethod, ServerConfig } from "./types.ts";
 
 export function defaultNick(): string {

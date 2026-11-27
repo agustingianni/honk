@@ -20,12 +20,23 @@ export const CHAT_KINDS = ["message", "action", "notice", "topic"] as const;
 /** Events, which the Log keeps for `eventRetentionDays`. */
 export const EVENT_KINDS = ["join", "part", "quit", "nick", "kick"] as const;
 
-const chatKindList = CHAT_KINDS.map((k) => `'${k}'`).join(", ");
+/** `kinds` as an SQL list: "'message', 'action'". */
+export function sqlList(kinds: readonly string[]): string {
+  return kinds.map((k) => `'${k}'`).join(", ");
+}
+
+const chatKindList = sqlList(CHAT_KINDS);
 
 /**
- * Version 1. Times are Unix ms (UTC). Each trigger touches the index for the same rows:
- * a second FTS 'delete' of one row corrupts the index, so nothing else may delete from
- * it except a redaction, which the delete trigger then skips (`redacted_at IS NULL`).
+ * Version 1. Times are Unix ms (UTC).
+ *
+ * The index holds exactly the Chat lines that are not redacted, and only the triggers
+ * change it. A second FTS 'delete' of one row corrupts the index, so each trigger
+ * checks the same condition:
+ *
+ *   insert a Chat line               -> added to the index
+ *   redact it (redacted_at is set)   -> removed from the index
+ *   delete it (retention)            -> removed, unless a redaction removed it already
  */
 const SCHEMA_V1 = `
 CREATE TABLE network (
@@ -77,8 +88,14 @@ CREATE VIRTUAL TABLE message_fts USING fts5 (
 );
 
 CREATE TRIGGER message_fts_ai AFTER INSERT ON message
-WHEN new.kind IN (${chatKindList}) BEGIN
+WHEN new.redacted_at IS NULL AND new.kind IN (${chatKindList}) BEGIN
   INSERT INTO message_fts (rowid, plain) VALUES (new.id, new.plain);
+END;
+
+CREATE TRIGGER message_fts_redact AFTER UPDATE OF redacted_at ON message
+WHEN old.redacted_at IS NULL AND new.redacted_at IS NOT NULL
+  AND old.kind IN (${chatKindList}) BEGIN
+  INSERT INTO message_fts (message_fts, rowid, plain) VALUES ('delete', old.id, old.plain);
 END;
 
 CREATE TRIGGER message_fts_ad AFTER DELETE ON message
@@ -153,6 +170,7 @@ export function prepare(db: Database): void {
   }
 }
 
+/** The schema version of the open file: 0 for a new file. */
 export function userVersion(db: Database): number {
   return (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
 }
