@@ -1,35 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine, type Timers } from "./delivery.ts";
-
-/** Timers that only fire when the test advances the clock. */
-function fakeTimers() {
-  let now = 0;
-  let nextId = 1;
-  const timers = new Map<number, { at: number; fn: () => void }>();
-  const api: Timers = {
-    setTimeout: (fn, ms) => {
-      const id = nextId++;
-      timers.set(id, { at: now + ms, fn });
-      return id;
-    },
-    clearTimeout: (id) => {
-      timers.delete(id as number);
-    },
-  };
-  const advance = (ms: number) => {
-    now += ms;
-    for (const [id, t] of [...timers]) {
-      if (t.at <= now) {
-        timers.delete(id);
-        t.fn();
-      }
-    }
-  };
-  return { api, advance, active: () => timers.size };
-}
+import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine } from "./delivery.ts";
+import { fakeClock } from "./fakeClock.ts";
 
 function setup() {
-  const timers = fakeTimers();
+  const timers = fakeClock();
   const delivered: [string, SentLine[]][] = [];
   const timedOut: [string, SentLine[]][] = [];
   const pings: string[] = [];
@@ -38,7 +12,7 @@ function setup() {
       delivered: (s, lines) => delivered.push([s, lines]),
       timedOut: (s, lines) => timedOut.push([s, lines]),
     },
-    timers.api,
+    timers,
   );
   const send = (serverId: string, messageId: string, bufferName = "#honk") =>
     tracker.track(serverId, { bufferName, messageId }, (token) => pings.push(token));
@@ -60,7 +34,7 @@ describe("DeliveryTracker", () => {
     send("libera", "1");
     tracker.pong("libera", "honk-1");
     expect(delivered).toEqual([["libera", [line("1")]]]);
-    expect(timers.active()).toBe(0);
+    expect(timers.pending()).toBe(0);
   });
 
   test("a PONG also confirms every line sent before it", () => {
@@ -140,7 +114,7 @@ describe("DeliveryTracker", () => {
     expect(tracker.drop("libera")).toEqual([]);
     timers.advance(DELIVERY_TIMEOUT_MS);
     expect(timedOut).toEqual([]);
-    expect(timers.active()).toBe(0);
+    expect(timers.pending()).toBe(0);
   });
 
   test("reject takes the oldest waiting line to that buffer, and its PONG no longer confirms it", () => {

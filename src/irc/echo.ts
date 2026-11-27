@@ -19,6 +19,7 @@
  */
 
 import { stripIrcFormatting } from "../notify.ts";
+import { systemClock, type Clock } from "./clock.ts";
 import { nameKey } from "./names.ts";
 
 /** Parts kept per server, so lines that never match can't pile up. */
@@ -53,12 +54,12 @@ export class EchoTracker {
   /** Per server, the parts still waiting for their echo, oldest first. */
   private waiting = new Map<string, Waiting[]>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly clock: Clock = systemClock) {}
 
   /** Call after sending a line, with each PRIVMSG it was sent as. */
   add(serverId: string, buffer: string, messageId: string, parts: SentPart[]): void {
     const list = this.current(serverId);
-    const sentAt = this.now();
+    const sentAt = this.clock.now();
     parts.forEach(({ kind, text }, i) =>
       list.push({
         buffer: nameKey(buffer),
@@ -99,7 +100,7 @@ export class EchoTracker {
 
   /** The parts still waiting, without the ones that waited too long. */
   private current(serverId: string): Waiting[] {
-    const oldest = this.now() - ECHO_WAIT_MS;
+    const oldest = this.clock.now() - ECHO_WAIT_MS;
     return (this.waiting.get(serverId) ?? []).filter((w) => w.sentAt >= oldest);
   }
 

@@ -3,46 +3,18 @@ import {
   MARK_READ_DELAY_MS,
   PRESENT_AFTER_KEY_MS,
   ReadMarkerTracker,
-  type Clock,
 } from "./readMarker.ts";
+import { fakeClock } from "./fakeClock.ts";
 import type { ActiveBuffer } from "../types.ts";
 
 const DELAY = MARK_READ_DELAY_MS;
-
-/** A clock whose timers only fire when the test advances it. */
-function fakeClock() {
-  let now = 1_000_000;
-  let nextId = 1;
-  const timers = new Map<number, { at: number; fn: () => void }>();
-  const clock: Clock = {
-    now: () => now,
-    setTimeout: (fn, ms) => {
-      const id = nextId++;
-      timers.set(id, { at: now + ms, fn });
-      return id;
-    },
-    clearTimeout: (id) => {
-      timers.delete(id as number);
-    },
-  };
-  const advance = (ms: number) => {
-    now += ms;
-    for (const [id, t] of [...timers]) {
-      if (t.at <= now) {
-        timers.delete(id);
-        t.fn();
-      }
-    }
-  };
-  return { clock, advance, active: () => timers.size };
-}
 
 /**
  * A tracker with one server, "libera". `newest` is the newest line's time per buffer,
  * which a test moves forward to stand for a new line. `sent` collects each MARKREAD.
  */
 function setup() {
-  const { clock, advance, active } = fakeClock();
+  const clock = fakeClock(1_000_000);
   let onScreen: ActiveBuffer | null = null;
   const newest = new Map<string, number>([
     ["#honk", 100],
@@ -68,7 +40,7 @@ function setup() {
     newest.set(buffer, time);
     markers.onNewLine();
   };
-  return { markers, advance, active, show, line, sent, newest };
+  return { markers, advance: clock.advance, pending: clock.pending, show, line, sent, newest };
 }
 
 describe("ReadMarkerTracker", () => {
@@ -201,11 +173,11 @@ describe("ReadMarkerTracker", () => {
   });
 
   test("stop cancels the timer", () => {
-    const { markers, active, advance, show, sent } = setup();
+    const { markers, pending, advance, show, sent } = setup();
     markers.setFocused(true);
     show("#honk");
     markers.stop();
-    expect(active()).toBe(0);
+    expect(pending()).toBe(0);
     advance(DELAY);
     expect(sent).toEqual([]);
   });

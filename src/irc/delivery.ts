@@ -14,6 +14,7 @@
  * server, with or without IRCv3 echo-message.
  */
 
+import { systemClock, type Clock } from "./clock.ts";
 import { sameNick } from "./names.ts";
 
 /** How long to wait for the PONG. Long enough for a slow link, short enough to notice a dead one. */
@@ -35,16 +36,6 @@ export interface DeliveryCallbacks {
   timedOut(serverId: string, lines: SentLine[]): void;
 }
 
-export interface Timers {
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
-
-export const systemTimers: Timers = {
-  setTimeout: (fn, ms) => setTimeout(fn, ms),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
-
 const TOKEN_PREFIX = "honk-";
 
 interface Probe {
@@ -65,7 +56,7 @@ export class DeliveryTracker {
 
   constructor(
     private readonly callbacks: DeliveryCallbacks,
-    private readonly timers: Timers = systemTimers,
+    private readonly clock: Clock = systemClock,
   ) {}
 
   /**
@@ -90,7 +81,7 @@ export class DeliveryTracker {
     sendPing: (token: string) => void,
   ): void {
     const seq = this.nextSeq++;
-    const timer = this.timers.setTimeout(() => this.timeout(serverId), DELIVERY_TIMEOUT_MS);
+    const timer = this.clock.setTimeout(() => this.timeout(serverId), DELIVERY_TIMEOUT_MS);
     const probes = this.pending.get(serverId) ?? [];
     probes.push({ seq, line, timer });
     this.pending.set(serverId, probes);
@@ -106,7 +97,7 @@ export class DeliveryTracker {
     // The server answers in order, so this PONG also confirms every earlier probe.
     const done = probes.filter((p) => p.seq <= seq);
     if (done.length === 0) return;
-    for (const p of done) this.timers.clearTimeout(p.timer);
+    for (const p of done) this.clock.clearTimeout(p.timer);
     this.setPending(serverId, probes.filter((p) => p.seq > seq));
     const lines = linesOf(done);
     if (lines.length > 0) this.callbacks.delivered(serverId, lines);
@@ -137,7 +128,7 @@ export class DeliveryTracker {
 
   private takeAll(serverId: string): Probe[] {
     const probes = this.pending.get(serverId) ?? [];
-    for (const p of probes) this.timers.clearTimeout(p.timer);
+    for (const p of probes) this.clock.clearTimeout(p.timer);
     this.pending.delete(serverId);
     return probes;
   }

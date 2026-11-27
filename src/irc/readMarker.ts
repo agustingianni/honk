@@ -19,7 +19,7 @@
  */
 
 import type { ActiveBuffer, ChatMessage } from "../types.ts";
-import { systemTimers, type Timers } from "./delivery.ts";
+import { systemClock, type Clock } from "./clock.ts";
 import { parseTimestampParam } from "./ircLine.ts";
 import { nameKey } from "./names.ts";
 
@@ -123,13 +123,6 @@ export function unreadAfter(
 export const MARK_READ_DELAY_MS = 1_000;
 /** In a terminal that doesn't report focus, how long after a key press you count as reading. */
 export const PRESENT_AFTER_KEY_MS = 2 * 60_000;
-
-/** Timers and the time now, so a test can run the tracker on a fake clock. */
-export interface Clock extends Timers {
-  now(): number;
-}
-
-const systemClock: Clock = { ...systemTimers, now: () => Date.now() };
 
 export interface ReadMarkerCallbacks {
   /** The buffer on screen, asked when the timer fires. */
