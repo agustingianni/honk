@@ -257,7 +257,9 @@ function fitRow(item: OmniboxItem, width: number): { label: string; detail?: str
   const labelMax = Math.max(room - detailWanted, Math.min(cellWidth(item.label), Math.ceil(room / 2)));
   const label = truncate(item.label, labelMax);
   const detailRoom = room - cellWidth(label) - 2;
-  const detail = item.detail && detailRoom >= 4 ? truncate(item.detail, detailRoom) : undefined;
+  // At least 3 cells of the detail, plus the ellipsis.
+  const detailFits = detailRoom >= 3 + cellWidth(glyphs.ellipsis);
+  const detail = item.detail && detailFits ? truncate(item.detail, detailRoom) : undefined;
   return { label, detail };
 }
 

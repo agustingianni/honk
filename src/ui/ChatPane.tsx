@@ -446,7 +446,8 @@ export function ChatPane({
   const separator = ` ${glyphs.topicSeparator} `;
   const topicRoom =
     paneWidth - 4 - cellWidth(title) - cellWidth(separator) - (usersText ? cellWidth(usersText) + 2 : 0);
-  const topic = topicRoom >= 4 ? (buffer?.topic ?? "") : "";
+  // At least 3 cells of the topic, plus the ellipsis.
+  const topic = topicRoom >= 3 + cellWidth(glyphs.ellipsis) ? (buffer?.topic ?? "") : "";
   const promptLabel = server
     ? `${server.name}/${title}`
     : title;
