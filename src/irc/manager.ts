@@ -275,14 +275,12 @@ function requestHistory(
   limit: number,
   label?: string,
 ): void {
-  void client.send(
-    label === undefined ? {} : { label },
-    "CHATHISTORY" as never,
-    subcommand as never,
-    target as never,
-    anchor as never,
-    String(limit) as never,
-  );
+  const command = "CHATHISTORY" as never;
+  const params = [subcommand, target, anchor, String(limit)] as never[];
+  // send writes a tag section for any object, also an empty one ("@ CHATHISTORY ..."),
+  // which the message-tags grammar does not allow. Pass tags only when there is a label.
+  if (label === undefined) void client.send(command, ...params);
+  else void client.send({ label }, command, ...params);
 }
 
 /** A /history request waiting for its reply. */
