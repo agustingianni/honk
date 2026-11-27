@@ -98,3 +98,20 @@ The tests start fakeircd on a free port. A manual `bun run fakeircd` takes
 release-please owns the `version` in package.json, the git tags, and
 CHANGELOG.md. It keeps a release PR open; the user merges it to release.
 Changes go in commit messages, which release-please turns into the changelog.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for agustingianni/honk, used through the `gh`
+CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default labels: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See
+`docs/agents/domain.md`.
