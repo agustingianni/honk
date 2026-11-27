@@ -296,6 +296,7 @@ export function whoisLines(p: WhoisInfo): string[] {
 /** What a FAIL for each command means, in front of the server's reason. */
 const STANDARD_REPLY_PREFIX: Record<string, string> = {
   CHATHISTORY: "Could not load history",
+  MARKREAD: "Could not save your read position",
   NICK: "Could not change nick",
   JOIN: "Could not join",
   REGISTER: "Could not register the account",

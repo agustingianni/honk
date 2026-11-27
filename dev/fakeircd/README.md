@@ -77,6 +77,7 @@ curl $C/clients
 | `away` | `nick`, `text` (leave it out to come back) | Messages to `nick` get 301, and WHOIS shows it |
 | `sasl` | `reject` | `{"reject":true}` makes SASL logins fail with 904 |
 | `failhistory` | `fail` | `{"fail":true}` makes CHATHISTORY answer with FAIL and no batch |
+| `failmarkread` | `fail` | `{"fail":true}` makes MARKREAD answer with `FAIL MARKREAD INTERNAL_ERROR` |
 | `delay` | `ms` | New connections wait this long before any answer |
 
 GET routes: `clients`, `channels`, and `received` (the last 200 lines clients sent).

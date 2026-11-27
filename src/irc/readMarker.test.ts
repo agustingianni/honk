@@ -4,6 +4,7 @@ import { until } from "../../dev/fakeircd/testing.ts";
 import type { ChatMessage } from "../types.ts";
 import { timestampParam } from "./ircLine.ts";
 import { IrcManager } from "./manager.ts";
+import { STATUS_BUFFER } from "./names.ts";
 import {
   newestServerTime,
   parseMarkRead,
@@ -288,3 +289,36 @@ test("a marker the server never got is sent again after a reconnect", async () =
   await irc.waitFor(isMarkRead("#honk"), 10_000);
   await until(() => irc.readMarker("#honk") !== undefined);
 }, 15_000);
+
+describe("a server that refuses MARKREAD", () => {
+  const errors = (name: string) =>
+    (buffer(name)?.messages ?? []).filter((x) => x.kind === "error").map((x) => x.text);
+
+  /** A new line in #honk, and the MARKREAD it leads to. */
+  async function readOneMore(text: string): Promise<void> {
+    irc.say("alice", "#honk", text);
+    await irc.waitFor(isMarkRead("#honk"), 2000);
+  }
+
+  test("shows one error in *status per connection, none in the chat", async () => {
+    irc.failMarkRead = true;
+    await connect();
+    m.setFocused(true);
+    m.setActive("alpha", "#honk");
+    for (const text of ["one", "two", "three"]) await readOneMore(text);
+    await until(() => errors(STATUS_BUFFER).length > 0);
+    await Bun.sleep(50);
+    expect(errors("#honk")).toEqual([]);
+    expect(errors(STATUS_BUFFER)).toEqual(["Could not save your read position: Internal error."]);
+
+    irc.drop();
+    await until(() => server().status !== "connected");
+    await until(() => server().status === "connected", 10_000);
+    await readOneMore("after the reconnect");
+    await until(() => errors(STATUS_BUFFER).length === 2);
+    await readOneMore("and one more");
+    await Bun.sleep(50);
+    expect(errors("#honk")).toEqual([]);
+    expect(errors(STATUS_BUFFER)).toHaveLength(2);
+  }, 15_000);
+});

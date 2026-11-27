@@ -182,6 +182,8 @@ export class FakeIrcd {
   labeledResponse = true;
   /** MARKREAD from clients is dropped without a reply while this is true, like a lost line. */
   ignoreMarkRead = false;
+  /** MARKREAD from clients gets "FAIL MARKREAD INTERNAL_ERROR" while this is true, like a soju database error. */
+  failMarkRead = false;
 
   private server: Server | null = null;
   /**
@@ -914,6 +916,9 @@ export class FakeIrcd {
     if (this.ignoreMarkRead) return;
     const [target, value] = params;
     if (!target) return this.send(c, `:${SERVER_NAME} FAIL MARKREAD NEED_MORE_PARAMS :Missing target`);
+    if (this.failMarkRead) {
+      return this.send(c, `:${SERVER_NAME} FAIL MARKREAD INTERNAL_ERROR ${target} :Internal error`);
+    }
     if (value === undefined) return this.sendMarkRead(c, target);
     const ms = parseTimestampParam(value);
     if (ms === undefined) {
