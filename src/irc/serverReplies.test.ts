@@ -410,7 +410,7 @@ test("an event listener that throws is shown once in *status, and the connection
   await until(() => texts("#honk").includes("still connected"));
   const reports = texts(STATUS_BUFFER).filter((t) => t.startsWith("A bug in honk:"));
   expect(reports).toHaveLength(1);
-  expect(reports[0]).toStartWith("A bug in honk: it could not handle the privmsg event (cannot show it, at ");
+  expect(reports[0]).toStartWith("A bug in honk: it could not handle the privmsg:channel event (cannot show it, at ");
 });
 
 test("a library listener that throws is shown in *status, and the connection goes on", async () => {

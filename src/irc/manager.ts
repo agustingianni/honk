@@ -74,7 +74,10 @@ const MAX_MESSAGES = 500;
 const MAX_MESSAGES_WITH_HISTORY = 5000;
 /** A paste with more lines than this is refused, so a wrong paste can't flood a channel. */
 const MAX_PASTE_LINES = 10;
-/** Reports of a bug in honk's line handling, per connection. See createNodeRuntime. */
+/**
+ * Reports of a bug in honk per connection: in its line handling (see createNodeRuntime)
+ * or in an event listener (see bindClientEvents).
+ */
 const MAX_BUG_REPORTS = 5;
 
 /** In the demo: how long someone takes to answer you, and the gap between ambient lines. */
@@ -399,18 +402,6 @@ function routeTarget(rawTarget: string, from: string, isSelf: boolean): string {
 }
 
 /**
- * Runs `hook` before each event reaches any listener. The library's own plugins (nicklist)
- * listen before the app does and change state first, so state "before the event" must be
- * read here.
- */
-function beforeEmit(
-  client: Client,
-  hook: (event: string, payload: unknown) => void,
-): void {
-  beforeCall(client, "emit", hook as (...args: unknown[]) => void);
-}
-
-/**
  * Calls `hook` with the arguments of every `client.send`, before the line goes out. The
  * first argument is the tags object when the call has tags.
  */
@@ -418,38 +409,30 @@ function beforeSend(client: Client, hook: (...args: unknown[]) => void): void {
   beforeCall(client, "send", hook);
 }
 
+/** Runs `hook` before each call of a client method. */
+function beforeCall(client: Client, key: "emit" | "send", hook: (...args: unknown[]) => void): void {
+  hookCall(client, key, (fn, ...args) => {
+    hook(...args);
+    return fn(...args);
+  });
+}
+
+type Method = (...args: unknown[]) => unknown;
+
 /**
  * Replaces a client method with `hook`, which gets the method and the arguments, through
  * irc-client-ts's own hooks.
  */
 function hookCall(
   client: Client,
-  key: "emit",
-  hook: (fn: (...args: unknown[]) => unknown, ...args: unknown[]) => unknown,
+  key: "emit" | "send",
+  hook: (fn: Method, ...args: unknown[]) => unknown,
 ): void {
   (
     client as unknown as {
-      hooks: { hookCall(key: string, hook: (fn: (...args: unknown[]) => unknown, ...args: unknown[]) => unknown): void };
+      hooks: { hookCall(key: string, hook: (fn: Method, ...args: unknown[]) => unknown): void };
     }
   ).hooks.hookCall(key, hook);
-}
-
-/**
- * The event name for a bug report. The "raw" listener hears every raw:<command> event,
- * so say which command it was.
- */
-function eventName(event: string, payload: unknown): string {
-  const command = (payload as { command?: unknown } | null)?.command;
-  return event === "raw" && typeof command === "string" ? `raw (${command})` : event;
-}
-
-/** Runs `hook` before each call of a client method, through irc-client-ts's own hooks. */
-function beforeCall(client: Client, key: "emit" | "send", hook: (...args: unknown[]) => void): void {
-  (
-    client as unknown as {
-      hooks: { beforeCall(key: string, hook: (...args: unknown[]) => void): void };
-    }
-  ).hooks.beforeCall(key, hook);
 }
 
 /** A PRIVMSG text as a line: "\x01ACTION waves\x01" is the action "waves". */
@@ -895,9 +878,13 @@ export class IrcManager {
     const reportBug = ({ key, text }: { key: string; text: string }) => {
       if (this.clients.get(serverId) !== client) return;
       if (reported.has(key) || reported.size >= MAX_BUG_REPORTS) return;
-      this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
-      // Only now: if showing the report threw, the next one may still get through.
-      reported.add(key);
+      try {
+        this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
+        // Only now: if showing the report threw, the next one may still get through.
+        reported.add(key);
+      } catch {
+        // Showing the report failed too. Drop it: the connection must go on.
+      }
     };
     (client as unknown as { runtime: ReturnType<typeof createNodeRuntime> }).runtime =
       createNodeRuntime(
@@ -1033,36 +1020,11 @@ export class IrcManager {
     }
   }
 
-  /**
-   * Listens to the events of `client`. irc-client-ts calls the listeners from its read
-   * loop, without await and without a catch: a listener that throws would end the loop,
-   * and nothing more would come from this server. So each listener is guarded, and what
-   * it throws goes to `reportBug`.
-   */
   private bindClientEvents(
     serverId: string,
     client: Client,
     reportBug: (report: { key: string; text: string }) => void,
   ): void {
-    const report = (event: string, payload: unknown, err: unknown) => {
-      try {
-        reportBug(describeEventError(eventName(event, payload), err));
-      } catch {
-        // Reporting the error failed too. Drop it: the connection must go on.
-      }
-    };
-    const guard =
-      <T>(event: string, listener: (payload: T) => void) =>
-      (payload: T) => {
-        try {
-          listener(payload);
-        } catch (err) {
-          report(event, payload, err);
-        }
-      };
-    // client.on, with the listener guarded, so the other listeners of the event still run.
-    const on = ((event: string, listener: (payload: unknown) => void) =>
-      client.on(event as never, guard(event, listener))) as Client["on"];
     const isStale = () => this.clients.get(serverId) !== client;
     /** The server state, or undefined if this client was replaced. */
     const live = () => (isStale() ? undefined : this.servers.get(serverId));
@@ -1075,6 +1037,9 @@ export class IrcManager {
     type Tags = Record<string, string | undefined>;
     const chatTags = new WeakMap<object, Tags>();
     let rawChatTags: Tags | undefined;
+    // Runs before each event reaches any listener. The library's own plugins (nicklist)
+    // listen before the app does and change state first, so state "before the event"
+    // must be read here.
     const notePayload = (event: string, payload: unknown) => {
       const server = live();
       if (!server || typeof payload !== "object" || payload === null) return;
@@ -1091,24 +1056,25 @@ export class IrcManager {
         priorChannels.set(payload, channelsWithNick(server, normalizeNick(source?.name)));
       }
     };
-    beforeEmit(client, (event, payload) => {
-      try {
-        notePayload(event, payload);
-      } catch (err) {
-        report(event, payload, err);
-      }
-    });
-    // Also catches what a listener of irc-client-ts's own plugins (nicklist, cap, ...)
-    // throws. One event fails, and the read loop goes on.
+
+    // irc-client-ts emits from its read loop, without await and without a catch: a
+    // listener that throws, honk's or one of the library's plugins, would end the loop,
+    // and nothing more would come from this server. So each emit is guarded. A nested
+    // emit, such as privmsg inside raw:privmsg, is caught at the inner one.
     hookCall(client, "emit", (emit, event, payload) => {
+      try {
+        notePayload(event as string, payload);
+      } catch (err) {
+        reportBug(describeEventError(event as string, err));
+      }
       try {
         return emit(event, payload);
       } catch (err) {
-        report(String(event), payload, err);
+        reportBug(describeEventError(event as string, err));
       }
     });
 
-    on("error", (err) => {
+    client.on("error", (err) => {
       if (isStale()) return;
       const server = this.servers.get(serverId);
       const ctrl = this.getControl(serverId);
@@ -1141,18 +1107,18 @@ export class IrcManager {
     });
 
     // Anything from the server shows the connection worked until now. See missed.ts.
-    on("raw", () => {
+    client.on("raw", () => {
       if (isStale()) return;
       this.getControl(serverId).lastHeardAt = Date.now();
     });
 
     // The PONG for a PING sent after your line: the line reached the server.
-    on("pong", (msg) => {
+    client.on("pong", (msg) => {
       if (isStale()) return;
       this.delivery.pong(serverId, msg.params.key ?? msg.params.daemon);
     });
 
-    on("connected", () => {
+    client.on("connected", () => {
       if (isStale()) return;
       this.pushMessage(
         serverId,
@@ -1161,7 +1127,7 @@ export class IrcManager {
       );
     });
 
-    on("register", (msg) => {
+    client.on("register", (msg) => {
       const server = live();
       if (!server) return;
       const ctrl = this.getControl(serverId);
@@ -1217,7 +1183,7 @@ export class IrcManager {
 
     // The nicks that wrote to you while the connection was down. Load each DM from that
     // time; the missed-line checks in pushMessage then badge and notify it. See missed.ts.
-    on("batch_end", (batch) => {
+    client.on("batch_end", (batch) => {
       if (!TARGETS_BATCH_TYPES.has(batch.params.type)) return;
       const server = live();
       const ctrl = this.controls.get(serverId);
@@ -1237,7 +1203,7 @@ export class IrcManager {
       }
     });
 
-    on("isupport:network", (msg) => {
+    client.on("isupport:network", (msg) => {
       const server = live();
       const net = msg.params.value?.trim();
       if (!server || !net) return;
@@ -1246,7 +1212,7 @@ export class IrcManager {
       this.emit();
     });
 
-    on("disconnected", () => {
+    client.on("disconnected", () => {
       const server = live();
       if (!server) return;
       const ctrl = this.getControl(serverId);
@@ -1278,7 +1244,7 @@ export class IrcManager {
       this.scheduleReconnect(serverId);
     });
 
-    on("motd_reply", (msg) => {
+    client.on("motd_reply", (msg) => {
       if (isStale()) return;
       for (const line of msg.params.motd ?? []) {
         if (line.trim()) {
@@ -1287,13 +1253,13 @@ export class IrcManager {
       }
     });
 
-    on("error_reply", (msg) => {
+    client.on("error_reply", (msg) => {
       if (isStale()) return;
       // The first param is your own nick.
       this.onNumeric(serverId, msg.command, msg.params.args.slice(1), msg.params.text ?? "");
     });
 
-    on("join", (msg) => {
+    client.on("join", (msg) => {
       const server = live();
       if (!server) return;
       const channel = msg.params.channel;
@@ -1327,7 +1293,7 @@ export class IrcManager {
       }
     });
 
-    on("part", (msg) => {
+    client.on("part", (msg) => {
       const server = live();
       if (!server) return;
       const channel = msg.params.channel;
@@ -1344,7 +1310,7 @@ export class IrcManager {
       }
     });
 
-    on("quit", (msg) => {
+    client.on("quit", (msg) => {
       const server = live();
       if (!server) return;
       const who = normalizeNick(msg.source?.name);
@@ -1354,7 +1320,7 @@ export class IrcManager {
       }
     });
 
-    on("kick", (msg) => {
+    client.on("kick", (msg) => {
       const server = live();
       if (!server) return;
       const { channel, nick, comment } = msg.params;
@@ -1377,7 +1343,7 @@ export class IrcManager {
       );
     });
 
-    on("nick", (msg) => {
+    client.on("nick", (msg) => {
       const server = live();
       if (!server) return;
       const oldNick = normalizeNick(msg.source?.name);
@@ -1407,7 +1373,7 @@ export class IrcManager {
       }
     });
 
-    on("topic_reply", (msg) => {
+    client.on("topic_reply", (msg) => {
       if (isStale()) return;
       const buf = this.ensureBuffer(serverId, msg.params.channel, "channel");
       if (!buf) return;
@@ -1425,7 +1391,7 @@ export class IrcManager {
       }
     });
 
-    on("topic", (msg) => {
+    client.on("topic", (msg) => {
       if (isStale()) return;
       const buf = this.ensureBuffer(serverId, msg.params.channel, "channel");
       if (!buf) return;
@@ -1441,7 +1407,7 @@ export class IrcManager {
       );
     });
 
-    on("nicklist", (msg) => {
+    client.on("nicklist", (msg) => {
       if (isStale()) return;
       const buf = this.ensureBuffer(serverId, msg.params.channel, "channel");
       if (!buf) return;
@@ -1450,7 +1416,7 @@ export class IrcManager {
       this.emit();
     });
 
-    on("batch_end", (batch) => {
+    client.on("batch_end", (batch) => {
       if (batch.params.type !== "chathistory") return;
       const server = live();
       if (!server) return;
@@ -1562,13 +1528,13 @@ export class IrcManager {
       );
     };
 
-    on("privmsg", (msg) => onChat("message", msg));
-    on("ctcp_action", (msg) => onChat("action", msg));
+    client.on("privmsg", (msg) => onChat("message", msg));
+    client.on("ctcp_action", (msg) => onChat("action", msg));
 
     // With echo-message, the library reports our own lines (typed here, or sent from
     // another client on the same bouncer account) as echo:* instead of privmsg/notice.
     // onChat merges the echo of a line this client already showed. See echo.ts.
-    on("echo:privmsg", (msg) => onChat("message", msg));
+    client.on("echo:privmsg", (msg) => onChat("message", msg));
 
     const onNotice = (msg: {
       source?: { name?: string };
@@ -1592,10 +1558,10 @@ export class IrcManager {
         }),
       );
     };
-    on("notice", onNotice);
-    on("echo:notice", onNotice);
+    client.on("notice", onNotice);
+    client.on("echo:notice", onNotice);
 
-    on("whois_reply", (msg) => {
+    client.on("whois_reply", (msg) => {
       if (isStale()) return;
       const target = this.replyTarget(serverId);
       for (const line of whoisLines(msg.params)) {
@@ -1605,12 +1571,12 @@ export class IrcManager {
 
     // A WHOIS reply runs from 311 to 318. Its "is away" (301) goes in the WHOIS lines,
     // not on its own. Tracked by the reply itself, so a /raw WHOIS works the same.
-    on("raw:rpl_whoisuser", (msg) => {
+    client.on("raw:rpl_whoisuser", (msg) => {
       if (isStale()) return;
       const nick = msg.params[1];
       if (nick) this.getControl(serverId).pendingWhois.add(nameKey(nick));
     });
-    on("raw:rpl_endofwhois", (msg) => {
+    client.on("raw:rpl_endofwhois", (msg) => {
       if (isStale()) return;
       const nick = msg.params[1];
       if (nick) this.getControl(serverId).pendingWhois.delete(nameKey(nick));
@@ -1618,7 +1584,7 @@ export class IrcManager {
 
     // "alice is away": the server answers a message to someone who is away. It says so
     // on every message, so a DM shows it only when the away text changes.
-    on("raw:rpl_away", (msg) => {
+    client.on("raw:rpl_away", (msg) => {
       if (isStale()) return;
       const [, nick, away] = msg.params;
       if (!nick) return;
@@ -1639,7 +1605,7 @@ export class IrcManager {
     });
 
     // 900: the SASL login worked. Worth saying, since a wrong password stops honk.
-    on("raw:rpl_loggedin", (msg) => {
+    client.on("raw:rpl_loggedin", (msg) => {
       if (isStale()) return;
       const account = msg.params[2];
       if (!account) return;
@@ -1650,7 +1616,7 @@ export class IrcManager {
       );
     });
 
-    on("invite", (msg) => {
+    client.on("invite", (msg) => {
       if (isStale()) return;
       const by = normalizeNick(msg.source?.name) || "Someone";
       const channel = msg.params.channel;
@@ -1669,7 +1635,7 @@ export class IrcManager {
     // target's buffer. When that buffer is closed, the error goes to the reply target like
     // other errors.
     //   FAIL <command> <code> [<context>...] :<description>
-    on("raw:fail", (msg) => {
+    client.on("raw:fail", (msg) => {
       if (isStale()) return;
       const command = msg.params[0] ?? "";
       const description = msg.params.length > 2 ? (msg.params.at(-1) ?? "") : "";
@@ -1697,7 +1663,7 @@ export class IrcManager {
 
     // IRCv3 WARN and NOTE, information.
     for (const kind of ["warn", "note"] as const) {
-      on(kind, (msg) => {
+      client.on(kind, (msg) => {
         if (isStale()) return;
         this.pushMessage(
           serverId,
