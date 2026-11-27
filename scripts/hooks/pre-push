@@ -1,0 +1,32 @@
+#!/bin/sh
+# Runs before every `git push`, once you point git at this folder:
+#
+#   git config core.hooksPath scripts/hooks
+#
+# It runs the same checks as CI, so a broken push stops here instead of on
+# GitHub. Skip it once with `git push --no-verify`.
+#
+# Every push: typecheck and tests. They check the files on disk, which are the
+# pushed commits only when nothing is left uncommitted.
+#
+# A push to main: also the commit subjects, because release-please reads every
+# commit on main. A push to another branch skips them: that branch is squash
+# merged, and the PR title becomes the commit (CI checks the title).
+set -eu
+
+zero=0000000000000000000000000000000000000000
+
+bun run typecheck
+bun test
+
+# git writes one line per pushed ref: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] || continue
+  [ "$local_sha" != "$zero" ] || continue # deleting main: nothing to check
+  if [ "$remote_sha" = "$zero" ]; then
+    from=origin/main
+  else
+    from=$remote_sha
+  fi
+  bun scripts/check-commits.ts "$from..$local_sha"
+done

@@ -41,4 +41,4 @@ jobs:
           persist-credentials: false
       # shellcheck is installed on GitHub's Ubuntu runners. The test scripts
       # only run in the release workflow, so check them here too.
-      - run: shellcheck -s sh site/install.sh scripts/test-linux.sh scripts/test-in-container.sh
+      - run: shellcheck -s sh site/install.sh scripts/test-linux.sh scripts/test-in-container.sh scripts/hooks/pre-push

@@ -55,8 +55,39 @@ not wrap right before "server:".
 A pull request title follows the same rules: pull requests are squash merged,
 and the title becomes the commit message.
 
-CI checks the subjects. Check them before a push with
-`bun scripts/check-commits.ts origin/main..HEAD`.
+CI checks the subjects, and so does the pre-push hook (see below).
+
+## How to work
+
+Each change that gets a changelog line (`feat`, `fix`, `perf`) goes on its
+own short-lived branch and lands through a pull request. The squash merge
+turns the branch into one commit, so commits on the branch can say anything,
+such as `wip`. Only the pull request title has to follow the rules above. The
+user merges the pull request.
+
+```
+git switch -c join-key
+# work and commit
+git push -u origin join-key
+gh pr create --title "fix: /join now accepts a channel key" --fill
+```
+
+`docs`, `chore`, and `ci` changes may go straight to main.
+
+Run `git config core.hooksPath scripts/hooks` once in each clone. Then
+`scripts/hooks/pre-push` runs the typecheck and the tests before every push,
+and checks the commit subjects of a push to main.
+
+When several agents work at the same time, each one works in its own git
+worktree, so no agent sees another agent's half-done edits:
+
+```
+git worktree add ../honk-join-key -b join-key
+cd ../honk-join-key && bun install
+```
+
+The tests start fakeircd on a free port. A manual `bun run fakeircd` takes
+`--port N` and also uses port N+1, so give each worktree its own port.
 
 ## Releases
 
