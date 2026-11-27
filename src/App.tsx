@@ -169,6 +169,8 @@ export function App({
   const toggleNicklist = useCallback(() => setNicklistOpen((v) => !v), []);
 
   useKeyboard((key) => {
+    // A Ctrl+C that copied the selected text, or an Esc that cleared it. See useSelectionCopy.
+    if (key.defaultPrevented) return;
     if (key.ctrl && key.name === "c") {
       quit();
       return;

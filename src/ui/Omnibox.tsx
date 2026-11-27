@@ -718,6 +718,8 @@ export function Omnibox({
   };
 
   useKeyboard((key) => {
+    // An Esc that only cleared selected text. See useSelectionCopy.
+    if (key.defaultPrevented) return;
     if (key.name === "escape") {
       onClose();
       return;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { theme } from "../theme.ts";
 import type { ServerState, UpdateNotice } from "../types.ts";
-import { cellWidth, statusIndicator } from "./display.ts";
+import { cellWidth, statusIndicator, truncate } from "./display.ts";
 import { statusHints } from "./statusHints.ts";
 
 interface StatusBarProps {
@@ -51,6 +51,8 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update, no
   const leftWidth = 2 + cellWidth(name + viaText + tlsText + stateText);
   const room = width - 4 - leftWidth - 2;
   const hints = statusHints({ sidebarFits, nicklistFits, update }, room);
+  // Cut to the same room as the hints, so it never squeezes the server name.
+  const shownNotice = notice ? truncate(notice, Math.max(1, room)) : "";
 
   return (
     <box
@@ -91,9 +93,9 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update, no
         )}
       </text>
 
-      {notice ? (
+      {shownNotice ? (
         <text fg={theme.accent} flexShrink={0} wrapMode="none">
-          {notice}
+          {shownNotice}
         </text>
       ) : (
         <text fg={theme.fgMuted} flexShrink={0} wrapMode="none">

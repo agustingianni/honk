@@ -16,6 +16,8 @@ const MESSAGES: ChatMessage[] = [
   // Grouped under kai's first line: drawn with no time and no nick.
   { id: "b", timestamp: at(3), kind: "message", from: "kai", text: "café Привет 🎉 done" },
   { id: "c", timestamp: at(4), kind: "action", from: "fern", text: "waves" },
+  // U+202E would make "gpj.exe" show as "exe.jpg" where the text is pasted.
+  { id: "d", timestamp: at(5), kind: "message", from: "eve", text: "photo\u202Egpj.exe" },
 ];
 
 interface Harness {
@@ -38,13 +40,14 @@ afterEach(() => {
  * The chat pane inside a screen-wide box that copies on release, as in App.
  * Narrow, so kai's first line wraps.
  */
-async function setup(): Promise<Harness> {
+async function setup(options: { topic?: string; inputFocused?: boolean } = {}): Promise<Harness & { sent: string[] }> {
   const copies: string[] = [];
   const keys: string[] = [];
+  const sent: string[] = [];
   const buffer: BufferState = {
     name: "#honk",
     kind: "channel",
-    topic: "",
+    topic: options.topic ?? "",
     messages: MESSAGES,
     users: [],
     unread: 0,
@@ -67,15 +70,18 @@ async function setup(): Promise<Harness> {
   const onCopied = () => {};
   function Screen() {
     const onMouseUp = useSelectionCopy(copyText, onCopied);
-    useKeyboard((key) => keys.push(key.ctrl ? `ctrl+${key.name}` : key.name));
+    // As in App: a key that the copy handled is skipped.
+    useKeyboard((key) => {
+      if (!key.defaultPrevented) keys.push(key.ctrl ? `ctrl+${key.name}` : key.name);
+    });
     return (
       <box width="100%" height="100%" onMouseUp={onMouseUp}>
         <ChatPane
           server={server}
           buffer={buffer}
-          inputFocused={false}
+          inputFocused={options.inputFocused ?? false}
           paneWidth={50}
-          onSubmit={() => {}}
+          onSubmit={(line) => sent.push(line)}
           onPasteLines={() => {}}
           onSelectUser={() => {}}
           onJoinChannel={() => {}}
@@ -83,11 +89,12 @@ async function setup(): Promise<Harness> {
       </box>
     );
   }
-  const r = await testRender(<Screen />, { width: 50, height: 16 });
+  // As in src/index.tsx: honk quits on Ctrl+C itself, the renderer does not.
+  const r = await testRender(<Screen />, { width: 50, height: 18, exitOnCtrlC: false });
   destroy = () => act(() => r.renderer.destroy());
   await r.renderOnce();
   const screen = r.captureCharFrame().split("\n");
-  return { copies, keys, screen, mockMouse: r.mockMouse, mockInput: r.mockInput, renderer: r.renderer };
+  return { copies, keys, sent, screen, mockMouse: r.mockMouse, mockInput: r.mockInput, renderer: r.renderer };
 }
 
 /** The cell of `text` on `screen`, plus `dx` cells. */
@@ -148,6 +155,27 @@ describe("copy on release", () => {
     expect(copies).toEqual(["kai"]);
   });
 
+  test("hidden bidi characters from the server are not copied", async () => {
+    const { copies, screen, mockMouse } = await setup();
+    const word = cellOf(screen, "photo", 1);
+    // A double-click copies the word first, then the third click the message.
+    for (let i = 0; i < 3; i++) await act(() => mockMouse.click(word.x, word.y));
+    await settle();
+    expect(copies).toEqual(["photogpj.exe", "14:05 <eve> photogpj.exe"]);
+  });
+
+  test("text selected outside the chat is copied too, in screen order", async () => {
+    const { copies, screen, mockMouse } = await setup({ topic: "the honk channel" });
+    const from = cellOf(screen, "the honk");
+    const to = cellOf(screen, "0.9.8", 4);
+    await act(() => mockMouse.drag(from.x, from.y, to.x, to.y));
+    await settle();
+    expect(copies).toHaveLength(1);
+    const lines = copies[0]!.split("\n");
+    expect(lines[0]).toStartWith("the honk channel");
+    expect(lines.at(-1)).toBe("14:02 <kai> 0.9.8");
+  });
+
   test("a plain click copies nothing", async () => {
     const { copies, screen, mockMouse } = await setup();
     const word = cellOf(screen, "waves", 1);
@@ -193,6 +221,15 @@ describe("keys with a selection", () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(h.renderer.getSelection() === null).toBe(true);
     expect(h.keys).toEqual([]);
+  });
+
+  test("Shift+arrows still select text in the input, and Backspace deletes it", async () => {
+    const h = await setup({ inputFocused: true });
+    await act(async () => h.mockInput.typeText("hello world"));
+    for (let i = 0; i < 6; i++) await act(async () => h.mockInput.pressArrow("left", { shift: true }));
+    await act(async () => h.mockInput.pressBackspace());
+    await act(async () => h.mockInput.pressEnter());
+    expect(h.sent).toEqual(["hello"]);
   });
 
   test("any other key clears the selection and then does its normal job", async () => {

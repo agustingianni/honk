@@ -10,6 +10,7 @@
  * src/notifyProtocol.ts.
  */
 
+import { withoutBidiControls } from "./bidi.ts";
 import type { BufferKind, MessageKind } from "./types.ts";
 
 /** A mention or DM that just arrived, as the IRC manager reports it. */
@@ -44,13 +45,6 @@ export function stripIrcFormatting(text: string): string {
     .replace(/[\x00-\x08\x0a-\x1f\x7f]/g, "");
 }
 
-/**
- * C1 controls and Unicode bidi controls. Every notification loses them before it
- * is sent: the system shows notifications with bidi, so U+202E (RIGHT-TO-LEFT
- * OVERRIDE) in a nick or a message could turn the text after it around.
- */
-const BIDI_AND_C1 = /[\x80-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
-
 /** The title and body for one event. */
 export function formatNotification(event: MentionEvent): { title: string; body: string } {
   const title =
@@ -77,7 +71,8 @@ export class Notifier {
     private readonly now: () => number = Date.now,
   ) {
     this.send = (message, title) =>
-      send(message.replace(BIDI_AND_C1, ""), title.replace(BIDI_AND_C1, ""));
+      // The system shows notifications with bidi. See src/bidi.ts.
+      send(withoutBidiControls(message), withoutBidiControls(title));
   }
 
   setFocused(focused: boolean): void {

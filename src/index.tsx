@@ -174,6 +174,8 @@ if (!g.__ircHot) {
 
 const hot = g.__ircHot;
 hot.version += 1;
+// A hot reload from a version without copying keeps the old state.
+hot.copyText ??= createCopyText(hot.renderer);
 applyTheme(hot.themes.find((t) => t.id === hot.themeId)!.theme);
 hot.root.render(
   <App
