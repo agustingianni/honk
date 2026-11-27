@@ -239,13 +239,13 @@ test("a live line in the channel on screen gets no divider", async () => {
   expect(buffer("#honk")!.unread).toBe(0);
 });
 
-test("a terminal that never reports focus marks read only after a key press", async () => {
+test("a terminal that never reports focus marks read only after some input", async () => {
   await connect();
   m.setActive("alpha", "#honk");
   irc.say("alice", "#honk", "anyone?");
   expect(await sendsMarkRead("#honk", DELAY * 3)).toBe(false);
 
-  m.noteKeyPress();
+  m.noteInput();
   expect(await sendsMarkRead("#honk", 2000)).toBe(true);
 });
 
@@ -473,5 +473,41 @@ describe("a badge clears only when the buffer counts as read", () => {
     m.setActive("alpha", "#honk");
     expect(buffer("#bun")!.unread).toBe(3);
     expect(dividerText("#bun")).toBe("a");
+  });
+});
+
+describe("a mention in the channel on screen", () => {
+  /** Collects whether each mention event says you saw the line. */
+  function mentions(): boolean[] {
+    const seen: boolean[] = [];
+    m.onMention((event) => seen.push(event.seen));
+    return seen;
+  }
+
+  test.each([
+    ["is seen while the window has focus", true],
+    ["is not seen while the window has no focus", false],
+  ])("%s", async (_name, focused) => {
+    const seen = mentions();
+    await connect();
+    m.setFocused(focused);
+    m.setActive("alpha", "#honk");
+    irc.say("alice", "#honk", "goose: you there?");
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([focused]);
+  });
+
+  test("is not seen in a terminal without focus reporting and no recent input", async () => {
+    const seen = mentions();
+    await connect();
+    m.setActive("alpha", "#honk");
+    irc.say("alice", "#honk", "goose: you there?");
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([false]);
+
+    m.noteInput();
+    irc.say("alice", "#honk", "goose: now?");
+    await until(() => seen.length === 2);
+    expect(seen).toEqual([false, true]);
   });
 });

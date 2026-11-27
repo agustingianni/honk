@@ -11,6 +11,7 @@ import { applyTheme } from "./theme.ts";
 import { applyGlyphs, wantsAscii } from "./ui/glyphs.ts";
 import { allThemes, loadUserThemes, selectTheme, type ThemeEntry } from "./themes/index.ts";
 import { defaultStatePath, loadState, saveState } from "./state.ts";
+import { isMouseInput } from "./terminalInput.ts";
 import { startUpdateCheck } from "./updateCheck.ts";
 import { runUpgrade } from "./upgrade.ts";
 import { versionLine } from "./version.ts";
@@ -115,19 +116,22 @@ if (!g.__ircHot) {
   });
   const root = createRoot(renderer);
 
-  // The buffer on screen counts as read only while the window has focus, or, in a
-  // terminal that never reports focus, shortly after a key press. See readMarker.ts.
+  // Whether you are at the terminal: see ReadMarkerTracker.isReading. Mouse reports
+  // come from the raw input (see terminalInput.ts), since a scrollbar keeps its clicks
+  // to itself. These listeners run before honk handles the key or click.
   renderer.on("focus", () => manager.setFocused(true));
   renderer.on("blur", () => manager.setFocused(false));
-  renderer.keyInput.on("keypress", () => manager.noteKeyPress());
+  renderer.keyInput.on("keypress", () => manager.noteInput());
+  renderer.keyInput.on("paste", () => manager.noteInput());
+  renderer.stdin.prependListener("data", (data: Buffer) => {
+    if (isMouseInput(data)) manager.noteInput();
+  });
 
   // Mentions and DMs become desktop notifications, shown by the terminal. See src/notify.ts.
   if (notifications.enabled) {
     const notifier = new Notifier((message, title) =>
       renderer.triggerNotification(message, title),
     );
-    renderer.on("focus", () => notifier.setFocused(true));
-    renderer.on("blur", () => notifier.setFocused(false));
     manager.onMention((event) => notifier.notify(event));
     manager.onMissedMentions((events) => notifier.notifyMissed(events));
   }

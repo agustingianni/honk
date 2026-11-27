@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MARK_READ_DELAY_MS,
-  PRESENT_AFTER_KEY_MS,
+  PRESENT_AFTER_INPUT_MS,
   ReadMarkerTracker,
 } from "./readMarker.ts";
 import { fakeClock } from "../fakeClock.ts";
@@ -206,25 +206,25 @@ describe("ReadMarkerTracker", () => {
     ]);
   });
 
-  test("with focus unknown, a key press after a time away and a switch at once marks nothing", () => {
+  test("with focus unknown, input after a time away and a switch at once marks nothing", () => {
     const { markers, advance, show, line, sent } = setup();
-    markers.noteKeyPress();
+    markers.noteInput();
     show("#bun");
     advance(DELAY * 2);
-    advance(PRESENT_AFTER_KEY_MS);
+    advance(PRESENT_AFTER_INPUT_MS);
     line("#bun", 300);
-    markers.noteKeyPress();
+    markers.noteInput();
     show("#honk");
     expect(sent).toEqual([["libera", "#bun", 200]]);
   });
 
-  test("with focus unknown, a key press while reading does not restart the time", () => {
+  test("with focus unknown, input while reading does not restart the time", () => {
     const { markers, advance, show, line, sent } = setup();
-    markers.noteKeyPress();
+    markers.noteInput();
     show("#bun");
     advance(DELAY * 2);
     line("#bun", 300);
-    markers.noteKeyPress();
+    markers.noteInput();
     show("#honk");
     expect(sent).toEqual([
       ["libera", "#bun", 200],
@@ -232,17 +232,50 @@ describe("ReadMarkerTracker", () => {
     ]);
   });
 
-  test("with focus unknown, a key press in the last 2 minutes counts as reading", () => {
+  test("a focused window with no input for 2 minutes does not count as reading", () => {
+    const { markers, advance, show, line, sent } = setup();
+    markers.setFocused(true);
+    show("#honk");
+    advance(DELAY);
+    expect(sent).toEqual([["libera", "#honk", 100]]);
+
+    advance(PRESENT_AFTER_INPUT_MS);
+    line("#honk", 101);
+    advance(DELAY * 3);
+    expect(sent.length).toBe(1);
+
+    // Input brings you back; the wait starts over.
+    markers.noteInput();
+    advance(DELAY - 1);
+    expect(sent.length).toBe(1);
+    advance(1);
+    expect(sent.at(-1)).toEqual(["libera", "#honk", 101]);
+  });
+
+  test("focus coming back counts as input", () => {
+    const { markers, advance, show, line, sent } = setup();
+    markers.setFocused(true);
+    show("#honk");
+    advance(DELAY);
+    markers.setFocused(false);
+    advance(PRESENT_AFTER_INPUT_MS * 2);
+    line("#honk", 101);
+    markers.setFocused(true);
+    advance(DELAY);
+    expect(sent.at(-1)).toEqual(["libera", "#honk", 101]);
+  });
+
+  test("with focus unknown, input in the last 2 minutes counts as reading", () => {
     const { markers, advance, show, line, sent } = setup();
     show("#honk");
     advance(DELAY * 3);
     expect(sent).toEqual([]);
 
-    markers.noteKeyPress();
+    markers.noteInput();
     advance(DELAY);
     expect(sent).toEqual([["libera", "#honk", 100]]);
 
-    advance(PRESENT_AFTER_KEY_MS);
+    advance(PRESENT_AFTER_INPUT_MS);
     line("#honk", 101);
     advance(DELAY);
     expect(sent.length).toBe(1);
