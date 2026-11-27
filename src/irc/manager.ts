@@ -274,22 +274,50 @@ function takeHistoryRequest(
   return i === -1 ? undefined : pending.splice(i, 1)[0];
 }
 
+/** The CHATHISTORY subcommands, which come before the target in a FAIL's context. */
+const HISTORY_SUBCOMMANDS = new Set(["LATEST", "BEFORE", "AFTER", "AROUND", "BETWEEN", "TARGETS"]);
+
 /**
- * The /history requests still waiting after a FAIL CHATHISTORY. A labeled FAIL ends
- * only its own request. An unlabeled FAIL can't say which request it answers, so every
- * unlabeled request stops waiting; labeled ones still get their own reply.
+ * The target a FAIL CHATHISTORY names: the first context param, after the subcommand,
+ * for which `known` says yes. The spec form is
+ * `FAIL CHATHISTORY <code> <subcommand> <target> :<description>`, but some servers leave
+ * out the subcommand, so this looks at each param, not at a fixed position.
  *
- *   [#a h1, #b h2], FAIL label h2 -> [#a h1]
- *   [#a, #b],       FAIL no label -> []
- *   [#a h1],        FAIL no label -> [#a h1]   (the FAIL is for a request honk sent unlabeled)
+ *   ["LATEST", "#a", "*"], known #a -> "#a"
+ *   ["#a"],                known #a -> "#a"
+ *   ["LATEST", "#a"],      known -  -> undefined
  */
-function afterHistoryFail(
+function historyFailTarget(
+  context: string[],
+  known: (name: string) => boolean,
+): string | undefined {
+  return context.find((p) => !HISTORY_SUBCOMMANDS.has(p.toUpperCase()) && known(p));
+}
+
+/**
+ * Takes the /history request a FAIL CHATHISTORY answers out of `pending`, the way
+ * takeHistoryRequest does for a batch. A labeled FAIL matches by label. An unlabeled one
+ * matches an unlabeled request for the target it names. An unlabeled FAIL that names no
+ * target can't say which request it answers, so every unlabeled request stops waiting;
+ * labeled ones still get their own reply.
+ *
+ *   [#a h1, #b h2], FAIL label h2      -> the #b request, leaves [#a h1]
+ *   [#a, #b],       FAIL no label, #b  -> the #b request, leaves [#a]
+ *   [#a h1],        FAIL no label, #a  -> undefined, leaves [#a h1]  (the join fetch failed)
+ *   [#a, #b h2],    FAIL no label, none -> undefined, leaves [#b h2]
+ */
+function takeFailedHistoryRequest(
   pending: HistoryRequest[],
   label: string | undefined,
-): HistoryRequest[] {
-  return label !== undefined
-    ? pending.filter((r) => r.label !== label)
-    : pending.filter((r) => r.label !== undefined);
+  target: string | undefined,
+): HistoryRequest | undefined {
+  if (label !== undefined || target !== undefined) {
+    return takeHistoryRequest(pending, label, target ?? "");
+  }
+  for (let i = pending.length - 1; i >= 0; i--) {
+    if (pending[i]!.label === undefined) pending.splice(i, 1);
+  }
+  return undefined;
 }
 
 function createBuffer(name: string, kind: BufferKind): BufferState {
@@ -1450,9 +1478,11 @@ export class IrcManager {
 
     // IRCv3 FAIL, an error. This reads the raw line, not the "fail" event, because only
     // the raw line has tags. A failed CHATHISTORY sends no batch, so its /history request
-    // waits for nothing. Its label also names the request, so the error goes to the buffer
-    // where /history was typed, not the one you switched to since. Without a label, or
-    // when that buffer is closed, it goes to the reply target like other errors.
+    // waits for nothing. Its label, or without one the target it names, picks the request,
+    // so the error goes to the buffer where /history was typed, not the one you switched
+    // to since. The history honk fetches on join has no request, so its error goes to the
+    // target's buffer. When that buffer is closed, the error goes to the reply target like
+    // other errors.
     //   FAIL <command> <code> [<context>...] :<description>
     client.on("raw:fail", (msg) => {
       if (isStale()) return;
@@ -1462,10 +1492,16 @@ export class IrcManager {
       if (command.toUpperCase() === "CHATHISTORY") {
         const ctrl = this.getControl(serverId);
         const label = msg.tags?.label;
-        const failed =
-          label !== undefined ? takeHistoryRequest(ctrl.historyRequests, label, "") : undefined;
-        ctrl.historyRequests = afterHistoryFail(ctrl.historyRequests, label);
-        if (failed && this.hasBuffer(serverId, failed.target)) where = failed.target;
+        const target = historyFailTarget(
+          msg.params.slice(2, -1),
+          (name) =>
+            name !== STATUS_BUFFER &&
+            (this.hasBuffer(serverId, name) ||
+              ctrl.historyRequests.some((r) => r.target === nameKey(name))),
+        );
+        const failed = takeFailedHistoryRequest(ctrl.historyRequests, label, target);
+        const buffer = failed?.target ?? target;
+        if (buffer !== undefined && this.hasBuffer(serverId, buffer)) where = buffer;
       }
       this.pushMessage(
         serverId,
