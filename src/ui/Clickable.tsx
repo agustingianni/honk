@@ -185,7 +185,8 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
 
   // The link under the mouse when the button went down.
   const pressedLink = useRef<string | null>(null);
-  const focusedAt = useRef(0);
+  // When the window last got focus; never, until it does.
+  const focusedAt = useRef(Number.NEGATIVE_INFINITY);
 
   useEffect(() => {
     const onFocus = () => {
