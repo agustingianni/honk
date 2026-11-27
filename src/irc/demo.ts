@@ -82,6 +82,10 @@ export const DEMO_NETWORKS: DemoNetwork[] = [
         topic: `${B}honk${B}, a terminal IRC client | ${c("11", "https://agustingianni.github.io/honk")} | v0.1.0 is out`,
         users: HONK_USERS,
         lines: [
+          // A day before, so the demo shows the day divider.
+          { mins: 26 * 60 + 12, kind: "message", from: "gander", text: "tagging v0.1.0 tomorrow morning" },
+          { mins: 26 * 60 + 10, kind: "message", from: "alice", text: "I'll write the release notes tonight" },
+          { mins: 26 * 60 + 2, kind: "message", from: "gander", text: "thanks! good night all" },
           { mins: 48, kind: "join", text: "heron joined #honk" },
           { mins: 47, kind: "message", from: "alice", text: "morning all" },
           { mins: 46, kind: "message", from: "gander", text: "morning! v0.1.0 binaries are up" },

@@ -57,7 +57,7 @@ import {
   whoisLines,
   type Endpoint,
 } from "./replies.ts";
-import { commandOf, MAX_LINE_BYTES, parseLine, timestampParam } from "./ircLine.ts";
+import { commandOf, MAX_LINE_BYTES, parseLine, tagTime, timestampParam } from "./ircLine.ts";
 import {
   isAfterMarker,
   isMarkedRead,
@@ -234,10 +234,6 @@ function makeMessage(
     kind,
     text,
   };
-}
-
-function tagTime(tags?: { time?: string }): Date {
-  return tags?.time ? new Date(tags.time) : new Date();
 }
 
 /**

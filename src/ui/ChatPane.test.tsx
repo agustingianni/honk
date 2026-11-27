@@ -4,11 +4,19 @@ import { act, useState } from "react";
 import { TextAttributes, type MousePointerStyle } from "@opentui/core";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
 import { ChatPane } from "./ChatPane.tsx";
+import { dayLabel } from "./dayDivider.ts";
+
+/** Noon today, so the buffer starts on today and gets no day divider. */
+function noonToday(): Date {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  return date;
+}
 
 function message(i: number): ChatMessage {
   return {
     id: `m${i}`,
-    timestamp: new Date(2026, 10, 27, 12, 0),
+    timestamp: noonToday(),
     kind: "message",
     from: "fern",
     text: `line ${i}`,
@@ -112,6 +120,37 @@ for (const count of [3, 60]) {
     });
   }
 }
+
+test("a day divider goes above the first line of each day, and above the new divider", async () => {
+  const today = noonToday();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1, 23, 59);
+  const label = (d: Date) => dayLabel(d, today);
+  const screen = await renderLines(
+    {
+      messages: [
+        { ...message(0), timestamp: yesterday, text: "late" },
+        { ...message(1), text: "early" },
+        { ...message(2), text: "later" },
+      ],
+      unread: 1,
+      firstUnreadId: "m1",
+    },
+    80,
+  );
+  const rows = screen
+    .map((line) => line.trim())
+    .filter((line) => line.includes("─") || line.includes("│"))
+    .map((line) => (line.includes("─") ? line.replace(/─+/g, "-") : line.replace(/\s+/g, " ")));
+  // The day change ends grouping, so "early" shows its time and nick.
+  expect(rows).toEqual([
+    `- ${label(yesterday)} -`,
+    "23:59 fern │ late",
+    `- ${label(today)} -`,
+    "- new -",
+    "12:00 fern │ early",
+    "│ later",
+  ]);
+});
 
 test("nicks with wide characters keep the message text in line", async () => {
   const nicks = ["fern", "田中さん", "Zoë", "田中さん田中さん田中"];
