@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { plainSegments } from "./format.tsx";
+import { describe, expect, test } from "bun:test";
+import { parseIrcText, plainSegments, truncateSegments } from "./format.tsx";
 
 const plain = (text: string) =>
   plainSegments(text)
@@ -26,4 +26,29 @@ test("URLs are still links", () => {
     { text: "https://docs.inspircd.org", href: "https://docs.inspircd.org" },
     { text: " now" },
   ]);
+});
+
+describe("truncateSegments", () => {
+  const shown = (segs: { text: string }[]) => segs.map((s) => s.text).join("");
+
+  test("text that fits is kept as it is", () => {
+    const segs = parseIrcText("hi https://a.io");
+    expect(truncateSegments(segs, 15)).toBe(segs);
+  });
+
+  test("a cut link keeps its full href", () => {
+    const segs = truncateSegments(parseIrcText("docs at https://example.com/long/path"), 15);
+    expect(shown(segs)).toBe("docs at https:…");
+    expect(segs.at(-1)!.href).toBe("https://example.com/long/path");
+  });
+
+  test("formatting codes take no room", () => {
+    const segs = truncateSegments(parseIrcText("\x034red\x03 and more text"), 8);
+    expect(shown(segs)).toBe("red and…");
+  });
+
+  test("a segment that fills the room exactly still ends in an ellipsis", () => {
+    const segs = truncateSegments(parseIrcText("\x02abcd\x02efgh"), 4);
+    expect(shown(segs)).toBe("abc…");
+  });
 });

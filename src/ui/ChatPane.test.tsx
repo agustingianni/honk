@@ -97,3 +97,81 @@ test("a wide channel name and topic fit the header", async () => {
     "  #日本語 — 日本語のチャンネルへようこそ。ルール…  0 users  ",
   );
 });
+
+test("a click opens a link in a message and in the topic", async () => {
+  const opened: string[] = [];
+  const width = 80;
+  const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(
+    <ChatPane
+      server={undefined}
+      buffer={{
+        name: "#honk",
+        kind: "channel",
+        topic: "docs at https://honk.example/docs",
+        messages: [{ ...message(0), text: "see https://example.com/x for more" }],
+        users: [],
+        unread: 0,
+        hasMention: false,
+      }}
+      inputFocused={false}
+      paneWidth={width}
+      onSubmit={() => {}}
+      onPasteLines={() => {}}
+      onSelectUser={() => {}}
+      onOpenLink={(href) => opened.push(href)}
+    />,
+    { width, height: 24 },
+  );
+  try {
+    await renderOnce();
+    const screen = captureCharFrame().split("\n");
+    const at = (text: string) => {
+      const y = screen.findIndex((line) => line.includes(text));
+      return { x: screen[y]!.indexOf(text) + 2, y };
+    };
+    const topic = at("https://honk.example/docs");
+    const body = at("https://example.com/x");
+    await act(() => mockMouse.click(topic.x, topic.y));
+    await act(() => mockMouse.click(body.x, body.y));
+    expect(opened).toEqual(["https://honk.example/docs", "https://example.com/x"]);
+  } finally {
+    act(() => renderer.destroy());
+  }
+});
+
+test("a click on a topic link that is cut to fit opens the whole URL", async () => {
+  const opened: string[] = [];
+  const width = 40;
+  const url = "https://honk.example/docs/a/very/long/path";
+  const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(
+    <ChatPane
+      server={undefined}
+      buffer={{
+        name: "#honk",
+        kind: "channel",
+        topic: `docs at ${url}`,
+        messages: [],
+        users: [],
+        unread: 0,
+        hasMention: false,
+      }}
+      inputFocused={false}
+      paneWidth={width}
+      onSubmit={() => {}}
+      onPasteLines={() => {}}
+      onSelectUser={() => {}}
+      onOpenLink={(href) => opened.push(href)}
+    />,
+    { width, height: 24 },
+  );
+  try {
+    await renderOnce();
+    const screen = captureCharFrame().split("\n");
+    const y = screen.findIndex((line) => line.includes("https://"));
+    expect(screen[y]).toContain("…");
+    await act(() => mockMouse.click(screen[y]!.indexOf("https://") + 2, y));
+    expect(opened).toEqual([url]);
+  } finally {
+    act(() => renderer.destroy());
+  }
+});

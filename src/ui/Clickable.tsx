@@ -90,6 +90,26 @@ export function isPlainClick(renderer: CliRenderer, event: MouseEvent): boolean 
   return selection?.isStart === true && selection.behavior === "cell";
 }
 
+/**
+ * Shows the hand pointer while `hovered` is true. `clear` sets it back to
+ * false on the renderer's "blur".
+ */
+function usePointer(hovered: boolean, clear: (hovered: false) => void): void {
+  const renderer = useRenderer();
+  useEffect(() => {
+    if (!hovered) return;
+    const { tracker, rows } = hoverFor(renderer);
+    const clearRow = () => clear(false);
+    rows.add(clearRow);
+    tracker.enter();
+    // Also runs when the box goes away while the mouse is over it.
+    return () => {
+      rows.delete(clearRow);
+      tracker.leave();
+    };
+  }, [hovered, renderer, clear]);
+}
+
 type ClickableProps = Omit<BoxProps, "onMouseOver" | "onMouseOut" | "onMouseMove" | "children"> & {
   /** The background under the mouse, from the theme. Leave it out to keep `backgroundColor`, as for the selected row. */
   hoverColor?: string;
@@ -104,23 +124,10 @@ type ClickableProps = Omit<BoxProps, "onMouseOver" | "onMouseOut" | "onMouseMove
  * nothing on a click (your own nick), so it gets no hover look.
  */
 export function Clickable({ hoverColor, children, ...props }: ClickableProps) {
-  const renderer = useRenderer();
   const [mouseOver, setMouseOver] = useState(false);
   const hovered =
     mouseOver && (props.onMouseDown !== undefined || props.onMouseUp !== undefined);
-
-  useEffect(() => {
-    if (!hovered) return;
-    const { tracker, rows } = hoverFor(renderer);
-    const clear = () => setMouseOver(false);
-    rows.add(clear);
-    tracker.enter();
-    // Also runs when the box goes away while the mouse is over it.
-    return () => {
-      rows.delete(clear);
-      tracker.leave();
-    };
-  }, [hovered, renderer]);
+  usePointer(hovered, setMouseOver);
 
   return (
     <box
@@ -135,6 +142,49 @@ export function Clickable({ hoverColor, children, ...props }: ClickableProps) {
       onMouseMove={() => setMouseOver(true)}
     >
       {typeof children === "function" ? children(hovered) : children}
+    </box>
+  );
+}
+
+type LinkAreaProps = Omit<
+  BoxProps,
+  "onMouseOver" | "onMouseOut" | "onMouseMove" | "onMouseUp"
+> & {
+  /** Opens a link. honk passes openUrl; the tests pass a spy. */
+  onOpenLink: (href: string) => void;
+};
+
+/**
+ * A box whose links (the `<a href>` in its text) open with a plain click,
+ * and show the hand pointer under the mouse. The terminal draws the links
+ * itself (OSC 8), so the box asks the renderer which link is at the mouse:
+ * that also finds both lines of a link that wraps.
+ *
+ * A drag across a link still selects text, and Shift, Alt, or Ctrl with a
+ * click leaves the link to the terminal (Cmd+click in most of them).
+ */
+export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
+  const renderer = useRenderer();
+  const [overLink, setOverLink] = useState(false);
+  usePointer(overLink, setOverLink);
+
+  const check = (event: MouseEvent) => setOverLink(renderer.getLinkAt(event.x, event.y) !== null);
+
+  return (
+    <box
+      {...props}
+      // Mouse events bubble up from the text inside, like in the DOM. Moving
+      // from one text to the next fires "out" then "over"; both land in one render.
+      onMouseOver={check}
+      onMouseMove={check}
+      onMouseOut={() => setOverLink(false)}
+      onMouseUp={(event) => {
+        if (!isPlainClick(renderer, event)) return;
+        const href = renderer.getLinkAt(event.x, event.y);
+        if (href) onOpenLink(href);
+      }}
+    >
+      {children}
     </box>
   );
 }

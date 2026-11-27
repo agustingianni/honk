@@ -4,7 +4,8 @@ import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { isUserSender, sameNick, STATUS_BUFFER } from "../irc/names.ts";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
-import { Clickable, isPlainClick } from "./Clickable.tsx";
+import { openUrl } from "../openUrl.ts";
+import { Clickable, isPlainClick, LinkArea } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
 import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { FormattedText, LinkedText } from "./format.tsx";
@@ -19,6 +20,8 @@ interface ChatPaneProps {
   onPasteLines: (lines: string[]) => void;
   /** A click on a sender's nick: open a DM with them, as in the nick list. */
   onSelectUser: (nick: string) => void;
+  /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
+  onOpenLink?: (href: string) => void;
 }
 
 const NICK_COL_WIDTH = 12;
@@ -250,6 +253,7 @@ export function ChatPane({
   onSubmit,
   onPasteLines,
   onSelectUser,
+  onOpenLink = openUrl,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
@@ -396,12 +400,12 @@ export function ChatPane({
 
   const title = buffer ? buffer.name : STATUS_BUFFER;
   // Cut at the end to fit beside the title and the user count (2 + 2 padding,
-  // " — ", and the count with its margin). The digits of a color code count as
-  // cells, so a coloured topic may be cut a little early.
+  // " — ", and the count with its margin). FormattedText cuts it after it
+  // parses it, so a cut link still opens the whole URL.
   const usersText = buffer?.kind === "channel" ? `${buffer.users.length} users` : "";
   const topicRoom =
     paneWidth - 4 - cellWidth(title) - 3 - (usersText ? cellWidth(usersText) + 2 : 0);
-  const topic = topicRoom >= 4 ? truncate(buffer?.topic ?? "", topicRoom) : "";
+  const topic = topicRoom >= 4 ? (buffer?.topic ?? "") : "";
   const promptLabel = server
     ? `${server.name}/${title}`
     : title;
@@ -439,7 +443,8 @@ export function ChatPane({
       backgroundColor={theme.bgBase}
     >
       {/* Top topic header */}
-      <box
+      <LinkArea
+        onOpenLink={onOpenLink}
         height={HEADER_HEIGHT}
         paddingTop={1}
         paddingBottom={1}
@@ -456,7 +461,7 @@ export function ChatPane({
           {topic ? (
             <>
               <span fg={theme.fgMuted}> — </span>
-              <FormattedText text={topic} defaultFg={theme.fgMuted} />
+              <FormattedText text={topic} defaultFg={theme.fgMuted} maxWidth={topicRoom} />
             </>
           ) : null}
         </text>
@@ -465,7 +470,7 @@ export function ChatPane({
             {usersText}
           </text>
         )}
-      </box>
+      </LinkArea>
 
       {/* Scrollable message feed */}
       {/* Keyed by buffer: each buffer gets its own scroll position and starts at the
@@ -481,7 +486,7 @@ export function ChatPane({
         style={scrollboxStyle(theme.bgBase)}
       >
         {/* No top padding: the header's own bottom padding is the gap. */}
-        <box flexDirection="column" paddingBottom={1}>
+        <LinkArea onOpenLink={onOpenLink} flexDirection="column" paddingBottom={1}>
           {buffer?.messages.map((msg, idx) => {
             const showDivider = msg.id === buffer.firstUnreadId;
             const prev = idx > 0 ? buffer.messages[idx - 1] : undefined;
@@ -504,7 +509,7 @@ export function ChatPane({
               </box>
             );
           })}
-        </box>
+        </LinkArea>
       </scrollbox>
 
       {newBelow > 0 && (
