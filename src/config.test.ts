@@ -192,3 +192,30 @@ describe("the ascii setting", () => {
     }
   });
 });
+
+describe("the logs settings", () => {
+  test("missing keys take the defaults", () => {
+    expect(load('{ "servers": [] }').logs).toEqual({
+      enabled: true,
+      retentionDays: 0,
+      eventRetentionDays: 30,
+      exclude: [],
+    });
+    expect(load('{ "logs": { "eventRetentionDays": 3 } }').logs?.eventRetentionDays).toBe(3);
+  });
+
+  test("a server keeps its logExclude", () => {
+    const config = load('{ "servers": [ { "id": "libera", "host": "h", "logExclude": ["#secret"] } ] }');
+    expect(config.servers[0]?.logExclude).toEqual(["#secret"]);
+  });
+
+  test("wrong values are a ConfigError that names the key", () => {
+    expect(String(loadError('{ "logs": { "retentionDays": -1 } }'))).toContain("logs.retentionDays");
+    expect(String(loadError('{ "logs": { "enabled": "yes" } }'))).toContain("logs.enabled");
+    expect(String(loadError('{ "logs": { "exclude": "nickserv" } }'))).toContain("logs.exclude");
+    expect(String(loadError('{ "logs": [] }'))).toContain('"logs"');
+    expect(String(loadError('{ "servers": [ { "host": "h", "logExclude": "#a" } ] }'))).toContain(
+      "logExclude",
+    );
+  });
+});

@@ -4,6 +4,7 @@ import { App } from "./App.tsx";
 import { cliAction, HELP, unknownCommandText } from "./cli.ts";
 import { ConfigError, defaultConfigPath, loadConfig, saveThemeSetting } from "./config.ts";
 import { IrcManager } from "./irc/manager.ts";
+import { DEFAULT_LOG_SETTINGS, defaultLogPath, type MessageLog, openLog } from "./log/messageLog.ts";
 import { Notifier } from "./notify.ts";
 import { chooseNotificationProtocol, parseNotificationSetting, readTmuxInfo } from "./notifyProtocol.ts";
 import { applyTheme } from "./theme.ts";
@@ -64,9 +65,22 @@ function loadConfigOrExit(): ReturnType<typeof loadConfig> {
 
 if (!g.__ircHot) {
   const config = loadConfigOrExit();
-  const manager = new IrcManager();
+  const demo = process.argv.includes("--demo");
+  // The Log of your chats on disk. Not for the demo. See src/log/messageLog.ts.
+  let log: MessageLog | undefined;
+  const logNotices: string[] = [];
+  if (!demo) {
+    const opened = openLog(defaultLogPath(), config.logs ?? DEFAULT_LOG_SETTINGS, {
+      onError: (text) => manager.addAppNotice(text),
+    });
+    log = opened.log;
+    logNotices.push(...opened.notices);
+    // Writes the Lines still waiting, however honk exits. bun:sqlite is synchronous.
+    if (log) process.on("exit", () => log?.close());
+  }
+  const manager = new IrcManager({ log });
 
-  if (process.argv.includes("--demo")) {
+  if (demo) {
     manager.startDemo();
   } else if (config.servers.length === 0) {
     manager.initWelcome();
@@ -79,7 +93,7 @@ if (!g.__ircHot) {
   const userThemes = loadUserThemes();
   const themes = allThemes(userThemes.entries);
   const selected = selectTheme(config.theme, themes);
-  const warnings = [...userThemes.warnings];
+  const warnings = [...logNotices, ...userThemes.warnings];
   if (selected.warning) warnings.push(selected.warning);
   // Inside tmux and zellij, OpenTUI can't see the terminal and would send no
   // notifications, so honk picks the sequence. See src/notifyProtocol.ts.

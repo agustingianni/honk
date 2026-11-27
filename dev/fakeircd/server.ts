@@ -105,6 +105,7 @@ const CAPS = [
   "batch",
   "draft/chathistory",
   "draft/event-playback",
+  "draft/message-redaction",
   "draft/read-marker",
   "echo-message",
   "labeled-response",
@@ -193,6 +194,11 @@ export class FakeIrcd {
   failMarkRead = false;
   /** CAP gets 421 (unknown command) while this is true, like a server from before IRCv3. */
   rejectCap = false;
+  /**
+   * Capabilities CAP LS leaves out, such as "echo-message" for a server without it. Set
+   * it before a client connects.
+   */
+  readonly withheldCaps = new Set<string>();
 
   private server: Server | null = null;
   /**
@@ -803,6 +809,7 @@ export class FakeIrcd {
   private caps(): string[] {
     return CAPS.filter(
       (x) =>
+        !this.withheldCaps.has(x) &&
         (this.labeledResponse || x !== "labeled-response") &&
         (this.readMarkerCap || x !== "draft/read-marker"),
     );

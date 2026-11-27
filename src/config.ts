@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DEFAULT_LOG_SETTINGS, type LogSettings } from "./log/messageLog.ts";
 import type { AppConfig, AuthMethod, ServerConfig } from "./types.ts";
 
 export function defaultNick(): string {
@@ -64,6 +65,45 @@ function parseArgs(argv: string[]) {
 /** A config file honk can't use. The message names the file and says what is wrong. */
 export class ConfigError extends Error {}
 
+function isNameList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+/**
+ * The "logs" object, with defaults for the keys it leaves out:
+ *
+ *   "logs": { "enabled": true, "retentionDays": 0, "eventRetentionDays": 30, "exclude": ["nickserv"] }
+ */
+function readLogSettings(path: string, value: unknown): LogSettings {
+  if (value === undefined || value === null) return DEFAULT_LOG_SETTINGS;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ConfigError(`${path}: "logs" must be an object, such as {"enabled": true}`);
+  }
+  const logs = value as Record<string, unknown>;
+  const settings = { ...DEFAULT_LOG_SETTINGS };
+  if (logs.enabled !== undefined) {
+    if (typeof logs.enabled !== "boolean") {
+      throw new ConfigError(`${path}: "logs.enabled" must be true or false`);
+    }
+    settings.enabled = logs.enabled;
+  }
+  for (const key of ["retentionDays", "eventRetentionDays"] as const) {
+    const days = logs[key];
+    if (days === undefined) continue;
+    if (typeof days !== "number" || !Number.isInteger(days) || days < 0) {
+      throw new ConfigError(`${path}: "logs.${key}" must be a whole number of days, 0 for forever`);
+    }
+    settings[key] = days;
+  }
+  if (logs.exclude !== undefined) {
+    if (!isNameList(logs.exclude)) {
+      throw new ConfigError(`${path}: "logs.exclude" must be a list of names, such as ["nickserv"]`);
+    }
+    settings.exclude = logs.exclude;
+  }
+  return settings;
+}
+
 function readConfigFile(path: string): AppConfig | null {
   if (!existsSync(path)) return null;
   const raw = readFileSync(path, "utf-8");
@@ -89,11 +129,18 @@ function readConfigFile(path: string): AppConfig | null {
     throw new ConfigError(`${path}: "ascii" must be true or false, not ${JSON.stringify(ascii)}`);
   }
   const servers = Array.isArray(parsed.servers) ? parsed.servers : [];
+  const logs = readLogSettings(path, parsed.logs);
+  for (const s of servers) {
+    if (s.logExclude !== undefined && !isNameList(s.logExclude)) {
+      throw new ConfigError(`${path}: "logExclude" must be a list of names, such as ["#secret"]`);
+    }
+  }
   return {
     notifications,
     theme,
     mouse,
     ascii,
+    logs,
     servers: servers.map((s, idx) => ({
       id: s.id || s.name || s.host || `server-${idx + 1}`,
       name: s.name || s.id || s.host,
@@ -109,6 +156,7 @@ function readConfigFile(path: string): AppConfig | null {
       authMethod: s.authMethod ?? (s.password ? "sasl" : undefined),
       channels: s.channels ?? [],
       autoConnect: s.autoConnect ?? true,
+      logExclude: s.logExclude,
     })),
   };
 }

@@ -30,11 +30,13 @@ Flags: `--port N`, `--network NAME`, `--tls`, `--control N` (default: the port +
 
 ## What it does
 
-- Registration, CAP (`batch`, `draft/chathistory`, `draft/event-playback`, `echo-message`,
-  `labeled-response`, `message-tags`, `sasl`, `server-time`), and SASL PLAIN. Any account
-  and password works. With `labeled-response`, a CHATHISTORY reply (the FAIL or the opening
-  BATCH line) carries the label of the request. Set `irc.labeledResponse = false` before
-  connecting to test a server without labels.
+- Registration, CAP (`batch`, `draft/chathistory`, `draft/event-playback`,
+  `draft/message-redaction`, `draft/read-marker`, `echo-message`, `labeled-response`,
+  `message-tags`, `sasl`, `server-time`), and SASL PLAIN. Any account and password works.
+  With `labeled-response`, a CHATHISTORY reply (the FAIL or the opening BATCH line) carries
+  the label of the request. Set `irc.labeledResponse = false` before connecting to test a
+  server without labels, or add a cap to `irc.withheldCaps` to leave it out of CAP LS.
+  REDACT is offered but not handled; send one with `sendRaw`.
 - Channels with real members. Messages, JOIN, PART, NICK, QUIT, KICK and TOPIC go to the
   other members, and DMs between two clients work.
 - Each new channel starts with the fake users `@alice +bob carol`.

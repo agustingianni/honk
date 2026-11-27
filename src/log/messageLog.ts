@@ -1,0 +1,552 @@
+/**
+ * The Log: honk's own record of the Lines from every Network, in one SQLite file:
+ *
+ *   $XDG_DATA_HOME/honk/logs.db, or ~/.local/share/honk/logs.db
+ *
+ * IrcManager hands each Line to `add` as it comes. Lines wait in memory and go to the
+ * file in one transaction about once a second, or at 100 Lines, and at `close`.
+ *
+ * Keys (ADR 0002): a Network is the Server `id` plus soju's BOUNCER_NETID ('' when there
+ * is none). A Buffer is its name folded with the server's CASEMAPPING, so #Foo[ and
+ * #foo{ are one Buffer on an rfc1459 server.
+ *
+ * Replays (ADR 0003) are decided by the same rule the screen uses, in replay.ts, with
+ * the Lines already in the file as the kept Lines:
+ *
+ *   live:     @msgid=AB12;time=...07.412Z :alice PRIVMSG #honk :lol    -> stored
+ *   History:  @time=...07.000Z :alice PRIVMSG #honk :lol               -> Replay, dropped
+ *
+ * Only one honk writes the file. A second one opens it, says which process writes it,
+ * and stores nothing: two writers would store each Line without a msgid twice.
+ */
+
+import { Database } from "bun:sqlite";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { systemClock, type Clock } from "../clock.ts";
+import { stripIrcFormatting } from "../notify.ts";
+import { type Casemapping, DEFAULT_CASEMAPPING, nameKey } from "../irc/names.ts";
+import { checkReplay, type HistoryBatch, type ReplayLine } from "../irc/replay.ts";
+import { CHAT_KINDS, checkSqlite, EVENT_KINDS, NewerSchemaError, prepare } from "./schema.ts";
+
+/** The `logs` settings in the config file. */
+export interface LogSettings {
+  /** False turns the Log off. */
+  enabled: boolean;
+  /** Days to keep Chat lines. 0 keeps them forever. */
+  retentionDays: number;
+  /** Days to keep Events (joins, parts, quits, nick changes, kicks). 0 keeps them forever. */
+  eventRetentionDays: number;
+  /** Buffer names never logged on any Server, such as "nickserv". */
+  exclude: string[];
+}
+
+export const DEFAULT_LOG_SETTINGS: LogSettings = {
+  enabled: true,
+  retentionDays: 0,
+  eventRetentionDays: 30,
+  exclude: [],
+};
+
+export type ChatKind = (typeof CHAT_KINDS)[number];
+export type EventKind = (typeof EVENT_KINDS)[number];
+
+/** One Line for the Log. */
+export interface LogLine {
+  kind: ChatKind | EventKind;
+  /** Who wrote it or did it. For a nick change, the old nick. */
+  nick: string;
+  /**
+   * What it was done to: the new nick of a nick change, the nick a kick removed.
+   * Unset for other kinds.
+   */
+  subject?: string;
+  /** As received, with formatting codes. The reason of a part, quit or kick. */
+  text: string;
+  /** Unix ms. */
+  time: number;
+  /** True if `time` is the server's (a time tag), false if honk's clock. */
+  timeFromServer: boolean;
+  msgid?: string;
+  /** Your own Line, confirmed by the server. */
+  self?: boolean;
+  mention?: boolean;
+  /** It came in History, so it may be a Replay. */
+  history?: boolean;
+}
+
+export interface LogBuffer {
+  /** As the server sent it, such as "#Honk" or "Alice". */
+  name: string;
+  kind: "channel" | "dm";
+}
+
+/** What the Log knows about the Network a Server reaches. */
+export interface LogNetwork {
+  /** soju's BOUNCER_NETID, or '' with no bouncer network. */
+  bouncerNetId: string;
+  /** The NETWORK name, or the Server's name. Shown, never a key. */
+  display: string;
+  casemapping: Casemapping;
+  /** Buffer names this Server never logs (the Server's `logExclude`). */
+  exclude: string[];
+}
+
+export function defaultLogPath(env: Record<string, string | undefined> = process.env): string {
+  const base = env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  return join(base, "honk", "logs.db");
+}
+
+/** Lines that wait in memory before a write. */
+const FLUSH_ROWS = 100;
+const FLUSH_MS = 1000;
+/** Rows one retention step deletes, so a long delete never stalls the screen. */
+const PRUNE_BATCH = 500;
+const PRUNE_PAUSE_MS = 50;
+/** How often old Lines are removed while honk runs. */
+const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** The farthest apart a kept Line and History can be and still match (see replay.ts). */
+const MATCH_WINDOW_MS = 2000;
+
+interface NetworkSnapshot extends LogNetwork {
+  serverId: string;
+}
+
+type Op =
+  | {
+      type: "line";
+      net: NetworkSnapshot;
+      buffer: LogBuffer & { key: string };
+      line: LogLine;
+      batch?: HistoryBatch;
+    }
+  | { type: "redact"; net: NetworkSnapshot; msgid: string; by: string; time: number }
+  | { type: "sync"; net: NetworkSnapshot; time: number };
+
+interface KeptRow {
+  id: number;
+  kind: string;
+  nick: string;
+  text: string;
+  ts: number;
+  ts_server: number;
+  msgid: string | null;
+}
+
+/** A kept row as the Replay rule reads it. */
+type KeptLine = ReplayLine & { id: number };
+
+function keptLine(row: KeptRow): KeptLine {
+  return {
+    id: row.id,
+    kind: row.kind,
+    from: row.nick,
+    text: row.text,
+    timestamp: new Date(row.ts),
+    timeFromServer: row.ts_server === 1,
+    msgid: row.msgid ?? undefined,
+  };
+}
+
+/** True if process `pid` runs. EPERM: it runs, as another user. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+export interface OpenOptions {
+  pid?: number;
+  clock?: Clock;
+  /** Whether a process runs. Tests replace it. */
+  isAlive?: (pid: number) => boolean;
+  /** Called with a line for *status when a write fails. Once per kind of failure. */
+  onError?: (text: string) => void;
+}
+
+/**
+ * Opens the Log at `path`. Returns the Log, or none if honk keeps no Log, and the lines
+ * to show in *status: where a new file is, why there is no Log, or that another honk
+ * writes it. honk works the same without a Log.
+ */
+export function openLog(
+  path: string,
+  settings: LogSettings,
+  options: OpenOptions = {},
+): { log?: MessageLog; notices: string[] } {
+  if (!settings.enabled) return { notices: [] };
+  const created = !existsSync(path);
+  let db: Database | undefined;
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    // The file holds private messages. SQLite gives the -wal and -shm files the same mode.
+    if (created) closeSync(openSync(path, "a", 0o600));
+    chmodSync(path, 0o600);
+    db = new Database(path, { create: true, strict: true });
+    const unfit = checkSqlite(db);
+    if (unfit) {
+      db.close();
+      return { notices: [`honk keeps no log: ${unfit}.`] };
+    }
+    prepare(db);
+  } catch (err) {
+    db?.close();
+    const reason =
+      err instanceof NewerSchemaError ? `${path} ${err.message}` : (err as Error).message;
+    return { notices: [`honk keeps no log: ${reason}.`] };
+  }
+  const log = new MessageLog(db, settings, options);
+  const notices: string[] = [];
+  if (created) notices.push(`honk keeps a log of your chats in ${path}.`);
+  if (log.otherWriter !== undefined) {
+    notices.push(
+      `Another honk (pid ${log.otherWriter}) writes the log, so this one does not write to it.`,
+    );
+  }
+  return { log, notices };
+}
+
+export class MessageLog {
+  /** The process that writes the file, when it is not this one. */
+  readonly otherWriter: number | undefined;
+  private readonly clock: Clock;
+  private readonly pid: number;
+  private readonly onError: (text: string) => void;
+  private readonly reportedErrors = new Set<string>();
+  private queue: Op[] = [];
+  private flushTimer: unknown;
+  private pruneTimer: unknown;
+  private closed = false;
+  private networks = new Map<string, NetworkSnapshot>();
+  private networkIds = new Map<string, number>();
+  private bufferIds = new Map<string, number>();
+
+  constructor(
+    private readonly db: Database,
+    private readonly settings: LogSettings,
+    options: OpenOptions = {},
+  ) {
+    this.clock = options.clock ?? systemClock;
+    this.pid = options.pid ?? process.pid;
+    this.onError = options.onError ?? (() => {});
+    this.otherWriter = this.takeWriter(options.isAlive ?? processAlive);
+    if (this.writable) this.schedulePrune(0);
+  }
+
+  /** False while another honk writes the file: then nothing is stored. */
+  get writable(): boolean {
+    return this.otherWriter === undefined && !this.closed;
+  }
+
+  /**
+   * Takes the writer row, unless a running process other than this one holds it.
+   * Returns that process's pid.
+   */
+  private takeWriter(isAlive: (pid: number) => boolean): number | undefined {
+    return this.db
+      .transaction(() => {
+        const row = this.db.query("SELECT pid FROM writer WHERE id = 1").get() as
+          | { pid: number }
+          | null;
+        if (row && row.pid !== this.pid && isAlive(row.pid)) return row.pid;
+        this.db
+          .query("INSERT OR REPLACE INTO writer (id, pid, since) VALUES (1, ?, ?)")
+          .run(this.pid, this.clock.now());
+        return undefined;
+      })
+      .immediate();
+  }
+
+  /** Updates what the Log knows about a Server's Network. Lines added later use it. */
+  network(serverId: string, info: Partial<LogNetwork>): void {
+    const prev = this.networkOf(serverId);
+    this.networks.set(serverId, { ...prev, ...info, serverId });
+  }
+
+  private networkOf(serverId: string): NetworkSnapshot {
+    return (
+      this.networks.get(serverId) ?? {
+        serverId,
+        bouncerNetId: "",
+        display: serverId,
+        casemapping: DEFAULT_CASEMAPPING,
+        exclude: [],
+      }
+    );
+  }
+
+  /** True if a Buffer called `name` is never logged on this Server. */
+  private excluded(net: NetworkSnapshot, key: string): boolean {
+    return [...this.settings.exclude, ...net.exclude].some(
+      (name) => nameKey(name, net.casemapping) === key,
+    );
+  }
+
+  /**
+   * Adds one Line to Buffer `buffer` of Server `serverId`. A Line from History gets its
+   * Replay check when it is written; `batch` holds the counts of its History batch for
+   * this Buffer (see HistoryBatch).
+   */
+  add(serverId: string, buffer: LogBuffer, line: LogLine, batch?: HistoryBatch): void {
+    if (!this.writable) return;
+    const net = this.networkOf(serverId);
+    const key = nameKey(buffer.name, net.casemapping);
+    if (this.excluded(net, key)) return;
+    this.push({ type: "line", net, buffer: { ...buffer, key }, line, batch });
+  }
+
+  /** Marks the Line with `msgid` on this Server as redacted by `by`. It stays in the Log. */
+  redact(serverId: string, msgid: string, by: string, time: number): void {
+    if (!this.writable) return;
+    this.push({ type: "redact", net: this.networkOf(serverId), msgid, by, time });
+  }
+
+  /**
+   * Moves the Sync marker of the Server's Network to `time`: History up to then is in
+   * the Log. It never moves back. Written with the Lines added before it.
+   */
+  setSyncMarker(serverId: string, time: number): void {
+    if (!this.writable) return;
+    this.push({ type: "sync", net: this.networkOf(serverId), time });
+  }
+
+  /** The Sync marker of the Server's Network, or undefined if it has none yet. */
+  syncMarker(serverId: string): number | undefined {
+    this.flush();
+    const net = this.networkOf(serverId);
+    const row = this.db
+      .query("SELECT synced_until AS t FROM network WHERE config_id = ? AND bouncer_net = ?")
+      .get(serverId, net.bouncerNetId) as { t: number | null } | null;
+    return row?.t ?? undefined;
+  }
+
+  private push(op: Op): void {
+    this.queue.push(op);
+    if (this.queue.length >= FLUSH_ROWS) this.flush();
+    else if (this.flushTimer === undefined) {
+      this.flushTimer = this.clock.setTimeout(() => {
+        this.flushTimer = undefined;
+        this.flush();
+      }, FLUSH_MS);
+    }
+  }
+
+  /** Writes every waiting Line, in one transaction. */
+  flush(): void {
+    if (this.flushTimer !== undefined) {
+      this.clock.clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    if (this.queue.length === 0 || this.closed) return;
+    const ops = this.queue;
+    this.queue = [];
+    try {
+      this.db.transaction(() => {
+        for (const op of ops) this.apply(op);
+      })();
+    } catch (err) {
+      // The cached ids may name rows the rollback removed.
+      this.networkIds.clear();
+      this.bufferIds.clear();
+      this.report("write", `could not write to the log: ${(err as Error).message}`);
+    }
+  }
+
+  private report(kind: string, text: string): void {
+    if (this.reportedErrors.has(kind)) return;
+    this.reportedErrors.add(kind);
+    this.onError(text);
+  }
+
+  private apply(op: Op): void {
+    const networkId = this.networkId(op.net);
+    if (op.type === "sync") {
+      this.db
+        .query(
+          "UPDATE network SET synced_until = max(coalesce(synced_until, 0), ?) WHERE id = ?",
+        )
+        .run(op.time, networkId);
+    } else if (op.type === "redact") {
+      this.applyRedact(networkId, op.msgid, op.by, op.time);
+    } else {
+      this.applyLine(this.bufferId(networkId, op.buffer), op.line, op.batch);
+    }
+  }
+
+  private networkId(net: NetworkSnapshot): number {
+    const cacheKey = [net.serverId, net.bouncerNetId, net.display, net.casemapping].join("\0");
+    const cached = this.networkIds.get(cacheKey);
+    if (cached !== undefined) return cached;
+    this.db
+      .query(
+        `INSERT INTO network (config_id, bouncer_net, display, casemapping) VALUES (?, ?, ?, ?)
+         ON CONFLICT (config_id, bouncer_net)
+         DO UPDATE SET display = excluded.display, casemapping = excluded.casemapping`,
+      )
+      .run(net.serverId, net.bouncerNetId, net.display, net.casemapping);
+    const { id } = this.db
+      .query("SELECT id FROM network WHERE config_id = ? AND bouncer_net = ?")
+      .get(net.serverId, net.bouncerNetId) as { id: number };
+    this.networkIds.set(cacheKey, id);
+    return id;
+  }
+
+  private bufferId(networkId: number, buffer: LogBuffer & { key: string }): number {
+    const cacheKey = [networkId, buffer.key, buffer.name].join("\0");
+    const cached = this.bufferIds.get(cacheKey);
+    if (cached !== undefined) return cached;
+    this.db
+      .query(
+        `INSERT INTO buffer (network_id, name, display, kind) VALUES (?, ?, ?, ?)
+         ON CONFLICT (network_id, name) DO UPDATE SET display = excluded.display`,
+      )
+      .run(networkId, buffer.key, buffer.name, buffer.kind);
+    const { id } = this.db
+      .query("SELECT id FROM buffer WHERE network_id = ? AND name = ?")
+      .get(networkId, buffer.key) as { id: number };
+    this.bufferIds.set(cacheKey, id);
+    return id;
+  }
+
+  /** The kept Lines that could match `line`: the same msgid, or the same nick near its time. */
+  private keptNear(bufferId: number, line: LogLine): KeptLine[] {
+    const cols = "id, kind, nick, text, ts, ts_server, msgid";
+    const rows = this.db
+      .query(
+        `SELECT ${cols} FROM message WHERE buffer_id = ? AND nick = ? AND ts BETWEEN ? AND ?
+         ORDER BY ts, id`,
+      )
+      .all(bufferId, line.nick, line.time - MATCH_WINDOW_MS, line.time + MATCH_WINDOW_MS) as KeptRow[];
+    if (line.msgid && !rows.some((r) => r.msgid === line.msgid)) {
+      const same = this.db
+        .query(`SELECT ${cols} FROM message WHERE buffer_id = ? AND msgid = ?`)
+        .get(bufferId, line.msgid) as KeptRow | null;
+      if (same) rows.push(same);
+    }
+    return rows.map(keptLine);
+  }
+
+  private applyLine(bufferId: number, line: LogLine, batch?: HistoryBatch): void {
+    if (line.history) {
+      const verdict = checkReplay(
+        this.keptNear(bufferId, line),
+        {
+          kind: line.kind,
+          from: line.nick,
+          text: line.text,
+          timestamp: new Date(line.time),
+          timeFromServer: line.timeFromServer,
+          msgid: line.msgid,
+          isHistory: true,
+        },
+        batch,
+      );
+      if (verdict.type === "replay") return;
+      if (verdict.type === "give-msgid") {
+        this.db.query("UPDATE message SET msgid = ? WHERE id = ?").run(verdict.msgid, verdict.line.id);
+        return;
+      }
+    }
+    // A live Line with a msgid the Log has is dropped by the unique index.
+    this.db
+      .query(
+        `INSERT INTO message
+           (buffer_id, ts, ts_server, kind, nick, subject, text, plain, msgid, self, mention)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT DO NOTHING`,
+      )
+      .run(
+        bufferId,
+        line.time,
+        line.timeFromServer ? 1 : 0,
+        line.kind,
+        line.nick,
+        line.subject ?? null,
+        line.text,
+        stripIrcFormatting(line.text),
+        line.msgid ?? null,
+        line.self ? 1 : 0,
+        line.mention ? 1 : 0,
+      );
+  }
+
+  /**
+   * Marks a Line redacted and takes its text out of the index, so search no longer
+   * finds it. The delete trigger skips redacted rows, so the index entry is removed once.
+   */
+  private applyRedact(networkId: number, msgid: string, by: string, time: number): void {
+    const rows = this.db
+      .query(
+        `SELECT m.id, m.kind, m.plain FROM message m JOIN buffer b ON b.id = m.buffer_id
+         WHERE b.network_id = ? AND m.msgid = ? AND m.redacted_at IS NULL`,
+      )
+      .all(networkId, msgid) as { id: number; kind: string; plain: string }[];
+    for (const row of rows) {
+      if ((CHAT_KINDS as readonly string[]).includes(row.kind)) {
+        this.db
+          .query("INSERT INTO message_fts (message_fts, rowid, plain) VALUES ('delete', ?, ?)")
+          .run(row.id, row.plain);
+      }
+      this.db
+        .query("UPDATE message SET redacted_at = ?, redacted_by = ? WHERE id = ?")
+        .run(time, by, row.id);
+    }
+  }
+
+  private schedulePrune(ms: number): void {
+    this.pruneTimer = this.clock.setTimeout(() => this.pruneStep(), ms);
+  }
+
+  /** Deletes one batch of old rows, and schedules the next step. */
+  private pruneStep(): void {
+    if (!this.writable) return;
+    let deleted = 0;
+    try {
+      deleted = this.pruneBatch(this.clock.now());
+      if (deleted === 0) this.db.run("PRAGMA incremental_vacuum");
+    } catch (err) {
+      this.report("prune", `could not remove old lines from the log: ${(err as Error).message}`);
+    }
+    this.schedulePrune(deleted > 0 ? PRUNE_PAUSE_MS : PRUNE_EVERY_MS);
+  }
+
+  /** Deletes up to PRUNE_BATCH rows older than their retention. Returns how many. */
+  pruneBatch(now: number): number {
+    let deleted = 0;
+    const rules: [readonly string[], number][] = [
+      [EVENT_KINDS, this.settings.eventRetentionDays],
+      [CHAT_KINDS, this.settings.retentionDays],
+    ];
+    for (const [kinds, days] of rules) {
+      if (days <= 0 || deleted >= PRUNE_BATCH) continue;
+      const list = kinds.map((k) => `'${k}'`).join(", ");
+      deleted += this.db
+        .query(
+          `DELETE FROM message WHERE id IN (
+             SELECT id FROM message WHERE kind IN (${list}) AND ts < ? LIMIT ?)`,
+        )
+        .run(now - days * DAY_MS, PRUNE_BATCH - deleted).changes;
+    }
+    return deleted;
+  }
+
+  /** Writes what waits, gives up the writer row, and closes the file. */
+  close(): void {
+    if (this.closed) return;
+    this.flush();
+    if (this.pruneTimer !== undefined) this.clock.clearTimeout(this.pruneTimer);
+    try {
+      if (this.otherWriter === undefined) {
+        this.db.query("DELETE FROM writer WHERE pid = ?").run(this.pid);
+      }
+    } finally {
+      this.closed = true;
+      this.db.close();
+    }
+  }
+}
