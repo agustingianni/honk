@@ -40,7 +40,7 @@ function setup() {
     newest.set(buffer, time);
     markers.onNewLine();
   };
-  return { markers, advance: clock.advance, pending: clock.pending, show, line, sent, newest };
+  return { markers, advance: clock.advance, active: clock.active, show, line, sent, newest };
 }
 
 describe("ReadMarkerTracker", () => {
@@ -173,11 +173,11 @@ describe("ReadMarkerTracker", () => {
   });
 
   test("stop cancels the timer", () => {
-    const { markers, pending, advance, show, sent } = setup();
+    const { markers, active, advance, show, sent } = setup();
     markers.setFocused(true);
     show("#honk");
     markers.stop();
-    expect(pending()).toBe(0);
+    expect(active()).toBe(0);
     advance(DELAY);
     expect(sent).toEqual([]);
   });

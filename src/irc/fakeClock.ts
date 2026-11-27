@@ -1,5 +1,16 @@
 import type { Clock } from "./clock.ts";
 
+/** A Clock that a test moves forward by hand. */
+export interface FakeClock extends Clock {
+  /**
+   * Moves the time forward by `ms`, then runs each timer that is due by then, in the
+   * order the timers were set. A timer that one of them sets waits for the next call.
+   */
+  advance(ms: number): void;
+  /** How many timers are still waiting. */
+  active(): number;
+}
+
 /**
  * A clock for tests. Time stands still until the test calls `advance`, which moves it
  * forward and runs each timer that is due by then.
@@ -9,11 +20,7 @@ import type { Clock } from "./clock.ts";
  *   clock.advance(99);    // nothing
  *   clock.advance(1);     // "fired"
  */
-export function fakeClock(start = 0): Clock & {
-  advance(ms: number): void;
-  /** How many timers are still waiting. */
-  pending(): number;
-} {
+export function fakeClock(start = 0): FakeClock {
   let now = start;
   let nextId = 1;
   const timers = new Map<number, { at: number; fn: () => void }>();
@@ -36,6 +43,6 @@ export function fakeClock(start = 0): Clock & {
         }
       }
     },
-    pending: () => timers.size,
+    active: () => timers.size,
   };
 }

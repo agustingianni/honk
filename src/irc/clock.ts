@@ -2,6 +2,7 @@
  * The time now and timers, in one object, so a tracker can run on a fake clock in a
  * test (see fakeClock.ts) instead of on real time:
  *
+ *   const clock = fakeClock();
  *   const tracker = new DeliveryTracker(callbacks, clock);
  *   clock.advance(DELIVERY_TIMEOUT_MS);   // the timeout fires, with no real wait
  */

@@ -34,7 +34,7 @@ describe("DeliveryTracker", () => {
     send("libera", "1");
     tracker.pong("libera", "honk-1");
     expect(delivered).toEqual([["libera", [line("1")]]]);
-    expect(timers.pending()).toBe(0);
+    expect(timers.active()).toBe(0);
   });
 
   test("a PONG also confirms every line sent before it", () => {
@@ -114,7 +114,7 @@ describe("DeliveryTracker", () => {
     expect(tracker.drop("libera")).toEqual([]);
     timers.advance(DELIVERY_TIMEOUT_MS);
     expect(timedOut).toEqual([]);
-    expect(timers.pending()).toBe(0);
+    expect(timers.active()).toBe(0);
   });
 
   test("reject takes the oldest waiting line to that buffer, and its PONG no longer confirms it", () => {
