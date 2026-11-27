@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { theme } from "../theme.ts";
+import { cellWidth } from "./display.ts";
 import { applyGlyphs } from "./glyphs.ts";
 import { parseIrcText, plainSegments, truncateSegments, underlineRange } from "./format.tsx";
 
@@ -47,6 +48,37 @@ describe("truncateSegments", () => {
   test("formatting codes take no room", () => {
     const segs = truncateSegments(parseIrcText("\x034red\x03 and more text"), 8);
     expect(shown(segs)).toBe("red and…");
+  });
+
+  // The topic from issue #57: its color codes add 6 characters that show nothing.
+  const coloredTopic = "\x0304red\x03 \x0309green\x03 \x0312blue\x03 rules: be nice";
+
+  test("a colored topic that fits once the codes are gone shows in full", () => {
+    const segs = parseIrcText(coloredTopic);
+    expect(shown(segs)).toBe("red green blue rules: be nice");
+    expect(truncateSegments(segs, 29)).toBe(segs);
+  });
+
+  test("a colored topic that does not fit is cut at the room, and keeps its colors", () => {
+    const segs = truncateSegments(parseIrcText(coloredTopic), 12);
+    expect(segs.map((s) => [s.text, s.fg])).toEqual([
+      ["red", "#f7768e"],
+      [" ", undefined],
+      ["green", "#9ece6a"],
+      [" ", undefined],
+      ["b…", "#7aa2f7"],
+    ]);
+  });
+
+  test("a wide colored topic is cut between graphemes", () => {
+    // 4 cells, then 10 cells of CJK in light blue.
+    const topic = "\x0304red \x0312日本語です";
+    expect(truncateSegments(parseIrcText(topic), 9).map((s) => [s.text, s.fg])).toEqual([
+      ["red ", "#f7768e"],
+      ["日本…", "#7aa2f7"],
+    ]);
+    // An even room cannot fit a wide character before the ellipsis: one cell short.
+    expect(cellWidth(shown(truncateSegments(parseIrcText(topic), 10)))).toBe(9);
   });
 
   test("a segment that fills the room exactly still ends in an ellipsis", () => {
