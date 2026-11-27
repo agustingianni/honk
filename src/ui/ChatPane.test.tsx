@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
+import { act } from "react";
 import type { BufferState, ChatMessage } from "../types.ts";
 import { ChatPane } from "./ChatPane.tsx";
 
@@ -33,6 +34,7 @@ async function dividerLines(width: number, count: number): Promise<string[]> {
       paneWidth={width}
       onSubmit={() => {}}
       onPasteLines={() => {}}
+      onSelectUser={() => {}}
     />,
     { width, height: 24 },
   );
@@ -43,7 +45,8 @@ async function dividerLines(width: number, count: number): Promise<string[]> {
       .filter((line) => line.includes("─") || line.includes(" new "))
       .map((line) => line.replace(/█/g, "").trimEnd());
   } finally {
-    renderer.destroy();
+    // Destroying the renderer unmounts the React tree, which is a state update.
+    act(() => renderer.destroy());
   }
 }
 
