@@ -75,9 +75,13 @@ describe("bundled themes", () => {
         const [worst, surface] = worstContrast(t, color);
         expect(worst, `${label} on ${surface}`).toBeGreaterThanOrEqual(min);
       }
-      // Muted text (timestamps, hints) is weaker than secondary text (the nicklist).
+      // Secondary text (the nicklist), muted text (timestamps, hints) and dim
+      // text (join and part lines) get weaker in that order.
       expect(contrast(t.fgMuted, t.bgBase), "fgMuted weaker than fgSecondary").toBeLessThan(
         contrast(t.fgSecondary, t.bgBase),
+      );
+      expect(contrast(t.fgDim, t.bgBase), "fgDim weaker than fgMuted").toBeLessThan(
+        contrast(t.fgMuted, t.bgBase),
       );
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);

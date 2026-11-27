@@ -173,8 +173,14 @@ export function schemeToTheme(scheme: Scheme): Theme {
       ? color
       : mix(fg, bg, fade);
   const fgSecondary = grayText(p.base04, 3, 0.25);
-  // Borders and fgDim are made from this gray; fgMuted itself is adjusted below.
-  const muted = grayText(p.base03, 2, 0.5);
+  // Borders, fgDim and fgMuted are made from this gray, which must be weaker
+  // than fgSecondary. When base03 is below 2:1, its fallback can be brighter
+  // than base04 (carbonfox). Then fade fgSecondary a quarter of the way to
+  // the background, which keeps fgDim and the borders as visible as in
+  // other themes.
+  const base03 = grayText(p.base03, 2, 0.5);
+  const muted =
+    contrast(base03, bg) < contrast(fgSecondary, bg) ? base03 : mix(fgSecondary, bg, 0.25);
 
   // The brightest gray among base05..base07 (in catppuccin-latte, base06 and
   // base07 are accents; in rose-pine-dawn, base07 is a background).
@@ -206,14 +212,9 @@ export function schemeToTheme(scheme: Scheme): Theme {
   // Accents are used as text (channel names, notices, links), so they must
   // be readable.
   const readable = (color: string) => stepUntil(color, fgBright, surfaces, MIN_ACCENT_CONTRAST);
-  // Muted text must be weaker than secondary text. When base03 is below 2:1,
-  // its fallback gray can be brighter than the scheme's base04 (carbonfox),
-  // and some schemes have base03 brighter than base04. Then start half-way
-  // from the secondary text to the background. 2:1 on every surface still
-  // wins: where secondary text is itself near 2:1, muted text can match it.
-  const mutedStart =
-    contrast(muted, bg) < contrast(fgSecondary, bg) ? muted : mix(fgSecondary, bg, 0.5);
-  const fgMuted = stepUntil(mutedStart, fg, surfaces, MIN_MUTED_CONTRAST);
+  // 2:1 on every surface wins over the order: where fgSecondary is itself
+  // near 2:1, fgMuted can match it.
+  const fgMuted = stepUntil(muted, fg, surfaces, MIN_MUTED_CONTRAST);
 
   const accents = [
     p.base08, p.base09, p.base0A, p.base0B, p.base0C, p.base0D, p.base0E,
