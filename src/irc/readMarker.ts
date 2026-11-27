@@ -137,6 +137,12 @@ export interface ReadMarkerCallbacks {
   send(serverId: string, buffer: string, time: number): void;
   /** The server's casemapping, which decides which buffer names are one. See nameKey. */
   casemapping(serverId: string): Casemapping;
+  /**
+   * `buffer` now counts as read: honk clears its badge here. Called each time honk
+   * would send MARKREAD for it, also when it can't send one (see newestTime), so honk's
+   * badge and your other clients agree.
+   */
+  markedRead(serverId: string, buffer: string): void;
 }
 
 /**
@@ -151,10 +157,12 @@ export interface ReadMarkerCallbacks {
  *   See startReading for when reading starts.
  * - It never sends a marker at or before one the server said or honk already sent on
  *   this connection.
+ * - Each time it would send, it calls markedRead first, even when it can't send.
  *
  *   tracker.setFocused(true);
  *   tracker.onActiveChanged(null);   // #honk is on screen
- *   // 1 s later: send("libera", "#honk", <time of its newest line>)
+ *   // 1 s later: markedRead("libera", "#honk")
+ *   //            send("libera", "#honk", <time of its newest line>)
  */
 export class ReadMarkerTracker {
   /** What the terminal last said about focus. "unknown" until it says anything. See isReading. */
@@ -227,7 +235,7 @@ export class ReadMarkerTracker {
     // You read its last lines long enough: mark them now. A buffer you only flipped
     // past is not marked.
     if (this.clock.now() - this.readingSince >= this.delayMs) {
-      this.send(leaving.serverId, leaving.buffer);
+      this.markRead(leaving.serverId, leaving.buffer);
     }
     this.startReading();
   }
@@ -278,7 +286,7 @@ export class ReadMarkerTracker {
    * never said, a key pressed in the last few minutes stands in for focus, so a honk
    * left open in a detached tmux doesn't mark everything read overnight.
    */
-  private isReading(): boolean {
+  isReading(): boolean {
     if (this.focus !== "unknown") return this.focus === "focused";
     return this.clock.now() - this.lastKeyAt < PRESENT_AFTER_KEY_MS;
   }
@@ -296,22 +304,24 @@ export class ReadMarkerTracker {
     this.schedule();
   }
 
-  /** Sends MARKREAD for the buffer on screen after the delay, unless a send is already waiting. */
+  /** Counts the buffer on screen as read after the delay (markRead), unless that is already waiting. */
   private schedule(): void {
     if (this.timer !== null) return;
     this.timer = this.clock.setTimeout(() => {
       this.timer = null;
       const onScreen = this.callbacks.onScreen();
-      if (onScreen) this.send(onScreen.serverId, onScreen.buffer);
+      if (onScreen) this.markRead(onScreen.serverId, onScreen.buffer);
     }, this.delayMs);
   }
 
   /**
-   * Moves your read marker for a buffer up to its newest line, if you are reading. The
-   * server tells your other clients, so they stop showing it as unread.
+   * Counts a buffer as read, if you are reading: honk clears its badge (markedRead),
+   * and your read marker moves up to its newest line. The server tells your other
+   * clients, so they stop showing it as unread.
    */
-  private send(serverId: string, buffer: string): void {
+  private markRead(serverId: string, buffer: string): void {
     if (!this.isReading()) return;
+    this.callbacks.markedRead(serverId, buffer);
     const time = this.callbacks.newestTime(serverId, buffer);
     if (time === undefined) return;
     const key = this.key(serverId, buffer);

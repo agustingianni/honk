@@ -13,6 +13,7 @@ const DELAY = MARK_READ_DELAY_MS;
 /**
  * A tracker with one server, "libera". `newest` is the newest line's time per buffer,
  * which a test moves forward to stand for a new line. `sent` collects each MARKREAD.
+ * `read` collects each buffer that counts as read, in order.
  * `casemappings` sets a server's casemapping; a server not in it uses rfc1459.
  */
 function setup() {
@@ -24,12 +25,14 @@ function setup() {
     ["#bun", 200],
   ]);
   const sent: [string, string, number][] = [];
+  const read: string[] = [];
   const markers = new ReadMarkerTracker(
     {
       onScreen: () => onScreen,
       newestTime: (_serverId, buffer) => newest.get(buffer),
       send: (serverId, buffer, time) => sent.push([serverId, buffer, time]),
       casemapping: (serverId) => casemappings.get(serverId) ?? "rfc1459",
+      markedRead: (_serverId, buffer) => read.push(buffer),
     },
     { delayMs: DELAY, clock },
   );
@@ -46,6 +49,7 @@ function setup() {
   };
   return {
     markers,
+    read,
     advance: clock.advance,
     active: clock.active,
     show,
@@ -89,6 +93,42 @@ describe("ReadMarkerTracker", () => {
       ["libera", "#honk", 100],
       ["libera", "#honk", 150],
     ]);
+  });
+
+  test("a buffer counts as read when its MARKREAD would go out, even if none can", () => {
+    const { markers, advance, show, newest, read, sent } = setup();
+    markers.setFocused(true);
+    newest.delete("#honk");
+    show("#honk");
+    advance(DELAY - 1);
+    expect(read).toEqual([]);
+    advance(1);
+    expect(read).toEqual(["#honk"]);
+    expect(sent).toEqual([]);
+  });
+
+  test("a buffer you flipped past, or did not read, does not count as read", () => {
+    const { markers, advance, show, read } = setup();
+    markers.setFocused(true);
+    show("#honk");
+    advance(DELAY);
+    show("#bun");
+    advance(DELAY / 2);
+    show("#honk");
+    markers.setFocused(false);
+    advance(DELAY * 3);
+    show("#bun");
+    advance(DELAY * 3);
+    expect(read.filter((buffer) => buffer === "#bun")).toEqual([]);
+  });
+
+  test("leaving a buffer you read for the delay counts it as read at once", () => {
+    const { markers, advance, show, read } = setup();
+    markers.setFocused(true);
+    show("#honk");
+    advance(DELAY);
+    show("#bun");
+    expect(read).toEqual(["#honk", "#honk"]);
   });
 
   test("flipping past a buffer (less than the delay) sends nothing for it", () => {
