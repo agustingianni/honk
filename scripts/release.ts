@@ -4,6 +4,15 @@
 import { $ } from "bun";
 import pkg from "../package.json";
 
+// Each binary carries the Bun that built it. With Bun 1.3.10 inside, `honk
+// upgrade` hangs on the download (oven-sh/bun#13237). The workflows pin 1.4.5.
+const MIN_BUN = "1.4.5";
+// Bun.semver itself is missing before Bun 1.0.11.
+if (!Bun.semver || Bun.semver.order(Bun.version, MIN_BUN) < 0) {
+  console.error(`release: this is Bun ${Bun.version}, and a release needs Bun ${MIN_BUN} or later. Run: bun upgrade`);
+  process.exit(1);
+}
+
 const targets = [
   "darwin-arm64",
   "darwin-x64",
@@ -42,7 +51,10 @@ const version = await releaseVersion();
 console.log(`building honk ${version}`);
 
 const all = "*"; // passed as a value so the shell does not expand it as a glob
-await $`bun install --os=${all} --cpu=${all}`;
+// --libc too: since Bun 1.4.4, on Linux, bun install skips the musl packages
+// on glibc (and the other way round) once bun.lock records each one's libc.
+// --frozen-lockfile: build from the committed bun.lock, never a new one.
+await $`bun install --frozen-lockfile --os=${all} --cpu=${all} --libc=${all}`;
 await $`rm -rf dist`;
 
 for (const target of targets) {
