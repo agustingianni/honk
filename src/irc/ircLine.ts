@@ -22,9 +22,10 @@ export const MAX_LINE_BYTES = 64 * 1024;
  *   push("PING a\r\n" + 100_000 x "x" + "\r\nPING b\r\n")
  *   -> onLine("PING a"), onTooLong(), onLine("PING b")
  */
+// Each line is decoded on its own, so a U+FEFF at the start of a line must stay.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+
 export class LineSplitter {
-  // Each line is decoded on its own, so a U+FEFF at the start of a line must stay.
-  private decoder = new TextDecoder("utf-8", { ignoreBOM: true });
   /** The start of a line whose "\n" has not come yet. */
   private pending: Uint8Array[] = [];
   private pendingBytes = 0;
@@ -72,7 +73,10 @@ export class LineSplitter {
       this.pending = [];
       this.pendingBytes = 0;
       whole.push(lineBytes);
-      const line = this.decoder.decode(lineBytes).replace(/\r?\n$/, "");
+      // Without "\n", and without "\r" before it.
+      let n = lineBytes.length - 1;
+      if (n > 0 && lineBytes[n - 1] === 13) n--;
+      const line = decoder.decode(lineBytes.subarray(0, n));
       if (line) this.onLine(line);
     }
     return concat(whole);

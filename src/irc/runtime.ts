@@ -51,15 +51,26 @@ export function describeLineError(line: string, err: unknown): { key: string; te
 }
 
 export function guardLines(onLine: LineListener, onLineError: LineErrorListener): LineListener {
+  const report = neverThrow(onLineError);
   return (line) => {
     try {
       onLine(line);
     } catch (err) {
-      try {
-        onLineError(line, err);
-      } catch {
-        // Reporting the error failed too. Drop it: it must never end honk.
-      }
+      report(line, err);
+    }
+  };
+}
+
+/**
+ * `fn`, but what it throws is dropped. For a callback that runs inside the socket's
+ * "data" listener and only reports something: it must never end honk (see guardLines).
+ */
+function neverThrow<A extends unknown[]>(fn: (...args: A) => void): (...args: A) => void {
+  return (...args) => {
+    try {
+      fn(...args);
+    } catch {
+      // Dropped on purpose.
     }
   };
 }
@@ -90,7 +101,7 @@ class NodeSocketConn implements Conn {
         const len = Math.min(bytes.length, req.buffer.length);
         req.buffer.set(bytes.subarray(0, len));
         if (bytes.length > req.buffer.length) {
-          this.chunks.push(new Uint8Array(bytes.subarray(req.buffer.length)));
+          this.chunks.push(bytes.subarray(req.buffer.length));
         }
         req.resolve(len);
       } else {
@@ -209,18 +220,10 @@ export function createNodeRuntime(
   signal: AbortSignal | undefined,
   onLine: LineListener,
   onLineError: LineErrorListener,
-  onTooLong: TooLongListener = () => {},
+  onTooLong: TooLongListener,
 ) {
   onLine = guardLines(onLine, onLineError);
-  // Called inside the socket's "data" listener too, so it must not throw either.
-  const reportTooLong = onTooLong;
-  onTooLong = () => {
-    try {
-      reportTooLong();
-    } catch {
-      // Dropped: it must never end honk.
-    }
-  };
+  onTooLong = neverThrow(onTooLong);
   return {
     connect(opts: { hostname: string; port: number }): Promise<Conn> {
       return whenConnected(netConnect(opts.port, opts.hostname), "connect", signal, onLine, onTooLong);

@@ -71,6 +71,7 @@ test("a line listener that throws does not stop the data for irc-client-ts", asy
       if (line === "BOOM") throw new Error("cannot handle it");
     },
     (line, err) => errors.push(`${line}: ${(err as Error).message}`),
+    () => {},
   );
 
   const conn = await runtime.connect({ hostname: "127.0.0.1", port });
