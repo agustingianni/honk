@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { nickColor, prefixColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState } from "../types.ts";
+import { Clickable } from "./Clickable.tsx";
 import { HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 
 interface NicklistProps {
@@ -15,7 +16,7 @@ export const Nicklist = memo(function Nicklist({
   myNick,
   onSelectUser,
 }: NicklistProps) {
-  useThemeVersion();
+  const themeVersion = useThemeVersion();
   const myLower = myNick.toLowerCase();
 
   return (
@@ -49,37 +50,53 @@ export const Nicklist = memo(function Nicklist({
               <text fg={theme.fgDim}>No users</text>
             </box>
           ) : (
-            users.map((u) => {
-              const isSelf = u.nick.toLowerCase() === myLower;
-              const color = isSelf ? theme.accent : nickColor(u.nick);
-              return (
-                <box
-                  key={u.nick}
-                  height={1}
-                  paddingLeft={1}
-                  paddingRight={1}
-                  onMouseDown={() => {
-                    if (!isSelf) onSelectUser(u.nick);
-                  }}
-                >
-                  <text>
-                    <span fg={prefixColor(u.prefix)}>
-                      {u.prefix ? u.prefix : " "}
-                    </span>
-                    <span fg={color}>
-                      {isSelf ? (
-                        <strong>{truncate(u.nick, 16)}</strong>
-                      ) : (
-                        truncate(u.nick, 16)
-                      )}
-                    </span>
-                  </text>
-                </box>
-              );
-            })
+            users.map((u) => (
+              <NickRow
+                key={u.nick}
+                nick={u.nick}
+                prefix={u.prefix}
+                isSelf={u.nick.toLowerCase() === myLower}
+                onSelectUser={onSelectUser}
+                themeVersion={themeVersion}
+              />
+            ))
           )}
         </box>
       </scrollbox>
     </box>
+  );
+});
+
+interface NickRowProps {
+  nick: string;
+  prefix: string;
+  isSelf: boolean;
+  onSelectUser: (nick: string) => void;
+  /** Only here so that a new theme renders the row again. */
+  themeVersion: number;
+}
+
+/**
+ * Memoized: a join or quit in a channel with thousands of users renders only
+ * the rows that changed, not every row.
+ */
+const NickRow = memo(function NickRow({ nick, prefix, isSelf, onSelectUser }: NickRowProps) {
+  return (
+    <Clickable
+      height={1}
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={theme.bgNicklist}
+      hoverColor={theme.bgRowHover}
+      // Your own nick does nothing on a click, so it gets no hover look.
+      onMouseDown={isSelf ? undefined : () => onSelectUser(nick)}
+    >
+      <text>
+        <span fg={prefixColor(prefix)}>{prefix ? prefix : " "}</span>
+        <span fg={isSelf ? theme.accent : nickColor(nick)}>
+          {isSelf ? <strong>{truncate(nick, 16)}</strong> : truncate(nick, 16)}
+        </span>
+      </text>
+    </Clickable>
   );
 });

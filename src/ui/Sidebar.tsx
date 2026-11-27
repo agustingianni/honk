@@ -1,5 +1,6 @@
 import { STATUS_BUFFER } from "../irc/names.ts";
 import { theme } from "../theme.ts";
+import { Clickable } from "./Clickable.tsx";
 import type { ActiveBuffer, ServerState } from "../types.ts";
 import {
   bufferDisplayName,
@@ -54,10 +55,12 @@ export function Sidebar({
             // The header's bottom padding already spaces the first server; later ones get a gap.
             <box key={server.id} flexDirection="column" marginTop={i === 0 ? 0 : 1}>
               {/* Server header */}
-              <box
+              <Clickable
                 height={1}
                 paddingLeft={1}
                 paddingRight={1}
+                backgroundColor={theme.bgSidebar}
+                hoverColor={theme.bgRowHover}
                 onMouseDown={() => {
                   onSelect(server.id, STATUS_BUFFER);
                   if (server.status === "disconnected" && server.config.host) {
@@ -71,7 +74,7 @@ export function Sidebar({
                     <strong>{truncate(server.name, 19)}</strong>
                   </span>
                 </text>
-              </box>
+              </Clickable>
 
               {/* Buffers under this server */}
               {server.bufferOrder.map((bufName) => {
@@ -83,7 +86,7 @@ export function Sidebar({
                 const maxNameLen = buf.unread > 0 ? 13 : 18;
 
                 return (
-                  <box
+                  <Clickable
                     key={bufName}
                     height={1}
                     flexDirection="row"
@@ -92,6 +95,7 @@ export function Sidebar({
                     backgroundColor={
                       isActive ? theme.bgActiveRow : theme.bgSidebar
                     }
+                    hoverColor={isActive ? undefined : theme.bgRowHover}
                     onMouseDown={() => onSelect(server.id, bufName)}
                   >
                     <text>
@@ -125,7 +129,7 @@ export function Sidebar({
                         <strong>{unreadBadge(buf.unread)}</strong>
                       </text>
                     )}
-                  </box>
+                  </Clickable>
                 );
               })}
             </box>

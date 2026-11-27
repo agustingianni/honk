@@ -28,6 +28,9 @@ export interface Theme {
   bgMention: string; // highlighted mention message row
   bgOverlay: string; // floating omnibox surface
   bgOverlaySel: string; // selected omnibox item
+  bgRowHover: string; // sidebar or nicklist row under the mouse
+  bgActiveRowHover: string; // "new messages below" bar under the mouse
+  bgOverlayHover: string; // omnibox item under the mouse
   borderOverlay: string; // omnibox border
   gutter: string; // hairlines and separators
 
@@ -67,6 +70,8 @@ const HEX = /^#[0-9a-fA-F]{6}$/;
 export const MIN_TEXT_CONTRAST = 4.5;
 /** Accent colors are moved toward the bright text until they reach this. */
 export const MIN_ACCENT_CONTRAST = 3;
+/** A row under the mouse has at least this contrast with its normal background. */
+export const MIN_HOVER_CONTRAST = 1.04;
 /** Side panels closer than this to the chat background cannot be seen apart from it... */
 export const MIN_PANEL_CONTRAST = 1.03;
 /** ...so they are made lighter, until they reach this. */
@@ -149,6 +154,7 @@ export function schemeToTheme(scheme: Scheme): Theme {
   // The selection background, softened when it is far from base00 (solarized
   // puts a strong gray there).
   const selection = nearBg(p.base02) ?? mix(bg, p.base02!, 0.4);
+  const overlay = mix(bg, fg, 0.05);
 
   // Use a text slot only when it is readable and gray; otherwise fade the
   // main text toward the background.
@@ -188,8 +194,11 @@ export function schemeToTheme(scheme: Scheme): Theme {
     bgInput: input,
     bgActiveRow: selection,
     bgMention: mix(bg, p.base08!, 0.15),
-    bgOverlay: mix(bg, fg, 0.05),
+    bgOverlay: overlay,
     bgOverlaySel: selection,
+    bgRowHover: hoverColor(darker, selection, fg),
+    bgActiveRowHover: hoverColor(selection, selection, fg),
+    bgOverlayHover: hoverColor(overlay, selection, fg),
     borderOverlay: mix(bg, fgMuted, 0.6),
     gutter: mix(bg, fgMuted, 0.6),
 
@@ -253,6 +262,35 @@ export function stepUntil(from: string, to: string, bg: string, target: number):
     if (contrast(color, bg) >= target) return color;
   }
   return to;
+}
+
+/**
+ * The background of a row under the mouse: half-way to the selection color,
+ * so it never looks like the selected row. When that is too faint to see, the
+ * smallest visible step toward the selection color, or toward the text color
+ * when the selection color itself is that faint (or is the row's own color).
+ */
+export function hoverColor(background: string, selection: string, text: string): string {
+  const half = mix(background, selection, 0.5);
+  if (contrast(half, background) >= MIN_HOVER_CONTRAST) return half;
+  const toward = contrast(selection, background) > MIN_HOVER_CONTRAST ? selection : text;
+  return smallestStep(background, toward, MIN_HOVER_CONTRAST);
+}
+
+/**
+ * The color nearest `from`, on the way to `to`, with `target` contrast against
+ * `from`. stepUntil moves in 1% steps of the whole distance, and toward the
+ * text color one step can overshoot 1.04:1 by half; this bisects instead.
+ */
+function smallestStep(from: string, to: string, target: number): string {
+  let low = 0;
+  let high = 1;
+  for (let i = 0; i < 20; i++) {
+    const middle = (low + high) / 2;
+    if (contrast(mix(from, to, middle), from) >= target) high = middle;
+    else low = middle;
+  }
+  return mix(from, to, high);
 }
 
 /** WCAG contrast ratio, from 1 (same color) to 21 (black on white). */

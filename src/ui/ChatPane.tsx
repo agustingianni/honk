@@ -4,6 +4,7 @@ import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { sameNick, STATUS_BUFFER } from "../irc/names.ts";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
+import { Clickable } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
 import { HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { FormattedText, LinkedText } from "./format.tsx";
@@ -454,17 +455,18 @@ export function ChatPane({
       </scrollbox>
 
       {newBelow > 0 && (
-        <box
+        <Clickable
           height={1}
           paddingLeft={2}
           backgroundColor={theme.bgActiveRow}
+          hoverColor={theme.bgActiveRowHover}
           onMouseDown={jumpToBottom}
         >
           <text fg={theme.accent}>
             {newBelow} new {newBelow === 1 ? "message" : "messages"} below{" "}
             <span fg={theme.fgMuted}>(PgDn or click to read)</span>
           </text>
-        </box>
+        </Clickable>
       )}
 
       {/* Shaded prompt input bar */}

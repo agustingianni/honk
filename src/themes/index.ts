@@ -37,6 +37,9 @@ const TOKYO_NIGHT: Theme = {
   bgMention: "#2b2135",
   bgOverlay: "#1f2335",
   bgOverlaySel: "#292e42",
+  bgRowHover: "#1c1e2c",
+  bgActiveRowHover: "#272b3e",
+  bgOverlayHover: "#24293c",
   borderOverlay: "#3b4261",
   gutter: "#3b4261",
 

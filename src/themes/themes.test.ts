@@ -14,6 +14,7 @@ import {
   checkScheme,
   contrast,
   MIN_ACCENT_CONTRAST,
+  MIN_HOVER_CONTRAST,
   MIN_PANEL_CONTRAST,
   MIN_TEXT_CONTRAST,
   mix,
@@ -57,6 +58,23 @@ describe("bundled themes", () => {
       }
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);
+      // A row under the mouse shows, but looks weaker than the selected row.
+      // Where the selection color is itself hard to see (broadcast's omnibox:
+      // 1.015:1), the accent bar marks the selected row, and the hover stays
+      // at the smallest visible step.
+      for (const [background, hover, selection] of [
+        [t.bgSidebar, t.bgRowHover, t.bgActiveRow],
+        [t.bgNicklist, t.bgRowHover, t.bgActiveRow],
+        [t.bgOverlay, t.bgOverlayHover, t.bgOverlaySel],
+        [t.bgActiveRow, t.bgActiveRowHover, t.bgActiveRow],
+      ] as const) {
+        const shown = contrast(hover, background);
+        expect(shown, hover).toBeGreaterThanOrEqual(MIN_HOVER_CONTRAST - 0.01);
+        const selected = contrast(selection, background);
+        if (selection !== background) {
+          expect(shown, hover).toBeLessThan(Math.max(selected, MIN_HOVER_CONTRAST + 0.01));
+        }
+      }
       for (const [key, value] of Object.entries(t)) {
         const colors = Array.isArray(value) ? value : [value];
         for (const c of colors) expect(c, key).toMatch(/^#[0-9a-f]{6}$/);

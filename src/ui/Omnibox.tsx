@@ -5,6 +5,7 @@ import type { ThemeEntry } from "../themes/index.ts";
 import { findSlashCommand, needsArgs, SLASH_COMMANDS, syntax } from "../irc/commands.ts";
 import { sameNick } from "../irc/names.ts";
 import type { ActiveBuffer, ServerState } from "../types.ts";
+import { Clickable } from "./Clickable.tsx";
 import { bufferDisplayName, truncate, unreadBadge } from "./display.ts";
 import { type FuzzyMatch, fuzzyMatch, matchLabel, rankMatches, shorterFirst } from "./fuzzy.ts";
 
@@ -810,13 +811,14 @@ export function Omnibox({
             const isSel = windowStart + row === selectedIndex;
             const { label, detail } = fitRow(item, rowWidth);
             return (
-              <box
+              <Clickable
                 key={item.id}
                 height={1}
                 paddingRight={1}
                 flexDirection="row"
                 justifyContent="space-between"
                 backgroundColor={isSel ? theme.bgOverlaySel : theme.bgOverlay}
+                hoverColor={isSel ? undefined : theme.bgOverlayHover}
                 onMouseDown={() => select(item)}
               >
                 <text>
@@ -844,7 +846,7 @@ export function Omnibox({
                     </span>
                   ) : null}
                 </text>
-              </box>
+              </Clickable>
             );
           })
         )}
