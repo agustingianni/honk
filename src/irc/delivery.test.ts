@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine } from "./delivery.ts";
-import { fakeClock } from "./fakeClock.ts";
+import { fakeClock } from "../fakeClock.ts";
 
 function setup() {
   const timers = fakeClock();

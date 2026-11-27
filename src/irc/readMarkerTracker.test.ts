@@ -4,7 +4,7 @@ import {
   PRESENT_AFTER_KEY_MS,
   ReadMarkerTracker,
 } from "./readMarker.ts";
-import { fakeClock } from "./fakeClock.ts";
+import { fakeClock } from "../fakeClock.ts";
 import type { ActiveBuffer } from "../types.ts";
 
 const DELAY = MARK_READ_DELAY_MS;

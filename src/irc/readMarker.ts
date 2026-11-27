@@ -19,7 +19,7 @@
  */
 
 import type { ActiveBuffer, ChatMessage } from "../types.ts";
-import { systemClock, type Clock } from "./clock.ts";
+import { systemClock, type Clock } from "../clock.ts";
 import { parseTimestampParam } from "./ircLine.ts";
 import { nameKey } from "./names.ts";
 

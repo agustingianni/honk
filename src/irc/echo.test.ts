@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bu
 import { FakeIrcd } from "../../dev/fakeircd/server.ts";
 import { until } from "../../dev/fakeircd/testing.ts";
 import { ECHO_WAIT_MS, EchoTracker, MAX_WAITING_ECHOES, type SentPart } from "./echo.ts";
-import { fakeClock } from "./fakeClock.ts";
+import { fakeClock } from "../fakeClock.ts";
 import { IrcManager } from "./manager.ts";
 
 /** A plain message part. */

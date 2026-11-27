@@ -14,7 +14,7 @@
  * server, with or without IRCv3 echo-message.
  */
 
-import { systemClock, type Clock } from "./clock.ts";
+import { systemClock, type Clock } from "../clock.ts";
 import { sameNick } from "./names.ts";
 
 /** How long to wait for the PONG. Long enough for a slow link, short enough to notice a dead one. */

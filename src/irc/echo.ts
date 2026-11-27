@@ -19,7 +19,7 @@
  */
 
 import { stripIrcFormatting } from "../notify.ts";
-import { systemClock, type Clock } from "./clock.ts";
+import { systemClock, type Clock } from "../clock.ts";
 import { nameKey } from "./names.ts";
 
 /** Parts kept per server, so lines that never match can't pile up. */

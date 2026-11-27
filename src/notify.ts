@@ -10,6 +10,7 @@
  * src/notifyProtocol.ts.
  */
 
+import { systemClock, type Clock } from "./clock.ts";
 import type { BufferKind, MessageKind } from "./types.ts";
 
 /** A mention or DM that just arrived, as the IRC manager reports it. */
@@ -74,7 +75,7 @@ export class Notifier {
 
   constructor(
     send: SendNotification,
-    private readonly now: () => number = Date.now,
+    private readonly clock: Clock = systemClock,
   ) {
     this.send = (message, title) =>
       send(message.replace(BIDI_AND_C1, ""), title.replace(BIDI_AND_C1, ""));
@@ -89,7 +90,7 @@ export class Notifier {
     if (this.focused && event.isActiveBuffer) return false;
 
     const key = `${event.serverId}\0${event.bufferName}`;
-    const now = this.now();
+    const now = this.clock.now();
     const last = this.lastSent.get(key);
     if (last !== undefined && now - last < NOTIFY_COOLDOWN_MS) return false;
 
