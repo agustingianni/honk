@@ -257,6 +257,30 @@ To turn notifications off, add this to the top level of the config file:
 { "notifications": false, "servers": [] }
 ```
 
+### Join and part lines
+
+In a busy channel, lines such as "alice joined #honk" and "bob quit" can push
+the conversation off the screen. To show them only for people who talk, add
+this to the top level of the config file:
+
+```json
+{ "joinPart": "smart", "servers": [] }
+```
+
+`joinPart` takes one of these values:
+
+- `"all"` shows every join, part, quit and nick change line. This is the default.
+- `"smart"` shows such a line only if that person sent a message, an action or
+  a notice in the channel in the 10 minutes before or after it. So the quits of
+  a netsplit stay hidden, and when someone joins and then talks, their join
+  line shows. After a nick change, talk under the old nick and the new nick
+  both count.
+- `"none"` hides all of them.
+
+honk always shows your own joins, kicks, and every line in a DM or in
+`*status`. Hidden lines are not deleted: change the setting and restart honk to
+see them again.
+
 ### Themes
 
 To choose a color theme, press Ctrl+K and type `theme`, or pick

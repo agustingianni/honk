@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/react/test-utils";
 import { act, useState } from "react";
 import { TextAttributes, type MousePointerStyle } from "@opentui/core";
+import type { JoinPartMode } from "../config.ts";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
 import { ChatPane } from "./ChatPane.tsx";
 
@@ -19,6 +20,7 @@ interface Handlers {
   onOpenLink?: (href: string) => void;
   onSelectUser?: (nick: string) => void;
   onJoinChannel?: (channel: string) => void;
+  joinPart?: JoinPartMode;
 }
 
 /**
@@ -58,6 +60,7 @@ async function renderPane(buffer: Partial<BufferState>, width = 60, handlers: Ha
       onSelectUser={handlers.onSelectUser ?? (() => {})}
       onJoinChannel={handlers.onJoinChannel ?? (() => {})}
       onOpenLink={handlers.onOpenLink}
+      joinPart={handlers.joinPart ?? "all"}
     />,
     { width, height: 24 },
   );
@@ -112,6 +115,50 @@ for (const count of [3, 60]) {
     });
   }
 }
+
+describe("joinPart", () => {
+  const quit: ChatMessage = {
+    id: "q",
+    timestamp: new Date(2026, 10, 27, 12, 0),
+    kind: "part",
+    nick: "lurker",
+    text: "lurker quit",
+  };
+  // fern, a hidden quit, then fern again: the first unread line is the quit.
+  const buffer = { messages: [message(1), quit, message(2)], firstUnreadId: "q" };
+
+  test('"none" hides the quit, keeps the group, and moves the divider to the next line', async () => {
+    const { screen, destroy } = await renderPane(buffer, 60, { joinPart: "none" });
+    destroy();
+    const text = screen.join("\n");
+    expect(text).not.toContain("lurker quit");
+    const divider = screen.findIndex((row) => row.includes(" new "));
+    const line2 = screen.findIndex((row) => row.includes("line 2"));
+    expect(divider).toBeGreaterThan(-1);
+    expect(line2).toBeGreaterThan(divider);
+    // After the divider, line 2 starts a new group, so it shows the nick again.
+    expect(screen[line2]).toContain("fern");
+  });
+
+  test('a hidden quit between two lines from one nick does not split the group', async () => {
+    const { screen, destroy } = await renderPane({ messages: buffer.messages }, 60, { joinPart: "none" });
+    destroy();
+    expect(screen.filter((row) => row.includes("fern"))).toHaveLength(1);
+  });
+
+  test('"all" shows the quit', async () => {
+    const { screen, destroy } = await renderPane(buffer, 60, { joinPart: "all" });
+    destroy();
+    expect(screen.join("\n")).toContain("lurker quit");
+  });
+
+  test("a DM shows the quit whatever the setting", async () => {
+    const dm = { ...buffer, name: "fern", kind: "dm" as const };
+    const { screen, destroy } = await renderPane(dm, 60, { joinPart: "none" });
+    destroy();
+    expect(screen.join("\n")).toContain("lurker quit");
+  });
+});
 
 test("nicks with wide characters keep the message text in line", async () => {
   const nicks = ["fern", "田中さん", "Zoë", "田中さん田中さん田中"];
@@ -210,6 +257,7 @@ test("after the topic changes, a click opens the link it shows now", async () =>
         onSelectUser={() => {}}
         onJoinChannel={() => {}}
         onOpenLink={(href) => opened.push(href)}
+        joinPart="all"
       />
     );
   }

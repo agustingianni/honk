@@ -3,12 +3,14 @@ import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isUserSender, nameKey, sameNick, STATUS_BUFFER } from "../irc/names.ts";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
+import type { JoinPartMode } from "../config.ts";
 import type { BufferState, ChatMessage, NickEntry, ServerState } from "../types.ts";
 import { linkOpener } from "../openUrl.ts";
 import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
 import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
+import { visibleMessages } from "./joinPartFilter.ts";
 
 interface ChatPaneProps {
   server: ServerState | undefined;
@@ -24,12 +26,15 @@ interface ChatPaneProps {
   onJoinChannel: (channel: string) => void;
   /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
   onOpenLink?: (href: string) => void;
+  /** Which join, part, quit and nick change lines a channel shows. */
+  joinPart: JoinPartMode;
 }
 
 /** Undefined over SSH and on platforms honk cannot open a browser on. */
 const openLink = linkOpener();
 
 const NO_USERS: NickEntry[] = [];
+const NO_MESSAGES: ChatMessage[] = [];
 const NICK_COL_WIDTH = 12;
 /** Time (5), a space, then the nick column. The message body starts after this. */
 const LABEL_COL_WIDTH = 5 + 1 + NICK_COL_WIDTH;
@@ -144,7 +149,7 @@ const MessageRow = memo(function MessageRow({
       body = <span fg={theme.red}>{msg.text}</span>;
       break;
     default: {
-      // join, part, system
+      // join, part, nick, system
       label = msg.kind === "join" ? "→" : msg.kind === "part" ? "←" : "·";
       labelFg = theme.fgDim;
       body =
@@ -266,6 +271,7 @@ export function ChatPane({
   onSelectUser,
   onJoinChannel,
   onOpenLink = openLink,
+  joinPart,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
@@ -433,6 +439,29 @@ export function ChatPane({
     [findNick, onSelectUser, onJoinChannel],
   );
 
+  // Lines hidden by the joinPart setting stay in the buffer; they are only not drawn.
+  // Only channels hide lines: a DM and *status show everything.
+  const allMessages = buffer?.messages ?? NO_MESSAGES;
+  const shown = useMemo(
+    () => visibleMessages(allMessages, buffer?.kind === "channel" ? joinPart : "all"),
+    [allMessages, buffer?.kind, joinPart],
+  );
+  // The unread divider goes above the first unread line, or, if that line is
+  // hidden, above the next line that is shown.
+  const dividerId = useMemo(() => {
+    const first = buffer?.firstUnreadId;
+    if (!first || shown === allMessages) return first;
+    const at = allMessages.findIndex((m) => m.id === first);
+    if (at === -1) return undefined;
+    // `shown` is `allMessages` with some lines left out, in the same order.
+    let i = 0;
+    for (const m of shown) {
+      while (allMessages[i] !== m) i++;
+      if (i >= at) return m.id;
+    }
+    return undefined;
+  }, [buffer?.firstUnreadId, allMessages, shown]);
+
   const jumpToBottom = () => scrollRef.current?.scrollTo(scrollRef.current.scrollHeight);
 
   const title = buffer ? buffer.name : STATUS_BUFFER;
@@ -525,9 +554,11 @@ export function ChatPane({
       >
         {/* No top padding: the header's own bottom padding is the gap. */}
         <box flexDirection="column" paddingBottom={1}>
-          {buffer?.messages.map((msg, idx) => {
-            const showDivider = msg.id === buffer.firstUnreadId;
-            const prev = idx > 0 ? buffer.messages[idx - 1] : undefined;
+          {shown.map((msg, idx) => {
+            const showDivider = msg.id === dividerId;
+            // The previous line on screen, so two lines from one nick still group
+            // when a hidden quit sits between them.
+            const prev = idx > 0 ? shown[idx - 1] : undefined;
             const grouped =
               !showDivider &&
               msg.kind === "message" &&
@@ -541,7 +572,7 @@ export function ChatPane({
                 <MessageRow
                   msg={msg}
                   grouped={grouped}
-                  highlightMentions={buffer.kind === "channel"}
+                  highlightMentions={buffer?.kind === "channel"}
                   names={names}
                 />
               </box>

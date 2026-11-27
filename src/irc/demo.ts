@@ -14,6 +14,8 @@ export interface DemoLine {
   mins: number;
   kind: MessageKind;
   from?: string;
+  /** Who joined or left, on a join or part line. */
+  nick?: string;
   text: string;
   /** Not read yet: counts toward the buffer's unread badge, and the first one gets the divider. */
   unread?: boolean;
@@ -82,7 +84,7 @@ export const DEMO_NETWORKS: DemoNetwork[] = [
         topic: `${B}honk${B}, a terminal IRC client | ${c("11", "https://agustingianni.github.io/honk")} | v0.1.0 is out`,
         users: HONK_USERS,
         lines: [
-          { mins: 48, kind: "join", text: "heron joined #honk" },
+          { mins: 48, kind: "join", nick: "heron", text: "heron joined #honk" },
           { mins: 47, kind: "message", from: "alice", text: "morning all" },
           { mins: 46, kind: "message", from: "gander", text: "morning! v0.1.0 binaries are up" },
           { mins: 46, kind: "message", from: "gander", text: "curl -fsSL https://agustingianni.github.io/honk/install.sh | sh" },
@@ -90,8 +92,9 @@ export const DEMO_NETWORKS: DemoNetwork[] = [
           { mins: 41, kind: "action", from: "charlie", text: "is trying it over ssh on a raspberry pi" },
           { mins: 40, kind: "message", from: "charlie", text: "works on arm64 too" },
           { mins: 33, kind: "message", from: "eve", text: `colors render fine: ${c("04", "red")} ${c("08", "yellow")} ${c("09", "green")} ${c("12", "blue")} and ${B}bold${B} ${I}italic${I}` },
-          { mins: 31, kind: "part", text: "dave left #honk" },
-          { mins: 30, kind: "join", text: "dave joined #honk" },
+          { mins: 31, kind: "part", nick: "dave", text: "dave left #honk" },
+          { mins: 30, kind: "join", nick: "dave", text: "dave joined #honk" },
+          { mins: 26, kind: "join", nick: "robin", text: "robin joined #honk" },
           { mins: 24, kind: "message", from: "robin", text: "is there a way to load older messages?" },
           { mins: 23, kind: "message", from: "alice", text: "/history, if the network supports chathistory. libera does" },
           { mins: 9, kind: "message", from: "mallard", text: "goose: the new omnibox is great, ctrl+k and type", unread: true },

@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, loadConfig, saveThemeSetting, setThemeInConfigText } from "./config.ts";
+import {
+  ConfigError,
+  JOIN_PART_MODES,
+  loadConfig,
+  parseJoinPartSetting,
+  saveThemeSetting,
+  setThemeInConfigText,
+} from "./config.ts";
 
 describe("setThemeInConfigText", () => {
   test("replaces an existing theme and keeps the rest of the text", () => {
@@ -132,5 +139,39 @@ describe("loadConfig with a broken file", () => {
     const err = loadError("[1, 2]");
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as Error).message).toEndWith('must hold a JSON object, such as {"servers": [...]}');
+  });
+});
+
+describe("joinPart", () => {
+  /** The joinPart setting of a config file holding `text`. */
+  function joinPartOf(text: string) {
+    const dir = mkdtempSync(join(tmpdir(), "honk-config-"));
+    try {
+      const path = join(dir, "honk.json");
+      writeFileSync(path, text);
+      return parseJoinPartSetting(loadConfig(["--config", path]).joinPart);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("reads all, smart and none", () => {
+    for (const mode of JOIN_PART_MODES) {
+      expect(joinPartOf(`{ "joinPart": "${mode}", "servers": [] }`)).toEqual({ mode });
+    }
+  });
+
+  test("a missing key is all, with no warning", () => {
+    expect(joinPartOf(`{ "servers": [] }`)).toEqual({ mode: "all" });
+    expect(joinPartOf(`{}`)).toEqual({ mode: "all" });
+  });
+
+  test("a wrong value is all, with a warning that names the values", () => {
+    const setting = joinPartOf(`{ "joinPart": "smrt", "servers": [] }`);
+    expect(setting.mode).toBe("all");
+    expect(setting.warning).toBe(
+      '"joinPart" should be one of all, smart, none, not "smrt". Showing all join and part lines.',
+    );
+    expect(parseJoinPartSetting(true).warning).toContain("not true");
   });
 });

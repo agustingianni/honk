@@ -1286,7 +1286,11 @@ export class IrcManager {
         this.pushMessage(
           serverId,
           channel,
-          makeMessage("join", `You joined ${channel}`),
+          makeMessage("join", `You joined ${channel}`, {
+            nick: who,
+            isSelf: true,
+            timestamp: tagTime(msg.tags),
+          }),
         );
         // Fetch recent scrollback from bouncer/server if draft/chathistory is enabled
         if (client.state.caps.enabled.has("draft/chathistory")) {
@@ -1296,7 +1300,7 @@ export class IrcManager {
         this.pushMessage(
           serverId,
           channel,
-          makeMessage("join", `${who} joined ${channel}`),
+          makeMessage("join", `${who} joined ${channel}`, { nick: who, timestamp: tagTime(msg.tags) }),
         );
       }
     });
@@ -1313,7 +1317,10 @@ export class IrcManager {
         this.pushMessage(
           serverId,
           channel,
-          makeMessage("part", `${who} left ${channel}${reason}`),
+          makeMessage("part", `${who} left ${channel}${reason}`, {
+            nick: who,
+            timestamp: tagTime(msg.tags),
+          }),
         );
       }
     });
@@ -1324,7 +1331,11 @@ export class IrcManager {
       const who = normalizeNick(msg.source?.name);
       const reason = msg.params.comment ? ` (${msg.params.comment})` : "";
       for (const bufName of priorChannels.get(msg) ?? channelsWithNick(server, who)) {
-        this.pushMessage(serverId, bufName, makeMessage("part", `${who} quit${reason}`));
+        this.pushMessage(
+          serverId,
+          bufName,
+          makeMessage("part", `${who} quit${reason}`, { nick: who, timestamp: tagTime(msg.tags) }),
+        );
       }
     });
 
@@ -1366,8 +1377,9 @@ export class IrcManager {
         return;
       }
       const line = `${oldNick} is now known as ${newNick}`;
+      const nickLine = () => makeMessage("nick", line, { nick: oldNick, newNick, timestamp: tagTime(msg.tags) });
       for (const bufName of priorChannels.get(msg) ?? channelsWithNick(server, oldNick)) {
-        this.pushMessage(serverId, bufName, makeMessage("system", line));
+        this.pushMessage(serverId, bufName, nickLine());
       }
       // An open DM follows the person to the new nick. If a DM with the new nick is
       // already open, the old one is merged into it, so one person has one DM.
@@ -1377,7 +1389,7 @@ export class IrcManager {
         } else {
           this.renameBuffer(serverId, oldNick, newNick);
         }
-        this.pushMessage(serverId, newNick, makeMessage("system", line));
+        this.pushMessage(serverId, newNick, nickLine());
       }
     });
 
@@ -2411,6 +2423,7 @@ export class IrcManager {
         for (const line of def.lines) {
           const msg = makeMessage(line.kind, line.text, {
             from: line.from,
+            nick: line.nick,
             timestamp: new Date(now - line.mins * 60_000),
             isMention:
               line.from !== undefined &&
@@ -2535,7 +2548,14 @@ export class IrcManager {
               ...server.buffers,
               [target]: { ...buf, users: demoUsers([]) },
             };
-            this.pushMessage(id, target, makeMessage("join", `${server.nick} joined ${target}`));
+            this.pushMessage(
+              id,
+              target,
+              makeMessage("join", `${server.nick} joined ${target}`, {
+                nick: server.nick,
+                isSelf: true,
+              }),
+            );
           }
           this.setActive(id, target);
         }

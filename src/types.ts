@@ -28,6 +28,12 @@ export interface AppConfig {
   /** Color theme id, such as "nord". See src/themes/index.ts. */
   theme?: string;
   /**
+   * Which join, part, quit and nick change lines channels show: "all", "smart" or
+   * "none". Any other value is kept so startup can warn about it. See
+   * src/ui/joinPartFilter.ts.
+   */
+  joinPart?: unknown;
+  /**
    * The config file: the one honk read, or the --config path even if that file
    * does not exist yet. Settings saved from the UI go there. Set by loadConfig,
    * never read from the file.
@@ -49,6 +55,7 @@ export type MessageKind =
   | "system"
   | "join"
   | "part"
+  | "nick"
   | "error";
 
 export interface ChatMessage {
@@ -57,6 +64,13 @@ export interface ChatMessage {
   timestamp: Date;
   kind: MessageKind;
   from?: string;
+  /**
+   * On a join, part or quit line, who joined or left; on a nick change line, the
+   * old nick. Not `from`: these people did not write the line.
+   */
+  nick?: string;
+  /** On a nick change line, the new nick. */
+  newNick?: string;
   text: string;
   isMention?: boolean;
   isSelf?: boolean;

@@ -5,6 +5,7 @@ import {
   useTerminalDimensions,
 } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { JoinPartMode } from "./config.ts";
 import type { IrcManager } from "./irc/manager.ts";
 import { STATUS_BUFFER } from "./irc/names.ts";
 import { withActionUsed } from "./state.ts";
@@ -33,6 +34,8 @@ interface AppProps {
   initialRecentActions: Record<string, number>;
   /** Called after an action is used, to save the new order. */
   onRecentActionsChanged: (recent: Record<string, number>) => void;
+  /** Which join, part, quit and nick change lines channels show. */
+  joinPart: JoinPartMode;
 }
 
 export function App({
@@ -42,6 +45,7 @@ export function App({
   onThemeChosen,
   initialRecentActions,
   onRecentActionsChanged,
+  joinPart,
 }: AppProps) {
   const renderer = useRenderer();
   const { width } = useTerminalDimensions();
@@ -228,6 +232,7 @@ export function App({
             onPasteLines={pasteLines}
             onSelectUser={selectUser}
             onJoinChannel={joinChannel}
+            joinPart={joinPart}
           />
 
           {showNicklist && (

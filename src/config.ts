@@ -79,10 +79,12 @@ function readConfigFile(path: string): AppConfig | null {
   }
   const notifications = parsed.notifications ?? true;
   const theme = typeof parsed.theme === "string" ? parsed.theme : undefined;
-  if (!Array.isArray(parsed.servers)) return { servers: [], notifications, theme };
+  const joinPart = parsed.joinPart;
+  if (!Array.isArray(parsed.servers)) return { servers: [], notifications, theme, joinPart };
   return {
     notifications,
     theme,
+    joinPart,
     servers: parsed.servers.map((s, idx) => ({
       id: s.id || s.name || s.host || `server-${idx + 1}`,
       name: s.name || s.id || s.host,
@@ -99,6 +101,23 @@ function readConfigFile(path: string): AppConfig | null {
       channels: s.channels ?? [],
       autoConnect: s.autoConnect ?? true,
     })),
+  };
+}
+
+export const JOIN_PART_MODES = ["all", "smart", "none"] as const;
+export type JoinPartMode = (typeof JOIN_PART_MODES)[number];
+
+function isJoinPartMode(value: unknown): value is JoinPartMode {
+  return (JOIN_PART_MODES as readonly unknown[]).includes(value);
+}
+
+/** Checks the config's `joinPart` value. Missing means "all"; a wrong value is "all" with a warning. */
+export function parseJoinPartSetting(raw: unknown): { mode: JoinPartMode; warning?: string } {
+  if (raw === undefined) return { mode: "all" };
+  if (isJoinPartMode(raw)) return { mode: raw };
+  return {
+    mode: "all",
+    warning: `"joinPart" should be one of ${JOIN_PART_MODES.join(", ")}, not ${JSON.stringify(raw)}. Showing all join and part lines.`,
   };
 }
 

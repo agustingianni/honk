@@ -2,7 +2,14 @@ import { createCliRenderer, type CliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
 import { App } from "./App.tsx";
 import { cliAction, HELP, unknownCommandText } from "./cli.ts";
-import { ConfigError, defaultConfigPath, loadConfig, saveThemeSetting } from "./config.ts";
+import {
+  ConfigError,
+  defaultConfigPath,
+  type JoinPartMode,
+  loadConfig,
+  parseJoinPartSetting,
+  saveThemeSetting,
+} from "./config.ts";
 import { IrcManager } from "./irc/manager.ts";
 import { Notifier } from "./notify.ts";
 import { chooseNotificationProtocol, parseNotificationSetting, readTmuxInfo } from "./notifyProtocol.ts";
@@ -44,6 +51,8 @@ interface HotState {
   /** The omnibox actions used last (see state.ts), kept here across hot reloads too. */
   recentActions: Record<string, number>;
   saveRecentActions: (recent: Record<string, number>) => void;
+  /** The `joinPart` setting from the config. */
+  joinPart: JoinPartMode;
 }
 
 const g = globalThis as unknown as { __ircHot?: HotState };
@@ -78,6 +87,8 @@ if (!g.__ircHot) {
   const selected = selectTheme(config.theme, themes);
   const warnings = [...userThemes.warnings];
   if (selected.warning) warnings.push(selected.warning);
+  const joinPart = parseJoinPartSetting(config.joinPart);
+  if (joinPart.warning) warnings.push(joinPart.warning);
   // Inside tmux and zellij, OpenTUI can't see the terminal and would send no
   // notifications, so honk picks the sequence. See src/notifyProtocol.ts.
   const notifications = parseNotificationSetting(config.notifications);
@@ -162,6 +173,7 @@ if (!g.__ircHot) {
     saveTheme,
     recentActions: loadState(statePath).recentActions,
     saveRecentActions,
+    joinPart: joinPart.mode,
   };
   g.__ircHot = hot;
 }
@@ -178,6 +190,7 @@ hot.root.render(
     onThemeChosen={hot.saveTheme}
     initialRecentActions={hot.recentActions}
     onRecentActionsChanged={hot.saveRecentActions}
+    joinPart={hot.joinPart}
   />,
 );
 hot.renderer.requestRender();
