@@ -1,4 +1,4 @@
-import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
+import type { InputRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isUserSender, nameKey, sameNick, STATUS_BUFFER } from "../irc/names.ts";
@@ -6,8 +6,9 @@ import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, NickEntry, ServerState } from "../types.ts";
 import { linkOpener } from "../openUrl.ts";
 import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from "./Clickable.tsx";
+import { tagBody, tagRow } from "./chatCopy.ts";
 import { getCompletions } from "./completion.ts";
-import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
+import { cellWidth, formatTime, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { dayLabelBefore } from "./dayDivider.ts";
 import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
 
@@ -48,12 +49,6 @@ function isChatLine(m: ChatMessage): boolean {
   return (m.kind === "message" || m.kind === "action" || m.kind === "notice") && !m.isSelf;
 }
 
-function formatTime(date: Date): string {
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
 /** Cuts a label to the nick column. The layout right-aligns it in the column. */
 function shortNick(nick: string): string {
   return truncate(nick, NICK_COL_WIDTH);
@@ -67,14 +62,14 @@ function shortNick(nick: string): string {
  */
 function Divider({ label, color, paneWidth }: { label: string; color: string; paneWidth: number }) {
   const half = (
-    <text flexGrow={1} flexShrink={1} flexBasis={0} minWidth={1} wrapMode="none" fg={color}>
+    <text selectable={false} flexGrow={1} flexShrink={1} flexBasis={0} minWidth={1} wrapMode="none" fg={color}>
       {"─".repeat(Math.max(1, paneWidth))}
     </text>
   );
   return (
     <box flexDirection="row" paddingLeft={1} paddingRight={1}>
       {half}
-      <text flexShrink={0} fg={color}>
+      <text selectable={false} flexShrink={0} fg={color}>
         <strong>{` ${label} `}</strong>
       </text>
       {half}
@@ -159,6 +154,9 @@ const MessageRow = memo(function MessageRow({
     }
   }
 
+  // A copy finds the message of each selected piece of text through these tags.
+  const tagText = useCallback((text: TextRenderable | null) => tagBody(text, msg), [msg]);
+
   // After the message, so its words are not names.
   const notSent = msg.delivery === "failed" && <span fg={theme.red}> (not sent)</span>;
 
@@ -166,6 +164,7 @@ const MessageRow = memo(function MessageRow({
   // continues down beside it.
   return (
     <box
+      ref={(box) => tagRow(box, msg)}
       width="100%"
       flexDirection="row"
       paddingLeft={1}
@@ -202,7 +201,11 @@ const MessageRow = memo(function MessageRow({
         borderColor={theme.gutter}
       >
         {segments ? (
-          <NameText names={names} namesEnd={segments.reduce((n, seg) => n + seg.text.length, 0)}>
+          <NameText
+            names={names}
+            namesEnd={segments.reduce((n, seg) => n + seg.text.length, 0)}
+            textRef={tagText}
+          >
             {(hovered) => (
               <>
                 <Segments
@@ -215,7 +218,7 @@ const MessageRow = memo(function MessageRow({
             )}
           </NameText>
         ) : (
-          <text>
+          <text ref={tagText}>
             {body}
             {notSent}
           </text>
@@ -572,7 +575,7 @@ export function ChatPane({
           hoverColor={theme.bgActiveRowHover}
           onMouseDown={jumpToBottom}
         >
-          <text fg={theme.accent}>
+          <text selectable={false} fg={theme.accent}>
             {newBelow} new {newBelow === 1 ? "message" : "messages"} below{" "}
             <span fg={theme.fgMuted}>{mouse ? "(PgDn or click to read)" : "(PgDn to read)"}</span>
           </text>

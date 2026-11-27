@@ -152,7 +152,8 @@ TLS is on by default. Type `/help` inside the client for the commands.
 | Up, Down, Ctrl+P, Ctrl+N | Walk through the lines you sent |
 | PageUp, PageDown | Scroll the chat by half a screen |
 | Shift+Up, Shift+Down | Scroll the chat by three lines |
-| Ctrl+C | Quit |
+| Ctrl+C | Copy the selected text, or quit when nothing is selected |
+| Esc | Clear the selected text |
 
 In the omnibox, Up and Down (or Ctrl+P and Ctrl+N) move the selection, Enter
 runs it, and Esc closes the omnibox.
@@ -168,6 +169,27 @@ so Alt+U may not reach honk. Two ways around it:
 
 In Ghostty, Alt+Up and Alt+Down work without this, because Option with an
 arrow key types no character.
+
+### Copy text
+
+Drag across the chat to select text, double-click to select a word, or
+triple-click to select a whole message. honk copies the selection to the
+clipboard when you let go of the mouse button, and the status line says
+"Copied". A selection of several messages copies one line per message, like a
+log:
+
+```
+14:02 <kai> 0.9.8 adds renderer-wide selection colors
+14:03 <kai> nice
+```
+
+Over SSH, honk sends the text to your terminal (OSC 52), and the status line
+says "Sent to the terminal clipboard". Some terminals ignore it: in iTerm2,
+turn on "Applications in terminal may access clipboard" (Settings > General >
+Selection). Inside tmux, set `allow-passthrough` as for
+[notifications](#notifications).
+
+To use your terminal's own selection instead, see [Mouse](#mouse).
 
 ### What honk does not do yet
 
@@ -289,8 +311,9 @@ file whose text would be hard to read on its background, and says why in
 ### Mouse
 
 honk uses the mouse: you can click a channel, a nick, a link or an omnibox
-row, and scroll the chat with the wheel. While honk has the mouse, a plain drag
-does not select text in the terminal. Hold a key while you drag instead: Shift
+row, scroll the chat with the wheel, and [copy text](#copy-text) with a drag.
+While honk has the mouse, a plain drag selects text in honk, not in the
+terminal. For the terminal's own selection, hold a key while you drag: Shift
 in most terminals, Option in iTerm2, or Fn in Terminal.app.
 
 To leave the mouse to the terminal, add this to the top level of the config
@@ -303,6 +326,7 @@ file, or run `honk --no-mouse` for one run:
 Then a plain drag selects text, the terminal's copy and search work, and tmux
 copy mode works on honk's pane. These stop working:
 
+- Copying text with honk's own selection. The terminal's copy works instead.
 - Clicking a channel in the sidebar, a nick in the user list, a row in the
   omnibox, a nick, channel or link in the chat or the topic, and the "new
   messages below" bar.

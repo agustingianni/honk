@@ -718,6 +718,8 @@ export function Omnibox({
   };
 
   useKeyboard((key) => {
+    // An Esc that only cleared selected text. See useSelectionCopy.
+    if (key.defaultPrevented) return;
     if (key.name === "escape") {
       onClose();
       return;
@@ -820,7 +822,7 @@ export function Omnibox({
                 hoverColor={isSel ? undefined : theme.bgOverlayHover}
                 onMouseDown={() => select(item)}
               >
-                <text>
+                <text selectable={false}>
                   <span fg={isSel ? theme.accent : theme.bgOverlay}>
                     {isSel ? "▎" : " "}
                   </span>
@@ -833,7 +835,7 @@ export function Omnibox({
                   ))}
                 </text>
 
-                <text>
+                <text selectable={false}>
                   {detail ? <span fg={theme.fgMuted}>{detail}</span> : null}
                   {item.hint ? (
                     <span fg={theme.cyan}> {item.hint}</span>

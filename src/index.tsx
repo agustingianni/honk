@@ -1,6 +1,7 @@
 import { createCliRenderer, type CliRenderer } from "@opentui/core";
 import { createRoot, type Root } from "@opentui/react";
 import { App } from "./App.tsx";
+import { createCopyText, type CopyText } from "./clipboard.ts";
 import { cliAction, HELP, unknownCommandText } from "./cli.ts";
 import { ConfigError, defaultConfigPath, loadConfig, saveThemeSetting } from "./config.ts";
 import { IrcManager } from "./irc/manager.ts";
@@ -44,6 +45,8 @@ interface HotState {
   /** The omnibox actions used last (see state.ts), kept here across hot reloads too. */
   recentActions: Record<string, number>;
   saveRecentActions: (recent: Record<string, number>) => void;
+  /** One clipboard for the life of the program. See src/clipboard.ts. */
+  copyText?: CopyText;
 }
 
 const g = globalThis as unknown as { __ircHot?: HotState };
@@ -170,6 +173,9 @@ if (!g.__ircHot) {
 
 const hot = g.__ircHot;
 hot.version += 1;
+// Here, not in the first start above, so a hot reload from a version without
+// copying gets one too.
+hot.copyText ??= createCopyText(hot.renderer);
 applyTheme(hot.themes.find((t) => t.id === hot.themeId)!.theme);
 hot.root.render(
   <App
@@ -180,6 +186,7 @@ hot.root.render(
     onThemeChosen={hot.saveTheme}
     initialRecentActions={hot.recentActions}
     onRecentActionsChanged={hot.saveRecentActions}
+    copyText={hot.copyText}
   />,
 );
 hot.renderer.requestRender();

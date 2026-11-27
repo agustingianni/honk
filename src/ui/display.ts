@@ -104,6 +104,13 @@ export function statusIndicator(status: ConnectionStatus): { glyph: string; colo
   }
 }
 
+/** "14:02": the time column of the chat, and of a copied line. */
+export function formatTime(date: Date): string {
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 export function bufferDisplayName(buf: BufferState): string {
   return buf.kind === "dm" ? `@${buf.name}` : buf.name;
 }

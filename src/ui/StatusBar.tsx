@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { theme } from "../theme.ts";
 import type { ServerState, UpdateNotice } from "../types.ts";
-import { cellWidth, statusIndicator } from "./display.ts";
+import { cellWidth, statusIndicator, truncate } from "./display.ts";
 import { statusHints } from "./statusHints.ts";
 
 interface StatusBarProps {
@@ -12,9 +12,11 @@ interface StatusBarProps {
   nicklistFits: boolean;
   /** A newer honk release, or null. */
   update: UpdateNotice | null;
+  /** A short message, such as "Copied", shown for a moment in place of the key hints. */
+  notice: string | null;
 }
 
-export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: StatusBarProps) {
+export function StatusBar({ server, width, sidebarFits, nicklistFits, update, notice }: StatusBarProps) {
   const [now, setNow] = useState(() => Date.now());
   const isReconnecting =
     server?.status === "reconnecting" && Boolean(server.reconnectInfo);
@@ -49,6 +51,8 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: 
   const leftWidth = 2 + cellWidth(name + viaText + tlsText + stateText);
   const room = width - 4 - leftWidth - 2;
   const hints = statusHints({ sidebarFits, nicklistFits, update }, room);
+  // Cut to the same room as the hints, so it never squeezes the server name.
+  const shownNotice = notice ? truncate(notice, Math.max(1, room)) : "";
 
   return (
     <box
@@ -89,14 +93,20 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: 
         )}
       </text>
 
-      <text fg={theme.fgMuted} flexShrink={0} wrapMode="none">
-        {hints.map((h, i) => (
-          <span key={h.key}>
-            {i > 0 ? "  " : ""}
-            <span fg={theme.accent}>{h.key}</span> {h.label}
-          </span>
-        ))}
-      </text>
+      {shownNotice ? (
+        <text fg={theme.accent} flexShrink={0} wrapMode="none">
+          {shownNotice}
+        </text>
+      ) : (
+        <text fg={theme.fgMuted} flexShrink={0} wrapMode="none">
+          {hints.map((h, i) => (
+            <span key={h.key}>
+              {i > 0 ? "  " : ""}
+              <span fg={theme.accent}>{h.key}</span> {h.label}
+            </span>
+          ))}
+        </text>
+      )}
     </box>
   );
 }

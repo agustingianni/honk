@@ -1,4 +1,4 @@
-import type { CliRenderer, MouseEvent, MousePointerStyle, TextRenderable } from "@opentui/core";
+import type { CliRenderer, MouseEvent, MousePointerStyle, Selection, TextRenderable } from "@opentui/core";
 import { useRenderer, type BoxProps } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { indexAtCell } from "./display.ts";
@@ -78,6 +78,15 @@ function hoverFor(renderer: CliRenderer): RendererHover {
 }
 
 /**
+ * True for a selection that never moved from where the mouse went down. A press
+ * on text always starts a selection, so a plain click leaves one too: still at
+ * its start, in "cell" mode, with no text.
+ */
+export function isUnmovedSelection(selection: Selection): boolean {
+  return selection.isStart && selection.behavior === "cell";
+}
+
+/**
  * True for a mouse up that ends a plain left click on text: no drag, no
  * double-click, no modifier key. A press on text always starts a selection,
  * so a click arrives with `isDragging` too; a selection that is still at its
@@ -90,7 +99,7 @@ export function isPlainClick(renderer: CliRenderer, event: MouseEvent): boolean 
   if (!event.isDragging) return false;
   if (event.modifiers.ctrl || event.modifiers.alt || event.modifiers.shift) return false;
   const selection = renderer.getSelection();
-  return selection?.isStart === true && selection.behavior === "cell";
+  return selection !== null && isUnmovedSelection(selection);
 }
 
 /**
@@ -325,6 +334,8 @@ type NameTextProps = {
   children: (hovered: TextRange | undefined) => ReactNode;
   /** How long a click waits for a second one. The tests make it short. */
   doubleClickMs?: number;
+  /** Also gets the text renderable, as a `ref` would. */
+  textRef?: (text: TextRenderable | null) => void;
 };
 
 /**
@@ -344,9 +355,17 @@ export function NameText({
   namesEnd,
   children,
   doubleClickMs = DOUBLE_CLICK_MS,
+  textRef,
 }: NameTextProps) {
   const renderer = useRenderer();
-  const ref = useRef<TextRenderable>(null);
+  const ref = useRef<TextRenderable | null>(null);
+  const setRef = useCallback(
+    (text: TextRenderable | null) => {
+      ref.current = text;
+      textRef?.(text);
+    },
+    [textRef],
+  );
   const [hovered, setHovered] = useState<TextRange | undefined>(undefined);
   const clear = useCallback(() => setHovered(undefined), []);
   usePointer(hovered !== undefined, clear);
@@ -366,7 +385,7 @@ export function NameText({
 
   return (
     <text
-      ref={ref}
+      ref={setRef}
       onMouseOver={check}
       onMouseMove={check}
       onMouseOut={clear}
