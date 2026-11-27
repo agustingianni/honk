@@ -1,3 +1,16 @@
+diff --git a/dist/core/protocol.js b/dist/core/protocol.js
+index 10a674e13c3e70d779efcaf2c1a20bda896a08a9..43b998ecd748cf3a85450ea87637e86b7a533a18 100644
+--- a/dist/core/protocol.js
++++ b/dist/core/protocol.js
+@@ -17,6 +17,8 @@ const COMMANDS = {
+     "KILL": "kill",
+     "LINKS": "links",
+     "LIST": "list",
++    // honk: IRCv3 read markers (draft/read-marker), so MARKREAD gets a raw:markread event.
++    "MARKREAD": "markread",
+     "MODE": "mode",
+     "MONITOR": "monitor",
+     "MOTD": "motd",
 diff --git a/dist/plugins/registration.js b/dist/plugins/registration.js
 index a4dbd6994e7cb98807cf6763aa37e2c7fa824ec9..befb18e118d33a4513d68044570852fd3debe201 100644
 --- a/dist/plugins/registration.js

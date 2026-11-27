@@ -1675,6 +1675,16 @@ export class IrcManager {
       );
     });
 
+    // Your read marker for a buffer, from the server. Not in onRawLine: that sees a whole
+    // network read first, so a MARKREAD would land before a PRIVMSG it covers in the same
+    // read. The event exists only through patches/irc-client-ts@0.23.1.patch. Like any raw
+    // event it skips lines inside a batch (#44); honk labels nothing a MARKREAD answers.
+    client.on("raw:markread" as never, (msg: { params: string[] }) => {
+      if (isStale()) return;
+      const mark = parseMarkRead(msg.params);
+      if (mark) this.onReadMarker(serverId, mark.target, mark.time);
+    });
+
     // IRCv3 WARN and NOTE, information.
     for (const kind of ["warn", "note"] as const) {
       client.on(kind, (msg) => {
@@ -1882,18 +1892,11 @@ export class IrcManager {
 
   /**
    * A raw line from the server, before irc-client-ts parses it. Handled here: numerics
-   * the library doesn't know, because it drops their number (see replies.ts), and
-   * MARKREAD, which it doesn't know at all (see readMarker.ts).
+   * the library doesn't know, because it drops their number (see replies.ts).
    */
   private onRawLine(serverId: string, line: string): void {
     // Every line passes here, so look at the command before parsing the whole line.
-    const command = commandOf(line);
-    if (command === "MARKREAD") {
-      const mark = parseMarkRead(parseLine(line).params);
-      if (mark) this.onReadMarker(serverId, mark.target, mark.time);
-      return;
-    }
-    const name = NUMERICS_MISSING_FROM_LIBRARY[command];
+    const name = NUMERICS_MISSING_FROM_LIBRARY[commandOf(line)];
     if (!name) return;
     const { params } = parseLine(line);
     // ":srv 470 goose #old #new :Forwarding": your nick first, the text last.
