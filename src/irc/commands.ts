@@ -24,6 +24,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "disconnect", args: "[reason]", summary: "Disconnect from this server" },
   { name: "raw", args: "<COMMAND ...>", summary: "Send a raw IRC line" },
   { name: "clear", summary: "Clear this buffer" },
+  { name: "search", args: "[words]", summary: "Search your chat logs (also Ctrl+F)" },
   { name: "demo", summary: "Open the offline demo" },
   { name: "help", summary: "List the commands" },
   { name: "quit", summary: "Quit the app" },
@@ -37,6 +38,12 @@ export function needsArgs(cmd: SlashCommand): boolean {
 /** How to type it, as /help and the omnibox show it: "/whois <nick>", "/clear". */
 export function syntax(cmd: SlashCommand): string {
   return cmd.args ? `/${cmd.name} ${cmd.args}` : `/${cmd.name}`;
+}
+
+/** The words after "/search", or undefined if `line` is not a /search command. */
+export function searchCommand(line: string): string | undefined {
+  const m = /^\/search(?:\s+(.*))?$/i.exec(line.trim());
+  return m ? (m[1] ?? "") : undefined;
 }
 
 export function findSlashCommand(name: string): SlashCommand | undefined {

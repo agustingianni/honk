@@ -148,6 +148,7 @@ TLS is on by default. Type `/help` inside the client for the commands.
 | Key | What it does |
 |---|---|
 | Ctrl+K | Open or close the omnibox: switch buffers, join channels, run actions |
+| Ctrl+F | Search your chat logs (see [Search](#search)) |
 | Ctrl+B | Show or hide the sidebar |
 | Alt+U | Show or hide the user list |
 | Alt+Up, Alt+Down | Go to the previous or next buffer |
@@ -175,8 +176,8 @@ arrow key types no character.
 ### What honk does not do yet
 
 - Run on Windows.
-- Search the log, or load scrollback from it. honk writes the log (see
-  [Log](#log)), but you can't read it inside honk yet.
+- Load scrollback from the log. You can search the log (see
+  [Search](#search)), but a buffer does not show its older lines from it yet.
 - Ignore a user.
 - Moderation commands such as `/kick`, `/ban` and `/mode`. Send them with
   `/raw` for now, such as `/raw KICK #channel nick`.
@@ -250,6 +251,30 @@ The settings go at the top level of the config file. These are the defaults:
 
 Only one honk writes the log. A second honk running at the same time says so
 in `*status` and does not write to it.
+
+#### Search
+
+Ctrl+F, or `/search words`, searches the log of every channel and DM on every
+server. The results show as you type, newest first:
+
+```
+14:02  #rust  alice: the borrow checker is happy
+```
+
+Every word must match. A `*` at the end of a word also matches longer words:
+`check*` finds "checker". There is no OR, NOT, or "quoted phrase". Filters
+narrow the search:
+
+- `from:alice`: lines alice wrote.
+- `in:#rust`: lines in #rust. A nick, such as `in:alice`, picks a DM.
+- `on:libera`: lines on the server with that `id`, or that network name.
+- `after:2026-09-01` and `before:2026-10-01`: lines from that day on, and
+  lines before that day. Together, these two find September.
+
+Filters work without words too: `from:alice in:#rust` lists what alice wrote
+there. Enter shows the lines around a result, read-only, with the result
+highlighted. Esc goes back to the results, and a second Esc goes back to where
+you were. A second honk that does not write the log can still search it.
 
 To back the log up, copy `logs.db` together with `logs.db-wal` and
 `logs.db-shm` when they exist, or run

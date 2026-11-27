@@ -29,6 +29,7 @@ import {
 } from "./names.ts";
 import type { MentionEvent } from "../notify.ts";
 import { findSlashCommand, SLASH_COMMANDS, syntax } from "./commands.ts";
+import { joinText, kickText, nickText, partText, quitText, topicText } from "./eventText.ts";
 import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine } from "./delivery.ts";
 import { EchoTracker, type SentPart } from "./echo.ts";
 import {
@@ -1477,7 +1478,7 @@ export class IrcManager {
         this.pushMessage(
           serverId,
           channel,
-          makeMessage("join", `${who} joined ${channel}`),
+          makeMessage("join", joinText(who, channel)),
         );
       }
     });
@@ -1491,11 +1492,10 @@ export class IrcManager {
       if (this.same(serverId, who, server.nick)) {
         this.removeBuffer(serverId, channel);
       } else {
-        const reason = msg.params.comment ? ` (${msg.params.comment})` : "";
         this.pushMessage(
           serverId,
           channel,
-          makeMessage("part", `${who} left ${channel}${reason}`),
+          makeMessage("part", partText(who, channel, msg.params.comment)),
         );
       }
     });
@@ -1504,9 +1504,8 @@ export class IrcManager {
       const server = live();
       if (!server) return;
       const who = normalizeNick(msg.source?.name);
-      const reason = msg.params.comment ? ` (${msg.params.comment})` : "";
       for (const bufName of priorChannels.get(msg) ?? channelsWithNick(server, who)) {
-        this.pushMessage(serverId, bufName, makeMessage("part", `${who} quit${reason}`));
+        this.pushMessage(serverId, bufName, makeMessage("part", quitText(who, msg.params.comment)));
         this.logRecorder?.event(serverId, bufName, msg, { kind: "quit", nick: who, text: msg.params.comment ?? "" });
       }
     });
@@ -1531,7 +1530,7 @@ export class IrcManager {
       this.pushMessage(
         serverId,
         channel,
-        makeMessage("error", `${nick} was kicked by ${by}${reason}`),
+        makeMessage("error", kickText(nick, by, comment)),
       );
     });
 
@@ -1549,7 +1548,7 @@ export class IrcManager {
         );
         return;
       }
-      const line = `${oldNick} is now known as ${newNick}`;
+      const line = nickText(oldNick, newNick);
       const event = { kind: "nick", nick: oldNick, subject: newNick, text: "" } as const;
       for (const bufName of priorChannels.get(msg) ?? channelsWithNick(server, oldNick)) {
         this.pushMessage(serverId, bufName, makeMessage("system", line));
@@ -1598,7 +1597,7 @@ export class IrcManager {
         msg.params.channel,
         makeMessage(
           "system",
-          buf.topic ? `${who} changed the topic to: ${buf.topic}` : `${who} cleared the topic`,
+          topicText(who, buf.topic),
         ),
       );
     });
@@ -2818,7 +2817,7 @@ export class IrcManager {
               ...server.buffers,
               [target]: { ...buf, users: demoUsers([]) },
             };
-            this.pushMessage(id, target, makeMessage("join", `${server.nick} joined ${target}`));
+            this.pushMessage(id, target, makeMessage("join", joinText(server.nick, target)));
           }
           this.setActive(id, target);
         }
@@ -3081,7 +3080,7 @@ export class IrcManager {
         for (const c of SLASH_COMMANDS) {
           reply(`${syntax(c)} - ${c.summary}`);
         }
-        reply("Press Ctrl+K for the omnibox, then ? to see what it does.");
+        reply("Press Ctrl+K for the omnibox, then ? to see what it does. Ctrl+F searches your chat logs.");
         return;
       }
 

@@ -2,13 +2,15 @@ import { useKeyboard } from "@opentui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { ThemeEntry } from "../themes/index.ts";
-import { findSlashCommand, needsArgs, SLASH_COMMANDS, syntax } from "../irc/commands.ts";
+import { findSlashCommand, needsArgs, searchCommand, SLASH_COMMANDS, syntax } from "../irc/commands.ts";
+import { parseSearch } from "../log/search.ts";
 import { type Casemapping, casemappingOf, nameKey, sameNick } from "../irc/names.ts";
 import type { ActiveBuffer, ServerState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
 import { bufferDisplayName, cellWidth, truncate, unreadBadge } from "./display.ts";
 import { type FuzzyMatch, fuzzyMatch, matchLabel, rankMatches, shorterFirst } from "./fuzzy.ts";
 import { glyphs } from "./glyphs.ts";
+import { hitRow, type LogSearch } from "./logSearch.ts";
 
 interface OmniboxItem {
   id: string;
@@ -60,15 +62,45 @@ interface OmniboxProps {
   recentActions: RecentActions;
   /** An action was chosen, by its historyKey. */
   onActionUsed: (key: string) => void;
+  /** Open in search mode, with this text typed. */
+  initialSearch?: string;
+  /** The hit selected when the omnibox opens: the one a Context view came from. */
+  initialHitId?: number;
+  /** Searches the Log, or says why there is no search. */
+  logSearch: LogSearch;
+  /** A search hit was chosen: show its Context view. `query` brings the results back. */
+  onOpenHit: (id: number, query: string) => void;
 }
 
-/** "main": buffers and the prefix modes. "theme": the color theme list. */
-type OmniboxMode = "main" | "theme";
+/** The rows the omnibox shows, and what it says about them. */
+interface ListView {
+  items: OmniboxItem[];
+  /** Matches left out of the list, so the user knows to type more. */
+  more: number;
+  /** Lines shown when there are no rows. */
+  note?: string[];
+  /** The search found more Lines than it shows. */
+  moreHits?: boolean;
+}
+
+/**
+ * "main": buffers and the prefix modes. "theme": the color theme list. "search": search
+ * the Log (Ctrl+F, /search).
+ */
+type OmniboxMode = "main" | "theme" | "search";
 
 const MAX_RESULTS = 10;
 const THEME_ACTION_LABEL = "Preferences: Color Theme...";
 /** How far back the active buffer is read to rank recent speakers first in "@" mode. */
 const RECENT_SPEAKER_SCAN = 300;
+/** The omnibox row of search hit `id`. */
+const hitItemId = (id: number) => `hit-${id}`;
+/** Shown in search mode before anything is typed. */
+const SEARCH_HELP = [
+  "Every word must match; check* also finds checker.",
+  "from:alice  in:#rust  on:libera",
+  "after:2026-09-01  before:2026-10-01",
+];
 
 /** The matched positions that fall in the first `length` characters: the label's part. */
 function labelHighlights(match: FuzzyMatch, length: number, offset = 0): number[] {
@@ -326,12 +358,23 @@ export function Omnibox({
   onChooseTheme,
   recentActions,
   onActionUsed,
+  initialSearch,
+  initialHitId,
+  logSearch,
+  onOpenHit,
 }: OmniboxProps) {
-  const [mode, setMode] = useState<OmniboxMode>("main");
-  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<OmniboxMode>(initialSearch === undefined ? "main" : "search");
+  const [query, setQueryText] = useState(initialSearch ?? "");
   // The selected item's id, not its row: the list is rebuilt when buffers or unread
   // counts change, and a row number would then point at another item or past the end.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialHitId === undefined ? null : hitItemId(initialHitId),
+  );
+  /** A new query starts at the top of the list. */
+  const setQuery = (text: string) => {
+    setQueryText(text);
+    setSelectedId(null);
+  };
   const themeVersion = useThemeVersion();
   /** A theme was previewed, so closing must restore the theme in use. */
   const previewedRef = useRef(false);
@@ -341,13 +384,61 @@ export function Omnibox({
     setMode("theme");
     setQuery("");
   };
+  const openSearch = (text: string) => {
+    setMode("search");
+    setQuery(text);
+  };
+  const searchRow = (id: string, label: string, hint?: string): OmniboxItem => ({
+    id,
+    label,
+    hint,
+    onSelect: () => openSearch(""),
+    keepOpen: true,
+  });
+
+  const modalWidth = Math.min(64, Math.max(36, width - 6));
+  const leftOffset = Math.max(0, Math.floor((width - modalWidth) / 2));
+  // Border (2), the selection marker and its space (2), right padding (1).
+  const rowWidth = modalWidth - 5;
 
   const activeServer = active
     ? servers.find((s) => s.id === active.serverId)
     : servers[0];
 
-  /** `more`: matches left out of the list, so the user knows to type more. */
-  const { items, more } = useMemo<{ items: OmniboxItem[]; more: number }>(() => {
+  /**
+   * The search results. Apart from the other lists, so the Log is read again only when
+   * the query changes, not on every IRC update or resize.
+   */
+  const searchResult = useMemo(() => {
+    if (mode !== "search") return undefined;
+    if ("off" in logSearch) return { error: `Search is off: ${logSearch.off}` };
+    if (!query.trim()) return { note: SEARCH_HELP };
+    const parsed = parseSearch(query);
+    if ("error" in parsed) return parsed;
+    return logSearch.search(parsed.query);
+  }, [mode, query, logSearch]);
+
+  /** The search results as rows, cut to the omnibox's width. */
+  const searchList = useMemo<ListView | undefined>(() => {
+    if (!searchResult) return undefined;
+    if ("error" in searchResult) return { items: [], more: 0, note: [searchResult.error] };
+    if ("note" in searchResult) return { items: [], more: 0, note: searchResult.note };
+    const now = new Date();
+    return {
+      items: searchResult.hits.map((hit): OmniboxItem => ({
+        id: hitItemId(hit.id),
+        // One cell goes to the space before the label.
+        ...hitRow(hit, now, rowWidth - 1),
+        onSelect: () => onOpenHit(hit.id, query),
+      })),
+      more: 0,
+      note: ["No lines match"],
+      moreHits: searchResult.more,
+    };
+  }, [searchResult, query, onOpenHit, rowWidth]);
+
+  const mainList = useMemo<ListView | undefined>(() => {
+    if (mode === "search") return undefined;
     const trimmed = query.trimStart();
     const top = (list: OmniboxItem[]) => ({
       items: list.slice(0, MAX_RESULTS),
@@ -408,6 +499,7 @@ export function Omnibox({
         mode("help-slash", "/", theme.cyan, "Run a slash command, with its usage shown", "/"),
         mode("help-users", "@", theme.accentAlt, "Find a user and open a DM", "@"),
         mode("help-channels", "#", theme.cyan, "Filter channels or join a new #channel", "#"),
+        { ...searchRow("help-search", "^F"), labelColor: theme.green, detail: "Search your chat logs" },
       ]);
     }
 
@@ -420,6 +512,17 @@ export function Omnibox({
     if (slash !== null) {
       const [word = "", ...restWords] = slash.slice(1).split(" ");
       const known = findSlashCommand(word);
+      // /search opens search mode here, with the words typed after it.
+      const searchWords = searchCommand(slash);
+      if (searchWords !== undefined) {
+        return top([
+          {
+            ...searchRow("slash-search", searchWords ? `Search the log for ${searchWords}` : "Search the log"),
+            labelColor: theme.cyan,
+            onSelect: () => openSearch(searchWords),
+          },
+        ]);
+      }
       // Arguments typed (or started): one item that runs the line as typed.
       if (restWords.length > 0) {
         return top([
@@ -445,10 +548,14 @@ export function Omnibox({
           labelColor: theme.cyan,
           detail: cmd.summary,
           // A command that needs arguments fills the query, so the user types them next.
-          onSelect: needsArgs(cmd)
-            ? () => setQuery(`/${cmd.name} `)
-            : () => onRunCommand(`/${cmd.name}`),
-          keepOpen: needsArgs(cmd),
+          // /search opens search mode.
+          onSelect:
+            cmd.name === "search"
+              ? () => openSearch("")
+              : needsArgs(cmd)
+                ? () => setQuery(`/${cmd.name} `)
+                : () => onRunCommand(`/${cmd.name}`),
+          keepOpen: needsArgs(cmd) || cmd.name === "search",
         }));
       if (matches.length === 0 && word) {
         matches.push({
@@ -515,6 +622,7 @@ export function Omnibox({
           onSelect: () => onRunCommand("/history"),
         });
       }
+      add(searchRow("cmd-search", "Chat: Search the Log...", "^F"));
       add({
         id: "cmd-clear",
         label: "Chat: Clear Buffer",
@@ -704,10 +812,7 @@ export function Omnibox({
     onToggleSidebar,
     onToggleNicklist,
   ]);
-
-  useEffect(() => {
-    setSelectedId(null);
-  }, [query]);
+  const { items, more, note, moreHits } = searchList ?? mainList!;
 
   const foundIndex = items.findIndex((item) => item.id === selectedId);
   // The theme list opens on the theme in use.
@@ -762,11 +867,6 @@ export function Omnibox({
     }
   });
 
-  const modalWidth = Math.min(64, Math.max(36, width - 6));
-  const leftOffset = Math.max(0, Math.floor((width - modalWidth) / 2));
-  // Border (2), the selection marker and its space (2), right padding (1).
-  const rowWidth = modalWidth - 5;
-
   const select = (item: OmniboxItem | undefined) => {
     if (item?.historyKey) onActionUsed(item.historyKey);
     item?.onSelect();
@@ -774,16 +874,16 @@ export function Omnibox({
   };
   const executeSelected = () => select(items[selectedIndex]);
 
-  // The theme list can be long: show a window of rows that keeps the selection
-  // in view.
-  const windowStart =
-    mode === "theme"
-      ? Math.min(
-          Math.max(0, selectedIndex - Math.floor(MAX_RESULTS / 2)),
-          Math.max(0, items.length - MAX_RESULTS),
-        )
-      : 0;
-  const visible = mode === "theme" ? items.slice(windowStart, windowStart + MAX_RESULTS) : items;
+  // The theme list and the search hits can be long: show a window of rows that keeps
+  // the selection in view.
+  const scrolls = mode !== "main";
+  const windowStart = scrolls
+    ? Math.min(
+        Math.max(0, selectedIndex - Math.floor(MAX_RESULTS / 2)),
+        Math.max(0, items.length - MAX_RESULTS),
+      )
+    : 0;
+  const visible = scrolls ? items.slice(windowStart, windowStart + MAX_RESULTS) : items;
 
   return (
     <box
@@ -817,7 +917,9 @@ export function Omnibox({
           placeholder={
             mode === "theme"
               ? "Color theme (Up/Down to preview, Enter to keep, Esc to cancel)"
-              : `Jump to buffer${glyphs.ellipsis} (> actions, / commands, @ users, ? help)`
+              : mode === "search"
+                ? `Search your chat logs${glyphs.ellipsis}`
+                : `Jump to buffer${glyphs.ellipsis} (> actions, / commands, @ users, ? help)`
           }
           backgroundColor={theme.bgInput}
           textColor={theme.fgBright}
@@ -833,9 +935,11 @@ export function Omnibox({
       {/* Results list */}
       <box flexDirection="column" paddingTop={1} paddingBottom={0}>
         {items.length === 0 ? (
-          <box height={1} paddingLeft={2}>
-            <text fg={theme.fgMuted}>No matching results</text>
-          </box>
+          (note ?? ["No matching results"]).map((line, i) => (
+            <box key={i} height={1} paddingLeft={2}>
+              <text fg={theme.fgMuted}>{truncate(line, rowWidth)}</text>
+            </box>
+          ))
         ) : (
           visible.map((item, row) => {
             const isSel = windowStart + row === selectedIndex;
@@ -885,9 +989,9 @@ export function Omnibox({
             <text fg={theme.fgMuted}>{`${more} more, type to narrow the list`}</text>
           </box>
         ) : null}
-        {mode === "theme" && items.length > MAX_RESULTS ? (
+        {scrolls && items.length > MAX_RESULTS ? (
           <box height={1} paddingLeft={2}>
-            <text fg={theme.fgMuted}>{`${selectedIndex + 1} of ${items.length}`}</text>
+            <text fg={theme.fgMuted}>{`${selectedIndex + 1} of ${items.length}${moreHits ? "+" : ""}`}</text>
           </box>
         ) : null}
       </box>

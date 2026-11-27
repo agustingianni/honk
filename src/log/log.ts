@@ -29,6 +29,15 @@ import { stripIrcFormatting } from "../notify.ts";
 import { type Casemapping, DEFAULT_CASEMAPPING, nameKey } from "../irc/names.ts";
 import { checkReplay, type HistoryBatch, type ReplayLine } from "../irc/replay.ts";
 import { CHAT_KINDS, checkSqlite, EVENT_KINDS, NewerSchemaError, prepare, sqlList } from "./schema.ts";
+import {
+  CONTEXT_LINES,
+  type LogContext,
+  logContext,
+  SEARCH_LIMIT,
+  type SearchQuery,
+  type SearchResult,
+  searchLog,
+} from "./search.ts";
 
 /** The `logs` settings in the config file. */
 export interface LogSettings {
@@ -184,14 +193,15 @@ interface OpenOptions {
 /**
  * Opens the Log at `path`. Returns the Log, or none if honk keeps no Log, and the lines
  * to show in *status: where a new file is, why there is no Log, or that another honk
- * writes it. honk works the same without a Log.
+ * writes it. Without a Log, `off` says why, for search. honk works the same without a
+ * Log.
  */
 export function openLog(
   path: string,
   settings: LogSettings,
   options: OpenOptions = {},
-): { log?: Log; notices: string[] } {
-  if (!settings.enabled) return { notices: [] };
+): { log: Log; notices: string[] } | { log?: undefined; notices: string[]; off: string } {
+  if (!settings.enabled) return { notices: [], off: "logs.enabled is false in the config" };
   const created = !existsSync(path);
   let db: Database | undefined;
   try {
@@ -205,14 +215,18 @@ export function openLog(
     const unfit = checkSqlite(db);
     if (unfit) {
       db.close();
-      return { notices: [`honk keeps no log: ${unfit}.`] };
+      return { notices: [`honk keeps no log: ${unfit}.`], off: unfit };
     }
     prepare(db);
   } catch (err) {
     db?.close();
-    const reason =
-      err instanceof NewerSchemaError ? `${path} ${err.message}` : (err as Error).message;
-    return { notices: [`honk keeps no log: ${reason}.`] };
+    // "<path> is from a newer honk (...)", or the error.
+    const message = (err as Error).message;
+    const newer = err instanceof NewerSchemaError;
+    return {
+      notices: [`honk keeps no log: ${newer ? `${path} ${message}` : message}.`],
+      off: newer ? `the log ${message}` : message,
+    };
   }
   const log = new Log(db, settings, options);
   const notices: string[] = [];
@@ -339,6 +353,31 @@ export class Log {
       .query("SELECT synced_until AS t FROM network WHERE config_id = ? AND bouncer_net = ?")
       .get(serverId, net.bouncerNetId) as { t: number | null } | null;
     return row?.t ?? undefined;
+  }
+
+  /**
+   * The newest Chat lines that match `query` (see search.ts), with what waits in memory
+   * written first. Works in a honk that only reads the file.
+   */
+  search(query: SearchQuery, limit = SEARCH_LIMIT): SearchResult | { error: string } {
+    return this.read(() => searchLog(this.db, query, limit));
+  }
+
+  /** The Lines around the Line with row id `id`, from a search hit. */
+  context(id: number, around = CONTEXT_LINES): LogContext | undefined {
+    const result = this.read(() => logContext(this.db, id, around));
+    return result && !("error" in result) ? result : undefined;
+  }
+
+  /** Runs a read after a flush. A failure (such as a busy file) comes back as an error. */
+  private read<T>(run: () => T): T | { error: string } {
+    if (this.closed) return { error: "the log is closed" };
+    this.flush();
+    try {
+      return run();
+    } catch (err) {
+      return { error: `could not read the log: ${(err as Error).message}` };
+    }
   }
 
   private push(op: Op): void {
