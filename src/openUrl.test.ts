@@ -1,51 +1,46 @@
 import { expect, test } from "bun:test";
-import { openUrl } from "./openUrl.ts";
+import { linkOpener } from "./openUrl.ts";
 
-function spy() {
+/** The opener for `platform` and `env`, and the commands it ran. */
+function opener(platform: NodeJS.Platform, env: Record<string, string> = {}) {
   const calls: string[][] = [];
-  return { calls, spawn: (cmd: string[]) => void calls.push(cmd) };
+  const open = linkOpener(platform, env, (cmd) => void calls.push(cmd));
+  return { calls, open };
 }
 
 test("a link opens with open on macOS and xdg-open on Linux", () => {
-  const mac = spy();
-  expect(openUrl("https://example.com/a?b=1", "darwin", mac.spawn, {})).toBe(true);
+  const mac = opener("darwin");
+  mac.open!("https://example.com/a?b=1");
   expect(mac.calls).toEqual([["open", "https://example.com/a?b=1"]]);
 
-  const linux = spy();
-  expect(openUrl("http://example.com", "linux", linux.spawn, {})).toBe(true);
+  const linux = opener("linux");
+  linux.open!("http://example.com");
   expect(linux.calls).toEqual([["xdg-open", "http://example.com/"]]);
 });
 
+test("a link with non-ASCII letters opens in its encoded form", () => {
+  const { calls, open } = opener("darwin");
+  open!("https://example.com/café");
+  expect(calls).toEqual([["open", "https://example.com/caf%C3%A9"]]);
+});
+
 test("only http and https links open", () => {
-  const { calls, spawn } = spy();
+  const { calls, open } = opener("darwin");
   for (const url of ["file:///etc/passwd", "javascript:alert(1)", "ssh://host", "not a url"]) {
-    expect(openUrl(url, "darwin", spawn, {})).toBe(false);
+    open!(url);
   }
   expect(calls).toEqual([]);
 });
 
-test("a platform without an open command does nothing", () => {
-  const { calls, spawn } = spy();
-  expect(openUrl("https://example.com", "win32", spawn, {})).toBe(false);
-  expect(calls).toEqual([]);
+test("there is no opener over SSH or on a platform without an open command", () => {
+  expect(opener("linux", { SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" }).open).toBeUndefined();
+  expect(opener("darwin", { SSH_TTY: "/dev/ttys001" }).open).toBeUndefined();
+  expect(opener("win32").open).toBeUndefined();
 });
 
 test("a missing command is not an error", () => {
-  const fail = () => {
+  const open = linkOpener("linux", {}, () => {
     throw new Error("ENOENT: xdg-open");
-  };
-  expect(openUrl("https://example.com", "linux", fail, {})).toBe(false);
-});
-
-test("a link with non-ASCII letters opens in its encoded form", () => {
-  const { calls, spawn } = spy();
-  openUrl("https://example.com/café", "darwin", spawn, {});
-  expect(calls).toEqual([["open", "https://example.com/caf%C3%A9"]]);
-});
-
-test("nothing opens over SSH", () => {
-  const { calls, spawn } = spy();
-  expect(openUrl("https://example.com", "linux", spawn, { SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" })).toBe(false);
-  expect(openUrl("https://example.com", "darwin", spawn, { SSH_TTY: "/dev/ttys001" })).toBe(false);
-  expect(calls).toEqual([]);
+  });
+  expect(() => open!("https://example.com")).not.toThrow();
 });

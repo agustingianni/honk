@@ -102,10 +102,10 @@ describe("LinkArea", () => {
   // "see " then a link 26 cells long, in a box 10 cells wide, so the link
   // wraps onto three lines: "see https:", "//example.", "com/abcdef" ...
   const URL = "https://example.com/abcdef";
-  async function setup() {
+  async function setup({ canOpen = true } = {}) {
     const opened: string[] = [];
     const rendered = await testRender(
-      <LinkArea onOpenLink={(href) => opened.push(href)} width={10}>
+      <LinkArea onOpenLink={canOpen ? (href) => opened.push(href) : undefined} width={10}>
         <text>
           see <a href={URL}>{URL}</a>
         </text>
@@ -164,6 +164,14 @@ describe("LinkArea", () => {
     await act(() => mockMouse.moveTo(3, 1)); // still the link, on its second line
     await act(() => mockMouse.moveTo(1, 0)); // back on "see"
     expect(pointers).toEqual(["pointer", "default"]);
+    await act(() => dispose());
+  });
+
+  test("where links cannot open (over SSH), there is no hand pointer", async () => {
+    const { mockMouse, pointers, dispose } = await setup({ canOpen: false });
+    await act(() => mockMouse.moveTo(6, 0));
+    await act(() => mockMouse.click(6, 0));
+    expect(pointers).toEqual([]);
     await act(() => dispose());
   });
 });

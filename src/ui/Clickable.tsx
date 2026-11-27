@@ -150,8 +150,8 @@ type LinkAreaProps = Omit<
   BoxProps,
   "onMouseOver" | "onMouseOut" | "onMouseMove" | "onMouseUp"
 > & {
-  /** Opens a link. honk passes openUrl; the tests pass a spy. */
-  onOpenLink: (href: string) => void;
+  /** Opens a link. Without it (over SSH), links get no hand pointer and a click is left to the terminal. */
+  onOpenLink: ((href: string) => void) | undefined;
 };
 
 /**
@@ -171,7 +171,9 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
   const [overLink, setOverLink] = useState(false);
   usePointer(overLink, setOverLink);
 
-  const check = (event: MouseEvent) => setOverLink(renderer.getLinkAt(event.x, event.y) !== null);
+  // Only whether there is a link: the id is enough, without copying its URL.
+  const check = (event: MouseEvent) =>
+    setOverLink(onOpenLink !== undefined && renderer.getLinkIdAt(event.x, event.y) !== 0);
 
   return (
     <box
@@ -182,7 +184,7 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
       onMouseMove={check}
       onMouseOut={() => setOverLink(false)}
       onMouseUp={(event) => {
-        if (!isPlainClick(renderer, event)) return;
+        if (!onOpenLink || !isPlainClick(renderer, event)) return;
         const href = renderer.getLinkAt(event.x, event.y);
         if (href) onOpenLink(href);
       }}

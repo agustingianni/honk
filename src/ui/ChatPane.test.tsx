@@ -14,8 +14,15 @@ function message(i: number): ChatMessage {
   };
 }
 
-/** Renders a ChatPane for `buffer` (a #honk channel by default) and returns the screen lines. */
-async function renderLines(buffer: Partial<BufferState>, width = 60): Promise<string[]> {
+/**
+ * Renders a ChatPane for `buffer` (a #honk channel by default). Call `destroy`
+ * when done: it unmounts the React tree, which is a state update.
+ */
+async function renderPane(
+  buffer: Partial<BufferState>,
+  width = 60,
+  onOpenLink?: (href: string) => void,
+) {
   const full: BufferState = {
     name: "#honk",
     kind: "channel",
@@ -26,7 +33,7 @@ async function renderLines(buffer: Partial<BufferState>, width = 60): Promise<st
     hasMention: false,
     ...buffer,
   };
-  const { renderOnce, captureCharFrame, renderer } = await testRender(
+  const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(
     <ChatPane
       server={undefined}
       buffer={full}
@@ -35,16 +42,25 @@ async function renderLines(buffer: Partial<BufferState>, width = 60): Promise<st
       onSubmit={() => {}}
       onPasteLines={() => {}}
       onSelectUser={() => {}}
+      onOpenLink={onOpenLink}
     />,
     { width, height: 24 },
   );
+  const destroy = () => act(() => renderer.destroy());
   try {
     await renderOnce();
-    return captureCharFrame().split("\n");
-  } finally {
-    // Destroying the renderer unmounts the React tree, which is a state update.
-    act(() => renderer.destroy());
+  } catch (error) {
+    destroy();
+    throw error;
   }
+  return { screen: captureCharFrame().split("\n"), mockMouse, destroy };
+}
+
+/** Renders a ChatPane for `buffer` and returns the screen lines. */
+async function renderLines(buffer: Partial<BufferState>, width = 60): Promise<string[]> {
+  const { screen, destroy } = await renderPane(buffer, width);
+  destroy();
+  return screen;
 }
 
 // 60 messages overflow the feed, so the scrollbar takes one column.
@@ -100,31 +116,15 @@ test("a wide channel name and topic fit the header", async () => {
 
 test("a click opens a link in a message and in the topic", async () => {
   const opened: string[] = [];
-  const width = 80;
-  const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(
-    <ChatPane
-      server={undefined}
-      buffer={{
-        name: "#honk",
-        kind: "channel",
-        topic: "docs at https://honk.example/docs",
-        messages: [{ ...message(0), text: "see https://example.com/x for more" }],
-        users: [],
-        unread: 0,
-        hasMention: false,
-      }}
-      inputFocused={false}
-      paneWidth={width}
-      onSubmit={() => {}}
-      onPasteLines={() => {}}
-      onSelectUser={() => {}}
-      onOpenLink={(href) => opened.push(href)}
-    />,
-    { width, height: 24 },
+  const { screen, mockMouse, destroy } = await renderPane(
+    {
+      topic: "docs at https://honk.example/docs",
+      messages: [{ ...message(0), text: "see https://example.com/x for more" }],
+    },
+    80,
+    (href) => opened.push(href),
   );
   try {
-    await renderOnce();
-    const screen = captureCharFrame().split("\n");
     const at = (text: string) => {
       const y = screen.findIndex((line) => line.includes(text));
       return { x: screen[y]!.indexOf(text) + 2, y };
@@ -135,43 +135,22 @@ test("a click opens a link in a message and in the topic", async () => {
     await act(() => mockMouse.click(body.x, body.y));
     expect(opened).toEqual(["https://honk.example/docs", "https://example.com/x"]);
   } finally {
-    act(() => renderer.destroy());
+    destroy();
   }
 });
 
 test("a click on a topic link that is cut to fit opens the whole URL", async () => {
   const opened: string[] = [];
-  const width = 40;
   const url = "https://honk.example/docs/a/very/long/path";
-  const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(
-    <ChatPane
-      server={undefined}
-      buffer={{
-        name: "#honk",
-        kind: "channel",
-        topic: `docs at ${url}`,
-        messages: [],
-        users: [],
-        unread: 0,
-        hasMention: false,
-      }}
-      inputFocused={false}
-      paneWidth={width}
-      onSubmit={() => {}}
-      onPasteLines={() => {}}
-      onSelectUser={() => {}}
-      onOpenLink={(href) => opened.push(href)}
-    />,
-    { width, height: 24 },
+  const { screen, mockMouse, destroy } = await renderPane({ topic: `docs at ${url}` }, 40, (href) =>
+    opened.push(href),
   );
   try {
-    await renderOnce();
-    const screen = captureCharFrame().split("\n");
     const y = screen.findIndex((line) => line.includes("https://"));
     expect(screen[y]).toContain("…");
     await act(() => mockMouse.click(screen[y]!.indexOf("https://") + 2, y));
     expect(opened).toEqual([url]);
   } finally {
-    act(() => renderer.destroy());
+    destroy();
   }
 });

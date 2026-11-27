@@ -4,7 +4,7 @@ import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { isUserSender, sameNick, STATUS_BUFFER } from "../irc/names.ts";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
-import { openUrl } from "../openUrl.ts";
+import { linkOpener } from "../openUrl.ts";
 import { Clickable, isPlainClick, LinkArea } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
 import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
@@ -23,6 +23,9 @@ interface ChatPaneProps {
   /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
   onOpenLink?: (href: string) => void;
 }
+
+/** Undefined over SSH and on platforms honk cannot open a browser on. */
+const openLink = linkOpener();
 
 const NICK_COL_WIDTH = 12;
 /** Time (5), a space, then the nick column. The message body starts after this. */
@@ -253,7 +256,7 @@ export function ChatPane({
   onSubmit,
   onPasteLines,
   onSelectUser,
-  onOpenLink = openUrl,
+  onOpenLink = openLink,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
@@ -436,15 +439,16 @@ export function ChatPane({
   };
 
   return (
-    <box
+    // Links anywhere in the pane open with a click: the topic and the messages.
+    <LinkArea
+      onOpenLink={onOpenLink}
       flexDirection="column"
       flexGrow={1}
       height="100%"
       backgroundColor={theme.bgBase}
     >
       {/* Top topic header */}
-      <LinkArea
-        onOpenLink={onOpenLink}
+      <box
         height={HEADER_HEIGHT}
         paddingTop={1}
         paddingBottom={1}
@@ -470,7 +474,7 @@ export function ChatPane({
             {usersText}
           </text>
         )}
-      </LinkArea>
+      </box>
 
       {/* Scrollable message feed */}
       {/* Keyed by buffer: each buffer gets its own scroll position and starts at the
@@ -486,7 +490,7 @@ export function ChatPane({
         style={scrollboxStyle(theme.bgBase)}
       >
         {/* No top padding: the header's own bottom padding is the gap. */}
-        <LinkArea onOpenLink={onOpenLink} flexDirection="column" paddingBottom={1}>
+        <box flexDirection="column" paddingBottom={1}>
           {buffer?.messages.map((msg, idx) => {
             const showDivider = msg.id === buffer.firstUnreadId;
             const prev = idx > 0 ? buffer.messages[idx - 1] : undefined;
@@ -509,7 +513,7 @@ export function ChatPane({
               </box>
             );
           })}
-        </LinkArea>
+        </box>
       </scrollbox>
 
       {newBelow > 0 && (
@@ -559,6 +563,6 @@ export function ChatPane({
           onSubmit={handleSubmit}
         />
       </box>
-    </box>
+    </LinkArea>
   );
 }
