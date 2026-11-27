@@ -4,14 +4,7 @@ import { useCallback, useEffect } from "react";
 import { withoutBidiControls } from "../bidi.ts";
 import type { CopyResult, CopyText } from "../clipboard.ts";
 import { selectionText } from "./chatCopy.ts";
-
-/**
- * A press on text always starts a selection, so a plain click leaves one
- * too: still at its start, in "cell" mode, with no text.
- */
-function isEmpty(selection: Selection): boolean {
-  return selection.isStart && selection.behavior === "cell";
-}
+import { isUnmovedSelection } from "./Clickable.tsx";
 
 /**
  * True for text selected inside an input, with Shift+arrows or the mouse. The
@@ -49,7 +42,7 @@ export function useSelectionCopy(
 
   const copySelection = useCallback((): boolean => {
     const selection = renderer.getSelection();
-    if (!selection || isEmpty(selection)) return false;
+    if (!selection || isUnmovedSelection(selection)) return false;
     const text = selectionText(selection);
     if (!text) return false;
     // Other programs show text with bidi, and the text comes from other people.
@@ -70,7 +63,7 @@ export function useSelectionCopy(
       }
       const handled = ctrlC
           ? copySelection()
-          : key.name === "escape" && !isEmpty(selection) && selection.getSelectedText() !== "";
+          : key.name === "escape" && !isUnmovedSelection(selection) && selection.getSelectedText() !== "";
       renderer.clearSelection();
       if (handled) key.preventDefault();
     };

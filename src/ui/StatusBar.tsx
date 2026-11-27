@@ -13,7 +13,7 @@ interface StatusBarProps {
   /** A newer honk release, or null. */
   update: UpdateNotice | null;
   /** A short message, such as "Copied", shown for a moment in place of the key hints. */
-  notice?: string | null;
+  notice: string | null;
 }
 
 export function StatusBar({ server, width, sidebarFits, nicklistFits, update, notice }: StatusBarProps) {

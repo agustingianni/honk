@@ -189,9 +189,7 @@ turn on "Applications in terminal may access clipboard" (Settings > General >
 Selection). Inside tmux, set `allow-passthrough` as for
 [notifications](#notifications).
 
-honk uses the mouse, so your terminal does not select text on its own. To use
-the terminal's own selection, hold a key while you drag: Shift in most
-terminals, Option in iTerm2, Fn in Terminal.app.
+To use your terminal's own selection instead, see [Mouse](#mouse).
 
 ### What honk does not do yet
 
@@ -313,8 +311,9 @@ file whose text would be hard to read on its background, and says why in
 ### Mouse
 
 honk uses the mouse: you can click a channel, a nick, a link or an omnibox
-row, and scroll the chat with the wheel. While honk has the mouse, a plain drag
-does not select text in the terminal. Hold a key while you drag instead: Shift
+row, scroll the chat with the wheel, and [copy text](#copy-text) with a drag.
+While honk has the mouse, a plain drag selects text in honk, not in the
+terminal. For the terminal's own selection, hold a key while you drag: Shift
 in most terminals, Option in iTerm2, or Fn in Terminal.app.
 
 To leave the mouse to the terminal, add this to the top level of the config
@@ -327,6 +326,7 @@ file, or run `honk --no-mouse` for one run:
 Then a plain drag selects text, the terminal's copy and search work, and tmux
 copy mode works on honk's pane. These stop working:
 
+- Copying text with honk's own selection. The terminal's copy works instead.
 - Clicking a channel in the sidebar, a nick in the user list, a row in the
   omnibox, a nick, channel or link in the chat or the topic, and the "new
   messages below" bar.

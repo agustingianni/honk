@@ -1,4 +1,4 @@
-import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
+import type { InputRenderable, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isUserSender, nameKey, sameNick, STATUS_BUFFER } from "../irc/names.ts";
@@ -62,14 +62,14 @@ function shortNick(nick: string): string {
  */
 function Divider({ label, color, paneWidth }: { label: string; color: string; paneWidth: number }) {
   const half = (
-    <text flexGrow={1} flexShrink={1} flexBasis={0} minWidth={1} wrapMode="none" fg={color}>
+    <text selectable={false} flexGrow={1} flexShrink={1} flexBasis={0} minWidth={1} wrapMode="none" fg={color}>
       {"─".repeat(Math.max(1, paneWidth))}
     </text>
   );
   return (
     <box flexDirection="row" paddingLeft={1} paddingRight={1}>
       {half}
-      <text flexShrink={0} fg={color}>
+      <text selectable={false} flexShrink={0} fg={color}>
         <strong>{` ${label} `}</strong>
       </text>
       {half}
@@ -154,6 +154,9 @@ const MessageRow = memo(function MessageRow({
     }
   }
 
+  // A copy finds the message of each selected piece of text through these tags.
+  const tagText = useCallback((text: TextRenderable | null) => tagBody(text, msg), [msg]);
+
   // After the message, so its words are not names.
   const notSent = msg.delivery === "failed" && <span fg={theme.red}> (not sent)</span>;
 
@@ -161,7 +164,6 @@ const MessageRow = memo(function MessageRow({
   // continues down beside it.
   return (
     <box
-      // A copy finds the message of each selected piece of text through these tags.
       ref={(box) => tagRow(box, msg)}
       width="100%"
       flexDirection="row"
@@ -191,7 +193,6 @@ const MessageRow = memo(function MessageRow({
         )}
       </box>
       <box
-        ref={(box) => tagBody(box, msg)}
         flexGrow={1}
         flexShrink={1}
         marginLeft={1}
@@ -200,7 +201,11 @@ const MessageRow = memo(function MessageRow({
         borderColor={theme.gutter}
       >
         {segments ? (
-          <NameText names={names} namesEnd={segments.reduce((n, seg) => n + seg.text.length, 0)}>
+          <NameText
+            names={names}
+            namesEnd={segments.reduce((n, seg) => n + seg.text.length, 0)}
+            textRef={tagText}
+          >
             {(hovered) => (
               <>
                 <Segments
@@ -213,7 +218,7 @@ const MessageRow = memo(function MessageRow({
             )}
           </NameText>
         ) : (
-          <text>
+          <text ref={tagText}>
             {body}
             {notSent}
           </text>
@@ -570,7 +575,7 @@ export function ChatPane({
           hoverColor={theme.bgActiveRowHover}
           onMouseDown={jumpToBottom}
         >
-          <text fg={theme.accent}>
+          <text selectable={false} fg={theme.accent}>
             {newBelow} new {newBelow === 1 ? "message" : "messages"} below{" "}
             <span fg={theme.fgMuted}>{mouse ? "(PgDn or click to read)" : "(PgDn to read)"}</span>
           </text>

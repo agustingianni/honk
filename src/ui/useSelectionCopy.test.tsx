@@ -20,14 +20,37 @@ const MESSAGES: ChatMessage[] = [
   { id: "d", timestamp: at(5), kind: "message", from: "eve", text: "photo\u202Egpj.exe" },
 ];
 
-interface Harness {
+type Rendered = Awaited<ReturnType<typeof testRender>>;
+
+interface Harness extends Pick<Rendered, "mockMouse" | "mockInput" | "renderer"> {
   copies: string[];
   /** Keys that got past the copy listener to the rest of the app. */
   keys: string[];
+  /** Lines sent from the input. */
+  sent: string[];
   screen: string[];
-  mockMouse: Awaited<ReturnType<typeof testRender>>["mockMouse"];
-  mockInput: Awaited<ReturnType<typeof testRender>>["mockInput"];
-  renderer: Awaited<ReturnType<typeof testRender>>["renderer"];
+}
+
+/** A connected server, where your nick is "me", with one #honk buffer. */
+function serverWith(buffer: BufferState): ServerState {
+  return {
+    id: "test",
+    name: "test",
+    config: { id: "test", host: "127.0.0.1", nick: "me" },
+    status: "connected",
+    nick: "me",
+    tls: false,
+    buffers: { "#honk": buffer },
+    bufferOrder: ["#honk"],
+  };
+}
+
+/** A clipboard that keeps what it was given. */
+function recordingCopy(copies: string[]) {
+  return async (text: string): Promise<CopyResult> => {
+    copies.push(text);
+    return "copied";
+  };
 }
 
 let destroy: (() => void) | undefined;
@@ -40,7 +63,9 @@ afterEach(() => {
  * The chat pane inside a screen-wide box that copies on release, as in App.
  * Narrow, so kai's first line wraps.
  */
-async function setup(options: { topic?: string; inputFocused?: boolean } = {}): Promise<Harness & { sent: string[] }> {
+async function setup(
+  options: { topic?: string; inputFocused?: boolean; firstUnreadId?: string } = {},
+): Promise<Harness> {
   const copies: string[] = [];
   const keys: string[] = [];
   const sent: string[] = [];
@@ -48,25 +73,14 @@ async function setup(options: { topic?: string; inputFocused?: boolean } = {}): 
     name: "#honk",
     kind: "channel",
     topic: options.topic ?? "",
+    firstUnreadId: options.firstUnreadId,
     messages: MESSAGES,
     users: [],
     unread: 0,
     hasMention: false,
   };
-  const server: ServerState = {
-    id: "test",
-    name: "test",
-    config: { id: "test", host: "127.0.0.1", nick: "me" },
-    status: "connected",
-    nick: "me",
-    tls: false,
-    buffers: { "#honk": buffer },
-    bufferOrder: ["#honk"],
-  };
-  const copyText = async (text: string): Promise<CopyResult> => {
-    copies.push(text);
-    return "copied";
-  };
+  const server = serverWith(buffer);
+  const copyText = recordingCopy(copies);
   const onCopied = () => {};
   function Screen() {
     const onMouseUp = useSelectionCopy(copyText, onCopied);
@@ -176,6 +190,16 @@ describe("copy on release", () => {
     expect(lines.at(-1)).toBe("14:02 <kai> 0.9.8");
   });
 
+  test("the \"new\" divider between messages is not copied", async () => {
+    const { copies, screen, mockMouse } = await setup({ firstUnreadId: "c" });
+    expect(screen.join("\n")).toContain(" new ");
+    const from = cellOf(screen, "café");
+    const to = cellOf(screen, "waves", 4);
+    await act(() => mockMouse.drag(from.x, from.y, to.x, to.y));
+    await settle();
+    expect(copies).toEqual(["14:03 <kai> café Привет 🎉 done\n14:04 * fern waves"]);
+  });
+
   test("a plain click copies nothing", async () => {
     const { copies, screen, mockMouse } = await setup();
     const word = cellOf(screen, "waves", 1);
@@ -244,26 +268,18 @@ describe("keys with a selection", () => {
 test("a click on a channel in the sidebar switches to it and selects nothing", async () => {
   const copies: string[] = [];
   const picked: string[] = [];
-  const server: ServerState = {
-    id: "test",
-    name: "test",
-    config: { id: "test", host: "127.0.0.1", nick: "me" },
-    status: "connected",
-    nick: "me",
-    tls: false,
-    buffers: {
-      "#honk": { name: "#honk", kind: "channel", topic: "", messages: [], users: [], unread: 0, hasMention: false },
-    },
-    bufferOrder: ["#honk"],
-  };
+  const server = serverWith({
+    name: "#honk",
+    kind: "channel",
+    topic: "",
+    messages: [],
+    users: [],
+    unread: 0,
+    hasMention: false,
+  });
+  const copyText = recordingCopy(copies);
   function Screen() {
-    const onMouseUp = useSelectionCopy(
-      async (text) => {
-        copies.push(text);
-        return "copied";
-      },
-      () => {},
-    );
+    const onMouseUp = useSelectionCopy(copyText, () => {});
     return (
       <box width="100%" height="100%" onMouseUp={onMouseUp}>
         <Sidebar

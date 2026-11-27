@@ -46,7 +46,7 @@ interface HotState {
   recentActions: Record<string, number>;
   saveRecentActions: (recent: Record<string, number>) => void;
   /** One clipboard for the life of the program. See src/clipboard.ts. */
-  copyText: CopyText;
+  copyText?: CopyText;
 }
 
 const g = globalThis as unknown as { __ircHot?: HotState };
@@ -167,14 +167,14 @@ if (!g.__ircHot) {
     saveTheme,
     recentActions: loadState(statePath).recentActions,
     saveRecentActions,
-    copyText: createCopyText(renderer),
   };
   g.__ircHot = hot;
 }
 
 const hot = g.__ircHot;
 hot.version += 1;
-// A hot reload from a version without copying keeps the old state.
+// Here, not in the first start above, so a hot reload from a version without
+// copying gets one too.
 hot.copyText ??= createCopyText(hot.renderer);
 applyTheme(hot.themes.find((t) => t.id === hot.themeId)!.theme);
 hot.root.render(

@@ -2,6 +2,7 @@ import {
   createClipboard,
   createHostClipboard,
   createRendererClipboardAdapter,
+  type ClipboardService,
   type RendererClipboardBoundary,
 } from "@opentui/core";
 
@@ -25,19 +26,21 @@ export type CopyText = (text: string) => Promise<CopyResult>;
  * (macOS, Wayland, X11, Windows), and skips it over SSH, where it would fill
  * the clipboard of the wrong machine.
  *
- * Keep one for the life of the program: on Linux, honk owns the clipboard and
- * other programs ask it for the text when they paste.
+ * The clipboard starts on the first copy, and then stays for the life of the
+ * program: on Linux, honk owns the clipboard and other programs ask it for the
+ * text when they paste.
  */
 export function createCopyText(renderer: RendererClipboardBoundary): CopyText {
-  const clipboard = createClipboard({
-    host: createHostClipboard(),
-    terminal: createRendererClipboardAdapter(renderer),
-  });
+  let clipboard: ClipboardService | undefined;
   return async (text) => {
     // OpenTUI rejects NUL and empty text; the system clipboard cannot hold NUL.
     const clean = text.replaceAll("\0", "");
     if (!clean) return "failed";
     try {
+      clipboard ??= createClipboard({
+        host: createHostClipboard(),
+        terminal: createRendererClipboardAdapter(renderer),
+      });
       const result = await clipboard.writeText(clean, {
         destination: "all-available",
         selection: "clipboard",
