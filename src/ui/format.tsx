@@ -53,10 +53,9 @@ interface FormattedSegment {
   href?: string;
 }
 
-// A link ends at a control or format character (U+202E RIGHT-TO-LEFT OVERRIDE,
-// U+200B ZERO WIDTH SPACE and so on). The screen does not show them, so a link
-// that kept them would open a different address than the one you read:
-// "https://pay\u200Bpal.com" looks like paypal.com.
+// A link ends at a control or format character, such as U+202E (RIGHT-TO-LEFT
+// OVERRIDE). The screen does not show them, so a link that kept them would open
+// an address other than the one you read.
 const URL_RE = /https?:\/\/[^\s<>"'`\p{Cc}\p{Cf}]+/gu;
 
 function trimUrlTrailingPunct(url: string): { url: string; trailing: string } {

@@ -78,8 +78,6 @@ describe("links from other people", () => {
 });
 
 test("a link ends at an invisible character, so it opens what it shows", () => {
-  // U+202E (RIGHT-TO-LEFT OVERRIDE) takes no cell on screen. Kept in the link, it
-  // would open "https://example.com/%E2%80%AEgpj.exe", not the address you read.
   expect(plainSegments("get https://example.com/\u202Egpj.exe")).toEqual([
     { text: "get " },
     { text: "https://example.com/", href: "https://example.com/" },
