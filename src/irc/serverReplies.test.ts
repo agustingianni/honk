@@ -234,6 +234,32 @@ test("an unlabeled FAIL for one channel leaves /history in another channel waiti
   expect(texts("#honk").at(-1)).toBe("The server has no older messages in #honk.");
 });
 
+test("an unlabeled FAIL for a target with no buffer leaves /history elsewhere waiting", async () => {
+  irc.labeledResponse = false;
+  await inHonk();
+  irc.holdHistoryIn.add("#honk");
+  m.handleInput("/history 5");
+  await until(() =>
+    irc.received.some((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk"),
+  );
+  // Like the fetch honk sends on reconnect for a nick that wrote while you were away.
+  irc.sendRaw(":fake.irc FAIL CHATHISTORY MESSAGE_ERROR AFTER bob :Messages could not be retrieved");
+  await until(() => texts("#honk").some((t) => t.startsWith("Could not load history")));
+  irc.releaseHistory();
+  await until(() => texts("#honk").some((t) => t.includes("no older messages")));
+  expect(texts("#honk").at(-1)).toBe("The server has no older messages in #honk.");
+});
+
+test("an unlabeled FAIL for a DM with a nick like a subcommand goes to that DM", async () => {
+  irc.labeledResponse = false;
+  await inHonk();
+  m.openDm("alpha", "after");
+  m.setActive("alpha", "#honk");
+  irc.sendRaw(":fake.irc FAIL CHATHISTORY MESSAGE_ERROR BEFORE after :Messages could not be retrieved");
+  await until(() => allTexts().some((t) => t.startsWith("Could not load history")));
+  expect(texts("after").some((t) => t.startsWith("Could not load history"))).toBe(true);
+});
+
 test("history plays back without HistServ lines (draft/event-playback)", async () => {
   irc.join("dave", "#honk"); // a JOIN in the history, as Ergo keeps it
   irc.say("dave", "#honk", "hello from before");

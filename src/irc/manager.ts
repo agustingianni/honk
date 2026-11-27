@@ -278,20 +278,25 @@ function takeHistoryRequest(
 const HISTORY_SUBCOMMANDS = new Set(["LATEST", "BEFORE", "AFTER", "AROUND", "BETWEEN", "TARGETS"]);
 
 /**
- * The target a FAIL CHATHISTORY names: the first context param, after the subcommand,
- * for which `known` says yes. The spec form is
- * `FAIL CHATHISTORY <code> <subcommand> <target> :<description>`, but some servers leave
- * out the subcommand, so this looks at each param, not at a fixed position.
+ * The target a FAIL CHATHISTORY names. The spec form is
+ * `FAIL CHATHISTORY <code> <subcommand> <target> :<description>`, so after a subcommand
+ * the next param is the target, even one honk has no buffer for. Some servers leave out
+ * the subcommand; then the target is the first param for which `known` says yes.
  *
- *   ["LATEST", "#a", "*"], known #a -> "#a"
+ *   ["LATEST", "#a", "*"], known -  -> "#a"
+ *   ["BEFORE", "after"],   known -  -> "after"  (a DM with the nick "after")
  *   ["#a"],                known #a -> "#a"
- *   ["LATEST", "#a"],      known -  -> undefined
+ *   ["#a"],                known -  -> undefined
  */
 function historyFailTarget(
   context: string[],
   known: (name: string) => boolean,
 ): string | undefined {
-  return context.find((p) => !HISTORY_SUBCOMMANDS.has(p.toUpperCase()) && known(p));
+  if (HISTORY_SUBCOMMANDS.has((context[0] ?? "").toUpperCase())) {
+    const target = context[1];
+    return target && target !== "*" ? target : undefined;
+  }
+  return context.find(known);
 }
 
 /**
@@ -300,6 +305,10 @@ function historyFailTarget(
  * matches an unlabeled request for the target it names. An unlabeled FAIL that names no
  * target can't say which request it answers, so every unlabeled request stops waiting;
  * labeled ones still get their own reply.
+ *
+ * Without labels, a FAIL for the history honk fetches on join looks the same as a FAIL
+ * for a /history in that channel, so it can take that /history request. Its own reply
+ * then shows nothing.
  *
  *   [#a h1, #b h2], FAIL label h2      -> the #b request, leaves [#a h1]
  *   [#a, #b],       FAIL no label, #b  -> the #b request, leaves [#a]
