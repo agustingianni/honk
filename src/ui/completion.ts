@@ -1,4 +1,5 @@
 import { SLASH_COMMANDS } from "../irc/commands.ts";
+import { type Casemapping, nameKey } from "../irc/names.ts";
 import type { ChatMessage, NickEntry } from "../types.ts";
 
 interface CompletionContext {
@@ -6,6 +7,8 @@ interface CompletionContext {
   messages: ChatMessage[];
   channels: string[];
   myNick: string;
+  /** The server's casemapping. Nicks it sees as one are offered once. See nameKey. */
+  casemapping: Casemapping;
 }
 
 function isFuzzyMatch(query: string, target: string): boolean {
@@ -25,12 +28,13 @@ function isFuzzyMatch(query: string, target: string): boolean {
 function rankCandidates(
   query: string,
   candidates: string[],
+  /** Recent speakers first, by candidate. */
   recentOrder?: Map<string, number>,
 ): string[] {
   const sortBucket = (arr: string[]) =>
     arr.sort((a, b) => {
-      const ra = recentOrder?.get(a.toLowerCase()) ?? Number.POSITIVE_INFINITY;
-      const rb = recentOrder?.get(b.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+      const ra = recentOrder?.get(a) ?? Number.POSITIVE_INFINITY;
+      const rb = recentOrder?.get(b) ?? Number.POSITIVE_INFINITY;
       if (ra !== rb) return ra - rb;
       return a.localeCompare(b);
     });
@@ -85,32 +89,39 @@ export function getCompletions(
   }
 
   // 3. Nick completion (channel users + recent speakers, excluding self)
-  const myLower = ctx.myNick.toLowerCase();
+  const key = (nick: string) => nameKey(nick, ctx.casemapping);
+  const myKey = key(ctx.myNick);
   const recentOrder = new Map<string, number>();
   let rank = 0;
   for (let i = ctx.messages.length - 1; i >= 0; i--) {
     const from = ctx.messages[i]!.from;
     if (!from) continue;
-    const lower = from.toLowerCase();
-    if (lower === myLower || recentOrder.has(lower)) continue;
-    recentOrder.set(lower, rank++);
+    const k = key(from);
+    if (k === myKey || recentOrder.has(k)) continue;
+    recentOrder.set(k, rank++);
   }
 
   const nickMap = new Map<string, string>();
   for (const u of ctx.users) {
-    const lower = u.nick.toLowerCase();
-    if (lower !== myLower) nickMap.set(lower, u.nick);
+    const k = key(u.nick);
+    if (k !== myKey) nickMap.set(k, u.nick);
   }
   for (let i = ctx.messages.length - 1; i >= 0; i--) {
     const from = ctx.messages[i]!.from;
     if (!from) continue;
-    const lower = from.toLowerCase();
-    if (lower !== myLower && !nickMap.has(lower)) {
-      nickMap.set(lower, from);
+    const k = key(from);
+    if (k !== myKey && !nickMap.has(k)) {
+      nickMap.set(k, from);
     }
   }
 
-  const matches = rankCandidates(token, [...nickMap.values()], recentOrder);
+  // Ranks by the nick as offered, so the sort does not fold names again.
+  const rankOf = new Map<string, number>();
+  for (const [k, nick] of nickMap) {
+    const rank = recentOrder.get(k);
+    if (rank !== undefined) rankOf.set(nick, rank);
+  }
+  const matches = rankCandidates(token, [...nickMap.values()], rankOf);
   const suffix = before === "" ? ": " : " ";
   return matches.map((nick) => `${before}${nick}${suffix}`);
 }

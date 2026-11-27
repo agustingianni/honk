@@ -51,6 +51,7 @@ async function renderPane(buffer: Partial<BufferState>, width = 60, handlers: Ha
     config: { id: "test", host: "127.0.0.1", nick: "me" },
     status: "connected",
     nick: "me",
+    casemapping: "rfc1459",
     tls: false,
     buffers: { [full.name]: full },
     bufferOrder: [full.name],

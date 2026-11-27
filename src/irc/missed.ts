@@ -12,7 +12,7 @@
  */
 
 import type { BufferKind, ChatMessage } from "../types.ts";
-import { isChannelName, sameNick } from "./names.ts";
+import { type Casemapping, isChannelName, sameNick } from "./names.ts";
 import { isReadableLine } from "./readMarker.ts";
 
 /** What honk knew when the connection was lost. */
@@ -74,19 +74,21 @@ export const TARGETS_BATCH_TYPES: ReadonlySet<string> = new Set([
  * so these lines arrive with `command` undefined. They are recognized by "TARGETS".
  *
  * Channels are left out: honk loads their history when it rejoins them. So is your own
- * nick (`ownNicks`), which some servers list for notes to yourself.
+ * nick (`ownNicks`), which some servers list for notes to yourself. Nicks are compared
+ * with the server's casemapping.
  */
 export function dmTargets(
   lines: readonly { command?: string; params: readonly string[] }[],
   ownNicks: readonly string[],
+  mapping: Casemapping,
 ): string[] {
   const nicks: string[] = [];
   for (const line of lines) {
     if (line.command !== undefined && line.command.toUpperCase() !== "CHATHISTORY") continue;
     const [sub, target] = line.params;
     if (sub?.toUpperCase() !== "TARGETS" || !target || isChannelName(target)) continue;
-    if (ownNicks.some((n) => sameNick(n, target))) continue;
-    if (!nicks.some((n) => sameNick(n, target))) nicks.push(target);
+    if (ownNicks.some((n) => sameNick(n, target, mapping))) continue;
+    if (!nicks.some((n) => sameNick(n, target, mapping))) nicks.push(target);
   }
   return nicks;
 }

@@ -1,7 +1,14 @@
 import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { isUserSender, nameKey, sameNick, STATUS_BUFFER } from "../irc/names.ts";
+import {
+  type Casemapping,
+  casemappingOf,
+  isUserSender,
+  nameKey,
+  sameNick,
+  STATUS_BUFFER,
+} from "../irc/names.ts";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, NickEntry, ServerState } from "../types.ts";
 import { linkOpener } from "../openUrl.ts";
@@ -276,6 +283,7 @@ export function ChatPane({
   const [inputValue, setInputValue] = useState("");
   // Off with "mouse": false or --no-mouse. Then a click never reaches honk.
   const mouse = useRenderer().useMouse;
+  const casemapping = casemappingOf(server);
 
   // Tab completion state
   const completionRef = useRef<{ matches: string[]; index: number } | null>(null);
@@ -319,6 +327,7 @@ export function ChatPane({
         messages: buffer?.messages ?? [],
         channels,
         myNick: server?.nick ?? "",
+        casemapping,
       });
 
       if (matches.length > 0) {
@@ -419,20 +428,27 @@ export function ChatPane({
   // the first hover after the user list changes, not on every join and part.
   const users = buffer?.users ?? NO_USERS;
   const myNick = server?.nick ?? "";
-  const nicksRef = useRef<{ users: NickEntry[]; myNick: string; byKey?: Map<string, string> }>({
-    users,
-    myNick,
-  });
-  if (nicksRef.current.users !== users || nicksRef.current.myNick !== myNick) {
-    nicksRef.current = { users, myNick };
+  const nicksRef = useRef<{
+    users: NickEntry[];
+    myNick: string;
+    casemapping: Casemapping;
+    byKey?: Map<string, string>;
+  }>({ users, myNick, casemapping });
+  if (
+    nicksRef.current.users !== users ||
+    nicksRef.current.myNick !== myNick ||
+    nicksRef.current.casemapping !== casemapping
+  ) {
+    nicksRef.current = { users, myNick, casemapping };
   }
   const findNick = useCallback((word: string) => {
     const nicks = nicksRef.current;
+    const key = (nick: string) => nameKey(nick, nicks.casemapping);
     if (!nicks.byKey) {
-      nicks.byKey = new Map(nicks.users.map((u) => [nameKey(u.nick), u.nick]));
-      nicks.byKey.delete(nameKey(nicks.myNick));
+      nicks.byKey = new Map(nicks.users.map((u) => [key(u.nick), u.nick]));
+      nicks.byKey.delete(key(nicks.myNick));
     }
-    return nicks.byKey.get(nameKey(word));
+    return nicks.byKey.get(key(word));
   }, []);
   const names = useMemo(
     (): NameActions => ({ findNick, openNick: onSelectUser, openChannel: onJoinChannel }),
@@ -545,7 +561,7 @@ export function ChatPane({
               day === null &&
               msg.kind === "message" &&
               prev?.kind === "message" &&
-              sameNick(prev.from, msg.from) &&
+              sameNick(prev.from, msg.from, casemapping) &&
               msg.timestamp.getTime() - prev.timestamp.getTime() < GROUP_WINDOW_MS;
 
             return (

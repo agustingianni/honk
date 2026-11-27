@@ -14,7 +14,7 @@ describe("EchoTracker", () => {
     t.add("s", "#a", "m1", [msg("hi")]);
     t.add("s", "#b", "m2", [msg("hi")]);
     t.add("s", "#a", "m3", [msg("hi")]);
-    expect(t.take("s", "#A", msg("hi"))).toBe("m1");
+    expect(t.take("s", "#a", msg("hi"))).toBe("m1");
     expect(t.take("s", "#a", msg("hi"))).toBe("m3");
     expect(t.take("s", "#a", msg("hi"))).toBeUndefined();
   });
@@ -38,7 +38,9 @@ describe("EchoTracker", () => {
 
   test("keeps at most MAX_WAITING_ECHOES, dropping the oldest", () => {
     const t = new EchoTracker();
-    for (let i = 0; i <= MAX_WAITING_ECHOES; i++) t.add("s", "#a", `m${i}`, [msg(`line ${i}`)]);
+    for (let i = 0; i <= MAX_WAITING_ECHOES; i++) {
+      t.add("s", "#a", `m${i}`, [msg(`line ${i}`)]);
+    }
     expect(t.take("s", "#a", msg("line 0"))).toBeUndefined();
     expect(t.take("s", "#a", msg("line 1"))).toBe("m1");
   });

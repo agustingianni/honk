@@ -13,11 +13,15 @@ import type {
   UpdateNotice,
 } from "../types.ts";
 import {
+  type Casemapping,
   bufferKindFor,
+  casemappingOf,
+  DEFAULT_CASEMAPPING,
   isChannelName,
   NICK_CHAR,
   normalizeNick,
   nameKey,
+  parseCasemapping,
   sameNick,
   STATUS_BUFFER,
   UNKNOWN_SENDER,
@@ -133,6 +137,11 @@ interface ServerControl {
    * own about once a second, so a server that keeps refusing it would flood *status.
    */
   markReadFailShown: boolean;
+  /**
+   * The casemapping that the name keys above (whois, away texts, /history requests),
+   * and the read markers in ReadMarkerTracker, were made with. See settleCasemapping.
+   */
+  keyCasemapping: Casemapping;
 }
 
 function createControl(): ServerControl {
@@ -152,6 +161,7 @@ function createControl(): ServerControl {
     historyRequests: [],
     awayShown: new Map(),
     markReadFailShown: false,
+    keyCasemapping: DEFAULT_CASEMAPPING,
   };
 }
 
@@ -290,13 +300,12 @@ let historyLabels = 0;
 function takeHistoryRequest(
   pending: HistoryRequest[],
   label: string | undefined,
-  target: string,
+  targetKey: string,
 ): HistoryRequest | undefined {
-  const key = nameKey(target);
   const i =
     label !== undefined
       ? pending.findIndex((r) => r.label === label)
-      : pending.findIndex((r) => r.label === undefined && r.target === key);
+      : pending.findIndex((r) => r.label === undefined && r.target === targetKey);
   return i === -1 ? undefined : pending.splice(i, 1)[0];
 }
 
@@ -344,10 +353,10 @@ function historyFailTarget(
 function takeFailedHistoryRequest(
   pending: HistoryRequest[],
   label: string | undefined,
-  target: string | undefined,
+  targetKey: string | undefined,
 ): HistoryRequest | undefined {
-  if (label !== undefined || target !== undefined) {
-    return takeHistoryRequest(pending, label, target ?? "");
+  if (label !== undefined || targetKey !== undefined) {
+    return takeHistoryRequest(pending, label, targetKey ?? "");
   }
   for (let i = pending.length - 1; i >= 0; i--) {
     if (pending[i]!.label === undefined) pending.splice(i, 1);
@@ -367,11 +376,17 @@ function createBuffer(name: string, kind: BufferKind): BufferState {
   };
 }
 
-/** True if `text` contains `nick` as a whole word, touching no nick character on either side. `\b` fails for nicks like `goose[m]`. */
-function mentionsNick(text: string, nick: string): boolean {
+/**
+ * True if `text` contains `nick` as a whole word, touching no nick character on either
+ * side. `\b` fails for nicks like `goose[m]`. Both are folded with the server's
+ * casemapping first, so on rfc1459 "GOOSE{M}: hi" names goose[m].
+ */
+function mentionsNick(text: string, nick: string, mapping: Casemapping): boolean {
   if (!nick) return false;
-  const escaped = nick.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<!${NICK_CHAR.source})${escaped}(?!${NICK_CHAR.source})`, "i").test(text);
+  const escaped = nameKey(nick, mapping).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<!${NICK_CHAR.source})${escaped}(?!${NICK_CHAR.source})`).test(
+    nameKey(text, mapping),
+  );
 }
 
 /** The buffer a chat line belongs to: the channel, or for a DM the other person. */
@@ -445,21 +460,29 @@ function demoUsers(entries: string[]): NickEntry[] {
     const prefix = PREFIX_ORDER.includes(entry[0]!) ? entry[0]! : "";
     return { prefix, nick: entry.slice(prefix.length) };
   });
-  if (!users.some((u) => sameNick(u.nick, DEMO_NICK))) {
+  // Demo servers never send a CASEMAPPING, so they keep the default.
+  if (!users.some((u) => sameNick(u.nick, DEMO_NICK, DEFAULT_CASEMAPPING))) {
     users.push({ prefix: "", nick: DEMO_NICK });
   }
   return sortUsers(users);
 }
 
-function joinKey(serverId: string, channel: string): string {
-  return `${serverId}\n${nameKey(channel)}`;
+/** The start of every joinKey on a server. */
+function joinPrefix(serverId: string): string {
+  return `${serverId}\n`;
+}
+
+/** A /join request's key: the server and the channel's key (see nameKey). */
+function joinKey(serverId: string, channelKey: string): string {
+  return joinPrefix(serverId) + channelKey;
 }
 
 function channelsWithNick(server: ServerState, nick: string): string[] {
-  const lower = nameKey(nick);
   return server.bufferOrder.filter((name) => {
     const buf = server.buffers[name];
-    return buf?.kind === "channel" && buf.users.some((u) => nameKey(u.nick) === lower);
+    return (
+      buf?.kind === "channel" && buf.users.some((u) => sameNick(u.nick, nick, server.casemapping))
+    );
   });
 }
 
@@ -504,6 +527,7 @@ export class IrcManager {
           const client = this.clients.get(serverId);
           if (client) requestMarkRead(client, bufferName, time);
         },
+        casemapping: (serverId) => this.casemapping(serverId),
       },
       { delayMs: options.markReadDelayMs },
     );
@@ -580,14 +604,47 @@ export class IrcManager {
     return ctrl;
   }
 
+  /** The server's casemapping, which decides which names are the same. See nameKey. */
+  private casemapping(serverId: string): Casemapping {
+    return casemappingOf(this.servers.get(serverId));
+  }
+
+  /** `name` folded with the server's casemapping, for use as a map key. See nameKey. */
+  private key(serverId: string, name: string): string {
+    return nameKey(name, this.casemapping(serverId));
+  }
+
+  /** True when the server sees `a` and `b` as one name. See sameNick. */
+  private same(serverId: string, a: string | undefined, b: string | undefined): boolean {
+    return sameNick(a, b, this.casemapping(serverId));
+  }
+
+  /**
+   * Call once a connection knows its server's casemapping. If it differs from the one
+   * the kept name keys were made with, those keys no longer match, so they are dropped:
+   * read markers (the server sends them again for each JOIN), and whatever still waits
+   * for an answer. Folding them again can't work: a key folded with rfc1459 no longer
+   * says whether the name had "[" or "{".
+   */
+  private settleCasemapping(serverId: string): void {
+    const server = this.servers.get(serverId);
+    const ctrl = this.getControl(serverId);
+    if (!server || server.casemapping === ctrl.keyCasemapping) return;
+    ctrl.keyCasemapping = server.casemapping;
+    this.readMarkerTracker.forget(serverId);
+    this.forgetPendingRequests(serverId);
+    this.echoes.drop(serverId);
+  }
+
   /** True (and forgets the request) if the user ran /join for this channel and it hasn't expired. */
   /** Remembers that you asked to join `channel`, so its JOIN moves the view there. */
   private noteRequestedJoin(serverId: string, channel: string): void {
-    this.requestedJoins.set(joinKey(serverId, channel), Date.now() + REQUESTED_JOIN_TTL_MS);
+    const key = joinKey(serverId, this.key(serverId, channel));
+    this.requestedJoins.set(key, Date.now() + REQUESTED_JOIN_TTL_MS);
   }
 
   private takeRequestedJoin(serverId: string, channel: string): boolean {
-    const key = joinKey(serverId, channel);
+    const key = joinKey(serverId, this.key(serverId, channel));
     const expires = this.requestedJoins.get(key);
     this.requestedJoins.delete(key);
     return expires !== undefined && expires > Date.now();
@@ -599,7 +656,7 @@ export class IrcManager {
     ctrl.historyRequests = [];
     ctrl.pendingWhois.clear();
     ctrl.awayShown.clear();
-    const prefix = joinKey(serverId, "");
+    const prefix = joinPrefix(serverId);
     for (const key of this.requestedJoins.keys()) {
       if (key.startsWith(prefix)) this.requestedJoins.delete(key);
     }
@@ -607,7 +664,7 @@ export class IrcManager {
 
   /** Forgets which "is away" texts were shown for this nick, in every buffer. */
   private forgetAwayShown(serverId: string, nick: string): void {
-    this.getControl(serverId).awayShown.delete(nameKey(nick));
+    this.getControl(serverId).awayShown.delete(this.key(serverId, nick));
   }
 
   private clearServerTimers(ctrl: ServerControl): void {
@@ -697,6 +754,7 @@ export class IrcManager {
       config: { id, host: "", nick: defaultNick() },
       status: "disconnected",
       nick: defaultNick(),
+      casemapping: DEFAULT_CASEMAPPING,
       tls: false,
       buffers: { [STATUS_BUFFER]: status },
       bufferOrder: [STATUS_BUFFER],
@@ -760,6 +818,7 @@ export class IrcManager {
         config,
         status: "disconnected",
         nick: config.nick,
+        casemapping: DEFAULT_CASEMAPPING,
         tls: config.tls ?? true,
         buffers: { [STATUS_BUFFER]: statusBuf },
         bufferOrder: [STATUS_BUFFER],
@@ -1128,6 +1187,9 @@ export class IrcManager {
         ctrl.connectTimer = null;
       }
       ctrl.registered = true;
+      // Each connection starts from the default, whatever an earlier one said: a server
+      // that sends no CASEMAPPING uses rfc1459. The 005 lines that follow may change it.
+      server.casemapping = DEFAULT_CASEMAPPING;
       const isReconnect = ctrl.hasEverConnected;
       ctrl.hasEverConnected = true;
       this.readMarkerTracker.onConnected(serverId);
@@ -1180,7 +1242,11 @@ export class IrcManager {
       const server = live();
       const ctrl = this.controls.get(serverId);
       if (!server || !ctrl?.missed) return;
-      const nicks = dmTargets(batch.params.messages, [ctrl.missed.nick, server.nick]);
+      const nicks = dmTargets(
+        batch.params.messages,
+        [ctrl.missed.nick, server.nick],
+        this.casemapping(serverId),
+      );
       if (nicks.length === 0) return;
       const buffers = new Set(ctrl.missed.buffers);
       for (const nick of nicks) buffers.add(this.bufferKey(serverId, nick));
@@ -1203,6 +1269,25 @@ export class IrcManager {
       server.name = net;
       this.emit();
     });
+
+    // Which names the server sees as the same (see nameKey). 005 comes right after 001,
+    // before any JOIN or message. "register" set the default first.
+    // irc-client-ts emits "isupport:<key>" for every token, but its types list only a
+    // few keys. The event is the same shape as isupport:network.
+    client.on("isupport:casemapping" as "isupport:network", (msg) => {
+      const server = live();
+      if (!server) return;
+      server.casemapping = parseCasemapping(msg.params.value);
+      this.settleCasemapping(serverId);
+      this.emit();
+    });
+    // A server that sends no CASEMAPPING has sent all its 005 lines by the end of the
+    // MOTD, so the default stands.
+    for (const end of ["raw:rpl_endofmotd", "raw:err_nomotd"] as const) {
+      client.on(end, () => {
+        if (live()) this.settleCasemapping(serverId);
+      });
+    }
 
     client.on("disconnected", () => {
       const server = live();
@@ -1257,7 +1342,7 @@ export class IrcManager {
       const channel = msg.params.channel;
       const who = normalizeNick(msg.source?.name);
       this.ensureBuffer(serverId, channel, "channel");
-      if (sameNick(who, server.nick)) {
+      if (this.same(serverId, who, server.nick)) {
         // Switch for a /join, or from this server's *status (auto-join at startup).
         // Auto-joins and reconnect re-joins never take focus from another buffer.
         const requested = this.takeRequestedJoin(serverId, channel);
@@ -1290,7 +1375,7 @@ export class IrcManager {
       if (!server) return;
       const channel = msg.params.channel;
       const who = normalizeNick(msg.source?.name);
-      if (sameNick(who, server.nick)) {
+      if (this.same(serverId, who, server.nick)) {
         this.removeBuffer(serverId, channel);
       } else {
         const reason = msg.params.comment ? ` (${msg.params.comment})` : "";
@@ -1318,7 +1403,7 @@ export class IrcManager {
       const { channel, nick, comment } = msg.params;
       const by = normalizeNick(msg.source?.name) || "someone";
       const reason = comment ? ` (${comment})` : "";
-      if (sameNick(nick, server.nick)) {
+      if (this.same(serverId, nick, server.nick)) {
         // The channel's buffer goes away, so say why in *status, where the view lands.
         this.removeBuffer(serverId, channel);
         this.pushMessage(
@@ -1340,7 +1425,7 @@ export class IrcManager {
       if (!server) return;
       const oldNick = normalizeNick(msg.source?.name);
       const newNick = msg.params.nick;
-      if (sameNick(oldNick, server.nick)) {
+      if (this.same(serverId, oldNick, server.nick)) {
         server.nick = newNick;
         this.pushMessage(
           serverId,
@@ -1356,7 +1441,7 @@ export class IrcManager {
       // An open DM follows the person to the new nick. If a DM with the new nick is
       // already open, the old one is merged into it, so one person has one DM.
       if (this.hasBuffer(serverId, oldNick)) {
-        if (this.hasBuffer(serverId, newNick) && !sameNick(oldNick, newNick)) {
+        if (this.hasBuffer(serverId, newNick) && !this.same(serverId, oldNick, newNick)) {
           this.mergeBuffer(serverId, oldNick, newNick);
         } else {
           this.renameBuffer(serverId, oldNick, newNick);
@@ -1420,7 +1505,10 @@ export class IrcManager {
       const label =
         batch.params.tags?.label ?? (parentRef && client.state.batches.get(parentRef)?.tags?.label);
       const ctrl = this.getControl(serverId);
-      if (batchTarget && takeHistoryRequest(ctrl.historyRequests, label, batchTarget)) {
+      if (
+        batchTarget &&
+        takeHistoryRequest(ctrl.historyRequests, label, this.key(serverId, batchTarget))
+      ) {
         const any = batch.params.messages.some(
           (m) => m.command === "privmsg" || m.command === "notice",
         );
@@ -1438,7 +1526,7 @@ export class IrcManager {
 
         const from = normalizeNick(raw.source?.name) || UNKNOWN_SENDER;
         const rawText = raw.params[1] ?? "";
-        const isSelf = sameNick(from, server.nick);
+        const isSelf = this.same(serverId, from, server.nick);
         const target =
           batchTarget ||
           routeTarget(raw.params[0] ?? STATUS_BUFFER, from, isSelf);
@@ -1482,7 +1570,7 @@ export class IrcManager {
       if (!server) return;
       const tags = msg.tags ?? chatTags.get(msg);
       const from = normalizeNick(msg.source?.name) || UNKNOWN_SENDER;
-      const isSelf = sameNick(from, server.nick);
+      const isSelf = this.same(serverId, from, server.nick);
       const target = routeTarget(msg.params.target, from, isSelf);
       // A DM opened as "/msg dave" takes the sender's real casing ("Dave") when they write.
       if (!isSelf && !isChannelName(target)) this.renameBuffer(serverId, target, target);
@@ -1492,14 +1580,15 @@ export class IrcManager {
       const isMention =
         !isSelf &&
         !isHistory &&
-        (!isChannelName(target) || mentionsNick(msg.params.text, server.nick));
+        (!isChannelName(target) ||
+          mentionsNick(msg.params.text, server.nick, this.casemapping(serverId)));
 
       // The echo of a line you sent here takes over the line already shown, so it
       // shows once, with the server's text and msgid. Only the first part of a split
       // line does; the other parts are new lines, as everyone else sees them.
       if (isSelf && !isHistory) {
         const echo = { kind, text: msg.params.text };
-        const shownId = this.echoes.take(serverId, this.bufferKey(serverId, target), echo);
+        const shownId = this.echoes.take(serverId, this.key(serverId, target), echo);
         if (shownId) {
           this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid);
           return;
@@ -1566,12 +1655,12 @@ export class IrcManager {
     client.on("raw:rpl_whoisuser", (msg) => {
       if (isStale()) return;
       const nick = msg.params[1];
-      if (nick) this.getControl(serverId).pendingWhois.add(nameKey(nick));
+      if (nick) this.getControl(serverId).pendingWhois.add(this.key(serverId, nick));
     });
     client.on("raw:rpl_endofwhois", (msg) => {
       if (isStale()) return;
       const nick = msg.params[1];
-      if (nick) this.getControl(serverId).pendingWhois.delete(nameKey(nick));
+      if (nick) this.getControl(serverId).pendingWhois.delete(this.key(serverId, nick));
     });
 
     // "alice is away": the server answers a message to someone who is away. It says so
@@ -1581,14 +1670,15 @@ export class IrcManager {
       const [, nick, away] = msg.params;
       if (!nick) return;
       const ctrl = this.getControl(serverId);
-      const key = nameKey(nick);
+      const key = this.key(serverId, nick);
       if (ctrl.pendingWhois.has(key)) return;
       const where = this.hasBuffer(serverId, nick) ? nick : this.replyTarget(serverId);
       const text = away ?? "";
       let shown = ctrl.awayShown.get(key);
       if (!shown) ctrl.awayShown.set(key, (shown = new Map()));
-      if (shown.get(nameKey(where)) === text) return;
-      shown.set(nameKey(where), text);
+      const whereKey = this.key(serverId, where);
+      if (shown.get(whereKey) === text) return;
+      shown.set(whereKey, text);
       this.pushMessage(
         serverId,
         where,
@@ -1645,9 +1735,15 @@ export class IrcManager {
           (name) =>
             name !== STATUS_BUFFER &&
             (this.hasBuffer(serverId, name) ||
-              ctrl.historyRequests.some((r) => r.target === nameKey(name))),
+              ctrl.historyRequests.some(
+                (r) => r.target === this.key(serverId, name),
+              )),
         );
-        const failed = takeFailedHistoryRequest(ctrl.historyRequests, label, target);
+        const failed = takeFailedHistoryRequest(
+          ctrl.historyRequests,
+          label,
+          target === undefined ? undefined : this.key(serverId, target),
+        );
         const buffer = failed?.target ?? target;
         if (buffer !== undefined && this.hasBuffer(serverId, buffer)) where = buffer;
       }
@@ -1713,8 +1809,9 @@ export class IrcManager {
     this.delivery.track(serverId, line, (token) => void client.send("PING", token));
     // With echo-message the server sends the line back. A line to yourself comes back
     // even without it; a second copy of it is dropped by msgid in pushMessage.
-    const echoed = client.state.caps.enabled.has("echo-message") || sameNick(target, nick);
-    if (echoed) this.echoes.add(serverId, bufferName, message.id, parts);
+    const echoed =
+      client.state.caps.enabled.has("echo-message") || this.same(serverId, target, nick);
+    if (echoed) this.echoes.add(serverId, this.key(serverId, bufferName), message.id, parts);
   }
 
   /**
@@ -1847,7 +1944,7 @@ export class IrcManager {
     // A message the server refused: mark that line "not sent" instead of letting the
     // next PONG mark it delivered.
     if (isErrorKind(name, "message") && subject[0]) {
-      const refused = this.delivery.reject(serverId, subject[0]);
+      const refused = this.delivery.reject(serverId, subject[0], this.casemapping(serverId));
       if (refused) {
         this.setDelivery(serverId, [refused], "failed");
         this.echoes.forget(serverId, refused.messageId);
@@ -1961,7 +2058,7 @@ export class IrcManager {
   private bufferKey(serverId: string, name: string): string {
     const server = this.servers.get(serverId);
     if (!server || server.buffers[name]) return name;
-    return server.bufferOrder.find((b) => sameNick(b, name)) ?? name;
+    return server.bufferOrder.find((b) => this.same(serverId, b, name)) ?? name;
   }
 
   private hasBuffer(serverId: string, name: string): boolean {
@@ -1976,7 +2073,7 @@ export class IrcManager {
     const buf = server?.buffers[key];
     if (!server || !buf || key === to) return;
     // "*Status" from a bouncer matches "*status" ignoring case; the status buffer keeps its name.
-    if (key === STATUS_BUFFER || sameNick(to, STATUS_BUFFER)) return;
+    if (key === STATUS_BUFFER || this.same(serverId, to, STATUS_BUFFER)) return;
     const toKey = this.bufferKey(serverId, to);
     if (toKey !== key && server.buffers[toKey]) return;
 
@@ -2077,7 +2174,9 @@ export class IrcManager {
     const marker = this.readMarkerTracker.serverMarker(serverId, bufferName);
     const missed =
       isMissedLine(ctrl?.missed, bufferName, message) && !isMarkedRead(marker, message);
-    if (missed && isMissedMention(ctrl!.missed!, buf.kind, message, server.nick, mentionsNick)) {
+    const mapping = this.casemapping(serverId);
+    const mentions = (text: string, nick: string) => mentionsNick(text, nick, mapping);
+    if (missed && isMissedMention(ctrl!.missed!, buf.kind, message, server.nick, mentions)) {
       message = { ...message, isMention: true };
     }
 
@@ -2190,7 +2289,8 @@ export class IrcManager {
   private isForYou(serverId: string, kind: BufferKind, message: ChatMessage): boolean {
     if (message.isMention || kind === "dm") return true;
     const nicks = [this.servers.get(serverId)?.nick, this.controls.get(serverId)?.missed?.nick];
-    return nicks.some((nick) => nick !== undefined && mentionsNick(message.text, nick));
+    const mapping = this.casemapping(serverId);
+    return nicks.some((nick) => nick !== undefined && mentionsNick(message.text, nick, mapping));
   }
 
   /**
@@ -2358,7 +2458,7 @@ export class IrcManager {
             timestamp: new Date(now - line.mins * 60_000),
             isMention:
               line.from !== undefined &&
-              (kind === "dm" || mentionsNick(line.text, DEMO_NICK)),
+              (kind === "dm" || mentionsNick(line.text, DEMO_NICK, DEFAULT_CASEMAPPING)),
           });
           buf.messages.push(msg);
           if (line.unread) {
@@ -2377,6 +2477,7 @@ export class IrcManager {
         config: { id: net.id, host: "", nick: DEMO_NICK, autoConnect: false },
         status: "connected",
         nick: DEMO_NICK,
+        casemapping: DEFAULT_CASEMAPPING,
         tls: true,
         buffers,
         bufferOrder: [],
@@ -2423,7 +2524,7 @@ export class IrcManager {
       event.buffer,
       makeMessage(event.kind ?? "message", event.text, {
         from: event.from,
-        isMention: isDm || mentionsNick(event.text, server.nick),
+        isMention: isDm || mentionsNick(event.text, server.nick, this.casemapping(event.serverId)),
       }),
     );
   }
@@ -2435,7 +2536,7 @@ export class IrcManager {
     if (!server || !buf) return;
     let from = bufferName;
     if (buf.kind === "channel") {
-      const others = buf.users.filter((u) => !sameNick(u.nick, server.nick));
+      const others = buf.users.filter((u) => !this.same(serverId, u.nick, server.nick));
       if (others.length === 0) return;
       from = others[this.demoReplyCount % others.length]!.nick;
     }
@@ -2543,7 +2644,9 @@ export class IrcManager {
           buffers[name] = {
             ...buf,
             users: sortUsers(
-              buf.users.map((u) => (sameNick(u.nick, old) ? { ...u, nick: next } : u)),
+              buf.users.map((u) =>
+                this.same(server.id, u.nick, old) ? { ...u, nick: next } : u,
+              ),
             ),
           };
         }
@@ -2576,7 +2679,9 @@ export class IrcManager {
         }
         // The channels the nick is in, as a real WHOIS lists them: "@#honk #bun".
         const channels = server.bufferOrder.flatMap((name) => {
-          const user = server.buffers[name]?.users.find((u) => sameNick(u.nick, args[0]));
+          const user = server.buffers[name]?.users.find((u) =>
+            this.same(server.id, u.nick, args[0]),
+          );
           return user ? [`${user.prefix}${name}`] : [];
         });
         for (const line of whoisLines(demoWhois(args[0], server.name, channels))) reply(line);
@@ -2938,7 +3043,10 @@ export class IrcManager {
         const label = client.state.caps.enabled.has("labeled-response")
           ? `history-${++historyLabels}`
           : undefined;
-        this.getControl(server.id).historyRequests.push({ target: nameKey(activeBuffer), label });
+        this.getControl(server.id).historyRequests.push({
+          target: this.key(server.id, activeBuffer),
+          label,
+        });
         const [subcommand, anchor] = oldest
           ? (["BEFORE", `timestamp=${oldest.timestamp.toISOString()}`] as const)
           : (["LATEST", "*"] as const);

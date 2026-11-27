@@ -203,9 +203,13 @@ Open problems in the spec:
   called "netid". It MUST NOT change during the lifetime of the network."
   ([bouncer-networks spec][soju-bn]). It is sent as ISUPPORT `BOUNCER_NETID`.
 - CASEMAPPING: "If the parameter is not published by the server at all, clients
-  SHOULD assume CASEMAPPING=rfc1459". In `rfc1459`, `{`, `}`, `|`, and `^` are
-  the lowercase forms of `[`, `]`, `\`, and `~` ([Modern IRC, CASEMAPPING][modern-casemapping]).
-  So `#foo[1]` and `#FOO{1}` are the same channel on such a server.
+  SHOULD assume CASEMAPPING=rfc1459". The specs word `rfc1459` as `{`, `}`,
+  `|`, and `^` being the lowercase forms of `[`, `]`, `\`, and `~`
+  ([Modern IRC, CASEMAPPING][modern-casemapping]). Servers instead fold by
+  adding 32 to each byte from `A` to `^`, so `[`, `]`, `\`, and `^` become
+  `{`, `}`, `|`, and `~`. Both make the same names equal, but the stored key
+  differs, and honk folds as the servers do. So `#foo[1]` and `#FOO{1}` are
+  the same channel on such a server.
 
 ### SQLite facts used below
 

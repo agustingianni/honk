@@ -21,7 +21,7 @@
 import type { ActiveBuffer, ChatMessage } from "../types.ts";
 import { systemClock, type Clock } from "../clock.ts";
 import { parseTimestampParam } from "./ircLine.ts";
-import { nameKey } from "./names.ts";
+import { type Casemapping, nameKey } from "./names.ts";
 
 export const READ_MARKER_CAP = "draft/read-marker";
 
@@ -135,6 +135,8 @@ export interface ReadMarkerCallbacks {
   newestTime(serverId: string, buffer: string): number | undefined;
   /** Sends `MARKREAD <buffer> timestamp=<time>`. */
   send(serverId: string, buffer: string, time: number): void;
+  /** The server's casemapping, which decides which buffer names are one. See nameKey. */
+  casemapping(serverId: string): Casemapping;
 }
 
 /**
@@ -163,8 +165,9 @@ export class ReadMarkerTracker {
   /** When the buffer on screen became active (ms). See onActiveChanged. */
   private activeSince = 0;
   /**
-   * Per server, how far you have read each buffer (ms), by buffer name (see nameKey),
-   * as the server last said in a MARKREAD. Kept across reconnects.
+   * Per server, how far you have read each buffer (ms), by buffer name folded with the
+   * server's casemapping (see key), as the server last said in a MARKREAD. Kept across
+   * reconnects while the casemapping stays the same.
    */
   private serverMarkers = new Map<string, Map<string, number>>();
   /**
@@ -235,16 +238,19 @@ export class ReadMarkerTracker {
   onServerMarker(serverId: string, target: string, time: number): boolean {
     const known = this.serverMarker(serverId, target);
     if (known !== undefined && known >= time) return false;
-    markersOf(this.serverMarkers, serverId).set(nameKey(target), time);
+    markersOf(this.serverMarkers, serverId).set(this.key(serverId, target), time);
     return true;
   }
 
   /** How far you have read `buffer` (ms), as the server last said. */
   serverMarker(serverId: string, buffer: string): number | undefined {
-    return this.serverMarkers.get(serverId)?.get(nameKey(buffer));
+    return this.serverMarkers.get(serverId)?.get(this.key(serverId, buffer));
   }
 
-  /** Forgets a server's markers, when its ServerControl goes away. */
+  /**
+   * Forgets a server's markers: when its ServerControl goes away, and when its
+   * casemapping changes, since keys folded with the old one may no longer match.
+   */
   forget(serverId: string): void {
     this.serverMarkers.delete(serverId);
     this.sentMarkers.delete(serverId);
@@ -254,6 +260,11 @@ export class ReadMarkerTracker {
   stop(): void {
     if (this.timer !== null) this.clock.clearTimeout(this.timer);
     this.timer = null;
+  }
+
+  /** `name` folded with the server's casemapping, as the markers are keyed. */
+  private key(serverId: string, name: string): string {
+    return nameKey(name, this.callbacks.casemapping(serverId));
   }
 
   /**
@@ -284,7 +295,7 @@ export class ReadMarkerTracker {
     if (!this.isReading()) return;
     const time = this.callbacks.newestTime(serverId, buffer);
     if (time === undefined) return;
-    const key = nameKey(buffer);
+    const key = this.key(serverId, buffer);
     const sent = markersOf(this.sentMarkers, serverId);
     const known = Math.max(
       this.serverMarkers.get(serverId)?.get(key) ?? -Infinity,

@@ -6,14 +6,14 @@ import {
 } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { IrcManager } from "./irc/manager.ts";
-import { STATUS_BUFFER } from "./irc/names.ts";
+import { casemappingOf, STATUS_BUFFER } from "./irc/names.ts";
 import { withActionUsed } from "./state.ts";
 import { applyTheme, theme, ThemeVersion } from "./theme.ts";
 import type { ThemeEntry } from "./themes/index.ts";
 import { ChatPane } from "./ui/ChatPane.tsx";
 import { setWidthMethod } from "./ui/display.ts";
 import { Nicklist } from "./ui/Nicklist.tsx";
-import { Omnibox } from "./ui/Omnibox.tsx";
+import { Omnibox, recentKey } from "./ui/Omnibox.tsx";
 import { Sidebar } from "./ui/Sidebar.tsx";
 import { StatusBar } from "./ui/StatusBar.tsx";
 
@@ -102,7 +102,7 @@ export function App({
 
   useEffect(() => {
     if (!snapshot.active) return;
-    const key = `${snapshot.active.serverId}:${snapshot.active.buffer}`;
+    const key = recentKey(snapshot.active.serverId, snapshot.active.buffer);
     setRecentKeys((prev) => [key, ...prev.filter((k) => k !== key)].slice(0, 20));
   }, [snapshot.active?.serverId, snapshot.active?.buffer]);
 
@@ -234,6 +234,7 @@ export function App({
             <Nicklist
               users={activeBuffer!.users}
               myNick={activeServer?.nick ?? ""}
+              casemapping={casemappingOf(activeServer)}
               onSelectUser={selectUser}
             />
           )}

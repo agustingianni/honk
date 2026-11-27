@@ -22,6 +22,7 @@ import {
   parseTimestampParam,
   timestampParam,
 } from "../../src/irc/ircLine.ts";
+import { type Casemapping, DEFAULT_CASEMAPPING, nameKey } from "../../src/irc/names.ts";
 
 export interface FakeIrcdOptions {
   /** 0 picks a free port. Default 0. */
@@ -38,6 +39,11 @@ export interface FakeIrcdOptions {
   log?: (line: string) => void;
   /** Wait this long after a TCP connect before answering anything. Default 0. */
   acceptDelayMs?: number;
+  /**
+   * The CASEMAPPING= in 005, which also decides which names are the same here. null
+   * sends none, and names fold as rfc1459, as the spec says. Default "ascii".
+   */
+  casemapping?: Casemapping | null;
 }
 
 export interface ClientInfo {
@@ -110,9 +116,8 @@ const CAPS = [
 const PREFIXES = "@+";
 const FILLER_NICKS = ["alice", "bob", "carol"];
 
-const lower = (s: string) => s.toLowerCase();
 const isChannel = (s: string) => s.startsWith("#");
-const hostmask = (nick: string) => `${nick}!${lower(nick)}@fake.host`;
+const hostmask = (nick: string) => `${nick}!${nick.toLowerCase()}@fake.host`;
 
 /** Makes a self-signed cert for localhost and 127.0.0.1. Needs openssl on the PATH. */
 function makeCert(): { cert: string; key: string; certPath: string; dir: string } {
@@ -152,6 +157,8 @@ function makeCert(): { cert: string; key: string; certPath: string; dir: string 
 
 export class FakeIrcd {
   readonly network: string;
+  /** See FakeIrcdOptions.casemapping. Tests may change it; new clients see the change. */
+  casemapping: Casemapping | null;
   readonly host: string;
   /** The port it listens on (useful with `port: 0`). */
   port = 0;
@@ -203,10 +210,10 @@ export class FakeIrcd {
   private forwards = new Map<string, string>();
   /** Nicks NICK gets 437 for, like a network that holds a nick for a while after its user leaves. */
   private held = new Set<string>();
-  /** Away messages by lowercase nick. */
+  /** Away messages by folded nick (see lower). */
   private away = new Map<string, string>();
   /**
-   * Read markers (draft/read-marker) in ms, by lowercase target. Shared by every client,
+   * Read markers (draft/read-marker) in ms, by folded target. Shared by every client,
    * like one bouncer user's clients: one reads #honk, the others hear about it.
    */
   private readMarkers = new Map<string, number>();
@@ -218,8 +225,14 @@ export class FakeIrcd {
   private waiters: { match: (l: ReceivedLine) => boolean; resolve: (l: ReceivedLine) => void }[] =
     [];
 
+  /** A nick or channel name folded with this server's CASEMAPPING, for use as a map key. */
+  private lower(name: string): string {
+    return nameKey(name, this.casemapping ?? DEFAULT_CASEMAPPING);
+  }
+
   private constructor(opts: FakeIrcdOptions) {
     this.network = opts.network ?? "FakeNet";
+    this.casemapping = opts.casemapping ?? "ascii";
     this.host = opts.host ?? "127.0.0.1";
     this.defaultUsers = opts.defaultUsers ?? ["@alice", "+bob", "carol"];
     this.logFn = opts.log ?? (() => {});
@@ -273,7 +286,7 @@ export class FakeIrcd {
       registered: c.registered,
       caps: [...c.caps],
       channels: [...this.channels.values()]
-        .filter((ch) => c.nick && ch.members.get(lower(c.nick))?.client === c)
+        .filter((ch) => c.nick && ch.members.get(this.lower(c.nick))?.client === c)
         .map((ch) => ch.name),
       account: c.account,
     }));
@@ -311,7 +324,7 @@ export class FakeIrcd {
     const body = opts.ctcp ? `\x01${opts.ctcp}${text ? ` ${text}` : ""}\x01` : text;
     if (isChannel(target)) {
       const ch = this.ensureChannel(target);
-      if (!ch.members.has(lower(from))) this.addMember(ch, from, "");
+      if (!ch.members.has(this.lower(from))) this.addMember(ch, from, "");
       this.deliver(from, command, ch.name, body, null);
     } else {
       this.deliver(from, command, target, body, null);
@@ -323,19 +336,19 @@ export class FakeIrcd {
    * draft/read-marker hear about it.
    */
   setReadMarker(target: string, ms: number): void {
-    this.readMarkers.set(lower(target), ms);
+    this.readMarkers.set(this.lower(target), ms);
     for (const c of this.clients) this.sendMarkRead(c, target);
   }
 
   /** The read marker for a target in ms, or undefined if nobody set one. */
   readMarker(target: string): number | undefined {
-    return this.readMarkers.get(lower(target));
+    return this.readMarkers.get(this.lower(target));
   }
 
   /** A fake user joins a channel. */
   join(nick: string, channel: string, prefix = ""): void {
     const ch = this.ensureChannel(channel);
-    if (ch.members.has(lower(nick))) return;
+    if (ch.members.has(this.lower(nick))) return;
     this.addMember(ch, nick, prefix);
     this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`);
     this.storeJoin(nick, ch.name);
@@ -354,11 +367,11 @@ export class FakeIrcd {
   }
 
   part(nick: string, channel: string, reason = ""): void {
-    const ch = this.channels.get(lower(channel));
-    const m = ch?.members.get(lower(nick));
+    const ch = this.channels.get(this.lower(channel));
+    const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
     this.toMembers(ch, `:${hostmask(m.nick)} PART ${ch.name}${reason ? ` :${reason}` : ""}`);
-    ch.members.delete(lower(nick));
+    ch.members.delete(this.lower(nick));
   }
 
   /** A fake user, or a client by nick, quits the network. A client's connection is closed. */
@@ -378,21 +391,21 @@ export class FakeIrcd {
     const line = `:${hostmask(from)} NICK :${to}`;
     const told = new Set<Client>();
     for (const ch of this.channels.values()) {
-      const m = ch.members.get(lower(from));
+      const m = ch.members.get(this.lower(from));
       if (!m) continue;
-      ch.members.delete(lower(from));
-      ch.members.set(lower(to), { ...m, nick: to });
+      ch.members.delete(this.lower(from));
+      ch.members.set(this.lower(to), { ...m, nick: to });
       for (const other of ch.members.values()) if (other.client) told.add(other.client);
     }
     for (const c of told) this.send(c, line);
   }
 
   kick(by: string, channel: string, nick: string, reason = ""): void {
-    const ch = this.channels.get(lower(channel));
-    const m = ch?.members.get(lower(nick));
+    const ch = this.channels.get(this.lower(channel));
+    const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
     this.toMembers(ch, `:${hostmask(by)} KICK ${ch.name} ${m.nick} :${reason || by}`);
-    ch.members.delete(lower(nick));
+    ch.members.delete(this.lower(nick));
   }
 
   setTopic(channel: string, text: string, by = "alice"): void {
@@ -419,33 +432,33 @@ export class FakeIrcd {
 
   /** Marks a nick away: messages to it get 301, and WHOIS shows it. null comes back. */
   setAway(nick: string, text: string | null): void {
-    if (text) this.away.set(lower(nick), text);
-    else this.away.delete(lower(nick));
+    if (text) this.away.set(this.lower(nick), text);
+    else this.away.delete(this.lower(nick));
   }
 
   /** NICK `nick` gets 437 (temporarily unavailable). */
   holdNick(nick: string): void {
-    this.held.add(lower(nick));
+    this.held.add(this.lower(nick));
   }
 
   /** JOIN gets 474 (banned). */
   ban(channel: string): void {
-    this.banned.add(lower(channel));
+    this.banned.add(this.lower(channel));
   }
   unban(channel: string): void {
-    this.banned.delete(lower(channel));
+    this.banned.delete(this.lower(channel));
   }
   /** JOIN gets no reply at all. */
   silence(channel: string): void {
-    this.silent.add(lower(channel));
+    this.silent.add(this.lower(channel));
   }
   unsilence(channel: string): void {
-    this.silent.delete(lower(channel));
+    this.silent.delete(this.lower(channel));
   }
   /** JOIN `from` gets 470 and lands in `to`. null removes it. */
   forward(from: string, to: string | null): void {
-    if (to) this.forwards.set(lower(from), to);
-    else this.forwards.delete(lower(from));
+    if (to) this.forwards.set(this.lower(from), to);
+    else this.forwards.delete(this.lower(from));
   }
 
   /**
@@ -454,7 +467,8 @@ export class FakeIrcd {
    */
   fillHistory(channel: string, count: number): void {
     const ch = this.ensureChannel(channel);
-    const oldest = this.history.find((m) => lower(m.target) === lower(ch.name))?.time ?? Date.now();
+    const oldest =
+      this.history.find((m) => this.lower(m.target) === this.lower(ch.name))?.time ?? Date.now();
     const lines: StoredMessage[] = [];
     for (let i = count; i >= 1; i--) {
       const from = FILLER_NICKS[i % FILLER_NICKS.length]!;
@@ -593,7 +607,7 @@ export class FakeIrcd {
   }
 
   private clientByNick(nick: string): Client | undefined {
-    for (const c of this.clients) if (c.nick && lower(c.nick) === lower(nick)) return c;
+    for (const c of this.clients) if (c.nick && this.lower(c.nick) === this.lower(nick)) return c;
     return undefined;
   }
 
@@ -605,10 +619,10 @@ export class FakeIrcd {
   // ---- Channels ----
 
   private ensureChannel(name: string): Channel {
-    let ch = this.channels.get(lower(name));
+    let ch = this.channels.get(this.lower(name));
     if (!ch) {
       ch = { name, topic: "", topicBy: "", key: null, members: new Map() };
-      this.channels.set(lower(name), ch);
+      this.channels.set(this.lower(name), ch);
       for (const u of this.defaultUsers) {
         const prefix = PREFIXES.includes(u[0]!) ? u[0]! : "";
         this.addMember(ch, u.slice(prefix.length), prefix);
@@ -618,7 +632,7 @@ export class FakeIrcd {
   }
 
   private addMember(ch: Channel, nick: string, prefix: string, client?: Client): void {
-    ch.members.set(lower(nick), { nick, prefix, client });
+    ch.members.set(this.lower(nick), { nick, prefix, client });
   }
 
   private names(ch: Channel): string[] {
@@ -643,7 +657,7 @@ export class FakeIrcd {
   private leaveAll(nick: string, line: string, except?: Client): void {
     const told = new Set<Client>();
     for (const ch of this.channels.values()) {
-      if (!ch.members.delete(lower(nick))) continue;
+      if (!ch.members.delete(this.lower(nick))) continue;
       for (const m of ch.members.values()) if (m.client && m.client !== except) told.add(m.client);
     }
     for (const c of told) this.send(c, line);
@@ -669,7 +683,7 @@ export class FakeIrcd {
     const tags = { msgid: msg.msgid, time: new Date(msg.time).toISOString() };
     const line = `:${hostmask(from)} ${command} ${target} :${text}`;
     if (isChannel(target)) {
-      const ch = this.channels.get(lower(target));
+      const ch = this.channels.get(this.lower(target));
       if (ch) this.toMembers(ch, line, sender ?? undefined, tags);
     } else {
       const to = this.clientByNick(target);
@@ -741,7 +755,7 @@ export class FakeIrcd {
       case "TOPIC":
         return this.onTopic(c, params);
       case "NAMES": {
-        const ch = this.channels.get(lower(params[0] ?? ""));
+        const ch = this.channels.get(this.lower(params[0] ?? ""));
         if (ch) return this.sendNames(c, ch);
         return this.reply(c, "366", `${params[0] ?? "*"} :End of /NAMES list.`);
       }
@@ -830,7 +844,7 @@ export class FakeIrcd {
   private onNick(c: Client, nick: string): void {
     if (!nick) return this.reply(c, "431", ":No nickname given");
     if (this.nickTaken(nick, c)) return this.reply(c, "433", `${nick} :Nickname is already in use`);
-    if (this.held.has(lower(nick))) {
+    if (this.held.has(this.lower(nick))) {
       return this.reply(c, "437", `${nick} :Nick/channel is temporarily unavailable`);
     }
     if (!c.registered || !c.nick) {
@@ -842,10 +856,10 @@ export class FakeIrcd {
     c.nick = nick;
     const told = new Set<Client>([c]);
     for (const ch of this.channels.values()) {
-      const m = ch.members.get(lower(old));
+      const m = ch.members.get(this.lower(old));
       if (!m || m.client !== c) continue;
-      ch.members.delete(lower(old));
-      ch.members.set(lower(nick), { ...m, nick });
+      ch.members.delete(this.lower(old));
+      ch.members.set(this.lower(nick), { ...m, nick });
       for (const other of ch.members.values()) if (other.client) told.add(other.client);
     }
     for (const t of told) this.send(t, line);
@@ -865,7 +879,11 @@ export class FakeIrcd {
     this.reply(
       c,
       "005",
-      `NETWORK=${this.network} CASEMAPPING=ascii CHANTYPES=# PREFIX=(ov)${PREFIXES} CHATHISTORY=200 :are supported by this server`,
+      [
+        `NETWORK=${this.network}`,
+        ...(this.casemapping ? [`CASEMAPPING=${this.casemapping}`] : []),
+        `CHANTYPES=# PREFIX=(ov)${PREFIXES} CHATHISTORY=200 :are supported by this server`,
+      ].join(" "),
     );
     this.reply(c, "375", `:- ${SERVER_NAME} Message of the day -`);
     this.reply(c, "372", `:- This is ${this.network}, a fake IRC server for testing honk.`);
@@ -876,7 +894,7 @@ export class FakeIrcd {
     const names = (params[0] ?? "").split(",").filter(Boolean);
     const keys = (params[1] ?? "").split(",");
     names.forEach((name, i) => {
-      const key = lower(name);
+      const key = this.lower(name);
       if (!isChannel(name)) return this.reply(c, "403", `${name} :No such channel`);
       if (this.silent.has(key)) return;
       if (this.banned.has(key)) return this.reply(c, "474", `${name} :Cannot join channel (+b)`);
@@ -895,7 +913,7 @@ export class FakeIrcd {
   private joinClient(c: Client, name: string): void {
     const ch = this.ensureChannel(name);
     const nick = c.nick!;
-    if (ch.members.get(lower(nick))?.client === c) return;
+    if (ch.members.get(this.lower(nick))?.client === c) return;
     this.addMember(ch, nick, "", c);
     this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`);
     this.storeJoin(nick, ch.name);
@@ -922,7 +940,7 @@ export class FakeIrcd {
     if (ms === undefined) {
       return this.send(c, `:${SERVER_NAME} FAIL MARKREAD INVALID_PARAMS ${target} :Bad timestamp`);
     }
-    const known = this.readMarkers.get(lower(target));
+    const known = this.readMarkers.get(this.lower(target));
     if (known !== undefined && known >= ms) return this.sendMarkRead(c, target);
     this.setReadMarker(target, Math.min(ms, Date.now()));
   }
@@ -930,7 +948,7 @@ export class FakeIrcd {
   /** Tells a client with draft/read-marker the marker for a target ("*" if none). */
   private sendMarkRead(c: Client, target: string): void {
     if (!c.registered || !c.nick || !c.caps.has("draft/read-marker")) return;
-    const ms = this.readMarkers.get(lower(target));
+    const ms = this.readMarkers.get(this.lower(target));
     const value = ms === undefined ? "*" : timestampParam(ms);
     this.send(c, `:${hostmask(c.nick)} MARKREAD ${target} ${value}`);
   }
@@ -948,8 +966,8 @@ export class FakeIrcd {
 
   private onPart(c: Client, params: string[]): void {
     for (const name of (params[0] ?? "").split(",").filter(Boolean)) {
-      const ch = this.channels.get(lower(name));
-      if (!ch || ch.members.get(lower(c.nick!))?.client !== c) {
+      const ch = this.channels.get(this.lower(name));
+      if (!ch || ch.members.get(this.lower(c.nick!))?.client !== c) {
         this.reply(c, "442", `${name} :You're not on that channel`);
         continue;
       }
@@ -957,7 +975,7 @@ export class FakeIrcd {
         ch,
         `:${hostmask(c.nick!)} PART ${ch.name}${params[1] ? ` :${params[1]}` : ""}`,
       );
-      ch.members.delete(lower(c.nick!));
+      ch.members.delete(this.lower(c.nick!));
     }
   }
 
@@ -965,19 +983,19 @@ export class FakeIrcd {
     const [targets = "", text = ""] = params;
     for (const target of targets.split(",").filter(Boolean)) {
       if (isChannel(target)) {
-        const ch = this.channels.get(lower(target));
+        const ch = this.channels.get(this.lower(target));
         if (!ch) {
           if (command === "PRIVMSG") this.reply(c, "403", `${target} :No such channel`);
           continue;
         }
-        if (ch.members.get(lower(c.nick!))?.client !== c) {
+        if (ch.members.get(this.lower(c.nick!))?.client !== c) {
           if (command === "PRIVMSG") this.reply(c, "404", `${target} :Cannot send to channel`);
           continue;
         }
         this.deliver(c.nick!, command, ch.name, text, c);
       } else if (this.clientByNick(target) || this.isFakeUser(target)) {
         this.deliver(c.nick!, command, target, text, c);
-        const away = this.away.get(lower(target));
+        const away = this.away.get(this.lower(target));
         if (away && command === "PRIVMSG") this.reply(c, "301", `${target} :${away}`);
       } else if (command === "PRIVMSG") {
         this.reply(c, "401", `${target} :No such nick/channel`);
@@ -987,14 +1005,14 @@ export class FakeIrcd {
 
   private isFakeUser(nick: string): boolean {
     for (const ch of this.channels.values()) {
-      const m = ch.members.get(lower(nick));
+      const m = ch.members.get(this.lower(nick));
       if (m && !m.client) return true;
     }
     return false;
   }
 
   private onTopic(c: Client, params: string[]): void {
-    const ch = this.channels.get(lower(params[0] ?? ""));
+    const ch = this.channels.get(this.lower(params[0] ?? ""));
     if (!ch) return this.reply(c, "403", `${params[0] ?? "*"} :No such channel`);
     if (params.length < 2) {
       if (!ch.topic) return this.reply(c, "331", `${ch.name} :No topic is set`);
@@ -1013,16 +1031,16 @@ export class FakeIrcd {
     }
     const shown = client?.nick ?? nick;
     const chans = [...this.channels.values()]
-      .filter((ch) => ch.members.has(lower(nick)))
-      .map((ch) => ch.members.get(lower(nick))!.prefix + ch.name);
+      .filter((ch) => ch.members.has(this.lower(nick)))
+      .map((ch) => ch.members.get(this.lower(nick))!.prefix + ch.name);
     this.reply(
       c,
       "311",
-      `${shown} ~${lower(shown)} fake.host * :${shown} the ${client ? "client" : "fake user"}`,
+      `${shown} ~${this.lower(shown)} fake.host * :${shown} the ${client ? "client" : "fake user"}`,
     );
     if (chans.length) this.reply(c, "319", `${shown} :${chans.join(" ")}`);
     this.reply(c, "312", `${shown} ${SERVER_NAME} :${this.network}`);
-    const away = this.away.get(lower(nick));
+    const away = this.away.get(this.lower(nick));
     if (away) this.reply(c, "301", `${shown} :${away}`);
     if (client?.account) this.reply(c, "330", `${shown} ${client.account} :is logged in as`);
     this.reply(c, "318", `${shown} :End of /WHOIS list.`);
@@ -1041,11 +1059,11 @@ export class FakeIrcd {
   private onChathistory(c: Client, params: string[], label?: string): void {
     const sub = (params[0] ?? "").toUpperCase();
     const labelTag = { label: label ?? "" };
-    if (this.holdHistoryIn.has(lower(params[1] ?? ""))) {
+    if (this.holdHistoryIn.has(this.lower(params[1] ?? ""))) {
       this.heldHistory.push(() => this.onChathistory(c, params, label));
       return;
     }
-    if (this.failHistory || this.failHistoryIn.has(lower(params[1] ?? ""))) {
+    if (this.failHistory || this.failHistoryIn.has(this.lower(params[1] ?? ""))) {
       this.send(
         c,
         `:${SERVER_NAME} FAIL CHATHISTORY MESSAGE_ERROR ${sub || "*"} ${params[1] ?? "*"} :Messages could not be retrieved`,
@@ -1053,7 +1071,7 @@ export class FakeIrcd {
       );
       return;
     }
-    const me = lower(c.nick!);
+    const me = this.lower(c.nick!);
     if (sub === "TARGETS") {
       const from = this.anchorTime(params[1]) ?? 0;
       const to = this.anchorTime(params[2]) ?? Date.now();
@@ -1061,7 +1079,8 @@ export class FakeIrcd {
       for (const m of this.history) {
         if (m.time < Math.min(from, to) || m.time > Math.max(from, to) || isChannel(m.target))
           continue;
-        const other = lower(m.from) === me ? m.target : lower(m.target) === me ? m.from : null;
+        const other =
+          this.lower(m.from) === me ? m.target : this.lower(m.target) === me ? m.from : null;
         if (other) latest.set(other, m.time);
       }
       const ref = `t${this.nextBatch++}`;
@@ -1079,9 +1098,9 @@ export class FakeIrcd {
     const limit = Math.min(200, Number(sub === "BETWEEN" ? params[4] : params[3]) || 50);
     const inTarget = (m: StoredMessage) =>
       isChannel(target)
-        ? lower(m.target) === lower(target)
-        : (lower(m.from) === me && lower(m.target) === lower(target)) ||
-          (lower(m.from) === lower(target) && lower(m.target) === me);
+        ? this.lower(m.target) === this.lower(target)
+        : (this.lower(m.from) === me && this.lower(m.target) === this.lower(target)) ||
+          (this.lower(m.from) === this.lower(target) && this.lower(m.target) === me);
     let lines = this.history.filter(inTarget);
     const anchor = this.anchorTime(params[2], lines);
     if (sub === "LATEST") {
