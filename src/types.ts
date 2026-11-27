@@ -28,8 +28,14 @@ export interface AppConfig {
   /** Color theme id, such as "nord". See src/themes/index.ts. */
   theme?: string;
   /**
-   * Draw only ASCII symbols. When unset, honk decides from TERM and the locale.
-   * See src/ui/glyphs.ts.
+   * Mouse capture: clicks, the hand pointer and wheel scrolling. On unless set
+   * to false, in the config file or with --no-mouse. With it off, a plain drag
+   * selects text in the terminal, and tmux copy mode works on honk's pane.
+   */
+  mouse?: boolean;
+  /**
+   * Draw only ASCII symbols, in the config file or with --ascii. When unset,
+   * honk decides from TERM. See src/ui/glyphs.ts.
    */
   ascii?: boolean;
   /**

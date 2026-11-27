@@ -99,6 +99,8 @@ if (!g.__ircHot) {
     // A left click would otherwise focus the clicked element (the chat scrollbox), and
     // the input would stop getting keys. Focus moves only through `focused` props.
     autoFocus: false,
+    // Off with "mouse": false or --no-mouse, so the terminal's own selection works.
+    useMouse: config.mouse,
     ...(protocol.protocol && { environment: { OPENTUI_NOTIFICATION_PROTOCOL: protocol.protocol } }),
   });
   const root = createRoot(renderer);

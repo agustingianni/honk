@@ -79,13 +79,22 @@ function readConfigFile(path: string): AppConfig | null {
   }
   const notifications = parsed.notifications ?? true;
   const theme = typeof parsed.theme === "string" ? parsed.theme : undefined;
-  const ascii = typeof parsed.ascii === "boolean" ? parsed.ascii : undefined;
-  if (!Array.isArray(parsed.servers)) return { servers: [], notifications, theme, ascii };
+  // JSON null counts as missing. loadConfig turns missing into true.
+  const mouse = parsed.mouse ?? undefined;
+  if (mouse !== undefined && typeof mouse !== "boolean") {
+    throw new ConfigError(`${path}: "mouse" must be true or false, not ${JSON.stringify(mouse)}`);
+  }
+  const ascii = parsed.ascii ?? undefined;
+  if (ascii !== undefined && typeof ascii !== "boolean") {
+    throw new ConfigError(`${path}: "ascii" must be true or false, not ${JSON.stringify(ascii)}`);
+  }
+  const servers = Array.isArray(parsed.servers) ? parsed.servers : [];
   return {
     notifications,
     theme,
+    mouse,
     ascii,
-    servers: parsed.servers.map((s, idx) => ({
+    servers: servers.map((s, idx) => ({
       id: s.id || s.name || s.host || `server-${idx + 1}`,
       name: s.name || s.id || s.host,
       via: s.via,
@@ -131,6 +140,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
   }
 
   if (typeof flags.theme === "string") config = { ...config, theme: flags.theme };
+  const mouse = typeof flags.mouse === "boolean" ? flags.mouse : (config.mouse ?? true);
+  config = { ...config, mouse };
   // --ascii, or --no-ascii to undo "ascii": true for one run.
   if (typeof flags.ascii === "boolean") config = { ...config, ascii: flags.ascii };
 

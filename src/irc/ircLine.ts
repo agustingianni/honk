@@ -166,6 +166,16 @@ export function timestampParam(ms: number): string {
   return `timestamp=${new Date(ms).toISOString()}`;
 }
 
+/**
+ * When a line was sent: its IRCv3 server-time tag, or now when it has none.
+ * A tag that does not parse also gives now, because an Invalid Date breaks
+ * the date formatting in the chat.
+ */
+export function tagTime(tags?: { time?: string }): Date {
+  const ms = tags?.time ? Date.parse(tags.time) : NaN;
+  return new Date(Number.isNaN(ms) ? Date.now() : ms);
+}
+
 /** The time in ms of a "timestamp=..." parameter. Undefined for "*" or anything else. */
 export function parseTimestampParam(value: string | undefined): number | undefined {
   if (!value?.startsWith("timestamp=")) return undefined;
