@@ -1675,13 +1675,10 @@ export class IrcManager {
       );
     });
 
-    // Your read marker for a buffer, from the server. This takes the event, not the raw
-    // line in onRawLine: onRawLine sees a whole network read before the library handles
-    // any of it, so a MARKREAD would land before a PRIVMSG it covers in the same read,
-    // and the line would then count as unread. MARKREAD is in the library's command table
-    // only through honk's patch (patches/irc-client-ts@0.23.1.patch). Like any raw event,
-    // a MARKREAD inside a batch is not emitted (see #44), but honk labels no command that
-    // a MARKREAD answers, so none comes in a labeled-response batch.
+    // Your read marker for a buffer, from the server. Not in onRawLine: that sees a whole
+    // network read first, so a MARKREAD would land before a PRIVMSG it covers in the same
+    // read. The event exists only through patches/irc-client-ts@0.23.1.patch. Like any raw
+    // event it skips lines inside a batch (#44); honk labels nothing a MARKREAD answers.
     client.on("raw:markread" as never, (msg: { params: string[] }) => {
       if (isStale()) return;
       const mark = parseMarkRead(msg.params);

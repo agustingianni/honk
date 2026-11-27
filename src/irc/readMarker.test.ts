@@ -194,12 +194,14 @@ test("a line read on another client stays read when its MARKREAD comes in the sa
   m.setActive("alpha", "#honk");
   // One socket write, so honk gets both lines in one network read. fakeircd puts the
   // time tag (now) on the first line; the marker is a little later, so it covers it.
-  const marker = Date.now() + 100;
+  const marker = Date.now() + 20;
   irc.sendRaw(
     `:alice!a@h PRIVMSG #bun :goose: hi\r\n:$NICK!g@h MARKREAD #bun ${timestampParam(marker)}`,
   );
-  await until(() => buffer("#bun")!.messages.some((x) => x.text === "goose: hi"));
-  await Bun.sleep(50);
+  // TCP keeps the order: once this later line is in, the MARKREAD has been handled.
+  irc.sendRaw(":carol!c@h PRIVMSG #honk :fence");
+  await until(() => buffer("#honk")!.messages.some((x) => x.text === "fence"));
+  expect(buffer("#bun")!.messages.some((x) => x.text === "goose: hi")).toBe(true);
   expect(buffer("#bun")!.unread).toBe(0);
   expect(buffer("#bun")!.hasMention).toBe(false);
 
