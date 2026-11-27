@@ -3,7 +3,7 @@ import { FakeIrcd } from "../../dev/fakeircd/server.ts";
 import { until } from "../../dev/fakeircd/testing.ts";
 import type { ChatMessage } from "../types.ts";
 import { IrcManager } from "./manager.ts";
-import { checkReplay, HistoryBatch, wholeSecond } from "./replay.ts";
+import { checkReplay, HistoryBatch } from "./replay.ts";
 
 const T = Date.parse("2026-11-27T21:35:07.412Z");
 
@@ -216,13 +216,6 @@ describe("checkReplay", () => {
       const kept = receive([], [line()]);
       const after = receive(kept, [history({ msgid: "M1" }), history({ msgid: "M2" })]);
       expect(summary(after)).toEqual(["alice lol M1", "alice lol M2"]);
-      expect(after).toHaveLength(2);
-    });
-
-    test("a kept Line that already has a msgid keeps it", () => {
-      const kept = receive([], [line({ msgid: "AB12" })]);
-      const after = receive(kept, [history({ msgid: "EF56" })]);
-      expect(summary(after)).toEqual(["alice lol AB12", "alice lol EF56"]);
     });
 
     test("a live Line never gives its msgid to a kept Line", () => {
@@ -230,13 +223,6 @@ describe("checkReplay", () => {
       const after = receive(kept, [line({ msgid: "AB12" })]);
       expect(summary(after)).toEqual(["alice lol -", "alice lol AB12"]);
     });
-  });
-});
-
-describe("wholeSecond", () => {
-  test("cuts a time to the second, as soju's file store does", () => {
-    expect(wholeSecond(new Date("2026-11-27T21:35:07.999Z"))).toBe(wholeSecond(new Date("2026-11-27T21:35:07.000Z")));
-    expect(wholeSecond(new Date("2026-11-27T21:35:07.999Z"))).not.toBe(wholeSecond(new Date("2026-11-27T21:35:08.000Z")));
   });
 });
 

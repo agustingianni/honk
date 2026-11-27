@@ -4,8 +4,8 @@ import {
   LineSplitter,
   MAX_LINE_BYTES,
   parseLine,
+  lineTime,
   parseTimestampParam,
-  tagTime,
   timestampParam,
 } from "./ircLine.ts";
 
@@ -114,11 +114,16 @@ test("timestampParam and parseTimestampParam write and read the IRCv3 timestamp"
   expect(parseTimestampParam(undefined)).toBeUndefined();
 });
 
-test("tagTime reads the server-time tag, and gives now when it is missing or does not parse", () => {
-  expect(tagTime({ time: "2026-11-26T22:00:00.000Z" }).getTime()).toBe(Date.parse("2026-11-26T22:00:00Z"));
+test("lineTime reads the server-time tag, and gives now when it is missing or does not parse", () => {
+  expect(lineTime({ time: "2026-11-26T22:00:00.000Z" })).toEqual({
+    timestamp: new Date("2026-11-26T22:00:00Z"),
+    timeFromServer: true,
+  });
   for (const tags of [undefined, {}, { time: "garbage" }]) {
     const before = Date.now();
-    const ms = tagTime(tags).getTime();
+    const time = lineTime(tags);
+    expect(time.timeFromServer).toBeUndefined();
+    const ms = time.timestamp.getTime();
     expect(ms).toBeGreaterThanOrEqual(before);
     expect(ms).toBeLessThanOrEqual(Date.now());
   }

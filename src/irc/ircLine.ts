@@ -169,15 +169,8 @@ export function timestampParam(ms: number): string {
 /**
  * When a line was sent: its IRCv3 server-time tag, or now when it has none.
  * A tag that does not parse also gives now, because an Invalid Date breaks
- * the date formatting in the chat.
- */
-export function tagTime(tags?: { time?: string }): Date {
-  return lineTime(tags).timestamp;
-}
-
-/**
- * A Line's time as tagTime gives it, and whether it came from the server's tag. A time
- * from honk's own clock can be a little off. See replay.ts.
+ * the date formatting in the chat. `timeFromServer` says the time came from the
+ * tag; a time from honk's own clock can be a little off. See replay.ts.
  */
 export function lineTime(tags?: { time?: string }): { timestamp: Date; timeFromServer?: true } {
   const ms = tags?.time ? Date.parse(tags.time) : NaN;

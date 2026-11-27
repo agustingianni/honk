@@ -56,12 +56,12 @@ export type ReplayVerdict<T> =
   | { type: "give-msgid"; line: T; msgid: string };
 
 /** A time cut to the second, as soju's file store keeps it. */
-export function wholeSecond(time: Date): number {
+function wholeSecond(time: Date): number {
   return Math.floor(time.getTime() / 1000);
 }
 
 /** What rule 2 compares: kind, nick, text without formatting, and the whole second. */
-export interface MatchKey {
+interface MatchKey {
   kind: string;
   from: string;
   plain: string;
@@ -78,7 +78,7 @@ function matchKey(line: ReplayLine): MatchKey {
 }
 
 /** How far apart a time from honk's clock and the server's time can be. */
-export const LOCAL_CLOCK_WINDOW_MS = 2000;
+const LOCAL_CLOCK_WINDOW_MS = 2000;
 
 /**
  * True if the kept Line `kept` matches `line`, whose match key is `key`. Whole seconds
@@ -110,15 +110,18 @@ function matches(kept: ReplayLine, line: ReplayLine, key: MatchKey): boolean {
 export class HistoryBatch {
   private copies = new Map<string, { seen: number; before: number }>();
 
-  /** The counts for one match key. `before` is used the first time the key comes. */
-  count(key: MatchKey, before: number): { seen: number; before: number } {
+  /**
+   * Counts one more copy with match key `key`, and says whether it is more than the
+   * `before` kept Lines that matched. `before` is used the first time the key comes.
+   */
+  isExtra(key: MatchKey, before: number): boolean {
     const k = [key.kind, key.from, key.plain, key.second].join("\0");
     let c = this.copies.get(k);
     if (!c) {
       c = { seen: 0, before };
       this.copies.set(k, c);
     }
-    return c;
+    return ++c.seen > c.before;
   }
 }
 
@@ -143,10 +146,8 @@ export function checkReplay<T extends ReplayLine>(
 
   const key = matchKey(line);
   const same = kept.filter((k) => matches(k, line, key));
-  const copies = batch.count(key, same.length);
-  copies.seen++;
   // More copies than honk had before the batch: this one is new.
-  if (copies.seen > copies.before) return { type: "new" };
+  if (batch.isExtra(key, same.length)) return { type: "new" };
   // Rule 2.
   if (!line.msgid) return { type: "replay" };
   // Rule 3. A kept Line with another msgid is another Line, so this one is new.

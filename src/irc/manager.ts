@@ -206,6 +206,16 @@ function computeBackoffMs(attempt: number): number {
   return Math.round(exp * jitter);
 }
 
+/**
+ * Where a line with time `t` goes in `messages`, which are in time order: after every
+ * line that is not newer. The scan starts at the end, where new lines usually go.
+ */
+function timeOrderIndex(messages: readonly ChatMessage[], t: number): number {
+  let at = messages.length;
+  while (at > 0 && messages[at - 1]!.timestamp.getTime() > t) at--;
+  return at;
+}
+
 let nextMsgId = 1;
 function makeMessage(
   kind: MessageKind,
@@ -1508,9 +1518,7 @@ export class IrcManager {
         const echo = { kind, text: msg.params.text };
         const shownId = this.echoes.take(serverId, this.bufferKey(serverId, target), echo);
         if (shownId) {
-          const { timestamp, timeFromServer } = lineTime(tags);
-          const time = timeFromServer ? timestamp : undefined;
-          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid, time);
+          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid, lineTime(tags));
           return;
         }
       }
@@ -1738,16 +1746,16 @@ export class IrcManager {
     messageId: string,
     text: string,
     msgid: string | undefined,
-    time: Date | undefined,
+    time: ReturnType<typeof lineTime>,
   ): void {
     const bufferName = this.bufferKey(serverId, target);
     this.updateMessages(serverId, bufferName, new Set([messageId]), (m) => ({
       ...m,
       text,
       ...(msgid ? { msgid } : {}),
-      ...(time ? { timestamp: time, timeFromServer: true } : {}),
+      ...(time.timeFromServer ? time : {}),
     }));
-    if (time) this.moveToTimeOrder(serverId, bufferName, messageId);
+    if (time.timeFromServer) this.moveToTimeOrder(serverId, bufferName, messageId);
     this.emit();
   }
 
@@ -1757,13 +1765,15 @@ export class IrcManager {
     const buf = server?.buffers[bufferName];
     const from = buf?.messages.findLastIndex((m) => m.id === messageId) ?? -1;
     if (!server || !buf || from < 0) return;
-    const messages = [...buf.messages];
-    const [line] = messages.splice(from, 1);
-    const t = line!.timestamp.getTime();
-    let at = messages.length;
-    while (at > 0 && messages[at - 1]!.timestamp.getTime() > t) at--;
-    if (at === from) return;
-    messages.splice(at, 0, line!);
+    const line = buf.messages[from]!;
+    const t = line.timestamp.getTime();
+    const prev = buf.messages[from - 1];
+    const next = buf.messages[from + 1];
+    const inOrder =
+      (!prev || prev.timestamp.getTime() <= t) && (!next || next.timestamp.getTime() >= t);
+    if (inOrder) return;
+    const messages = buf.messages.filter((m) => m !== line);
+    messages.splice(timeOrderIndex(messages, t), 0, line);
     server.buffers = { ...server.buffers, [bufferName]: { ...buf, messages } };
   }
 
@@ -2113,11 +2123,9 @@ export class IrcManager {
     // Live lines go at the end. History lines (CHATHISTORY playback, /history BEFORE)
     // are inserted in time order; the scan from the end replaces a full re-sort.
     const messages = [...buf.messages];
-    let at = messages.length;
-    if (message.isHistory) {
-      const t = message.timestamp.getTime();
-      while (at > 0 && messages[at - 1]!.timestamp.getTime() > t) at--;
-    }
+    const at = message.isHistory
+      ? timeOrderIndex(messages, message.timestamp.getTime())
+      : messages.length;
     messages.splice(at, 0, message);
     // History lines go in front of older lines, so trimming the oldest would drop them
     // right away. Grow the buffer's limit for them instead.
