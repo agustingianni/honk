@@ -39,6 +39,7 @@ import {
   TARGETS_BATCH_TYPES,
 } from "./missed.ts";
 import { NetworkWatcher } from "./netwatch.ts";
+import { checkReplay, HistoryBatch } from "./replay.ts";
 import {
   DEMO_AMBIENT,
   DEMO_HISTORY,
@@ -61,7 +62,7 @@ import {
   whoisLines,
   type Endpoint,
 } from "./replies.ts";
-import { commandOf, MAX_LINE_BYTES, parseLine, tagTime, timestampParam } from "./ircLine.ts";
+import { commandOf, lineTime, MAX_LINE_BYTES, parseLine, timestampParam } from "./ircLine.ts";
 import {
   isAfterMarker,
   isMarkedRead,
@@ -213,6 +214,50 @@ function computeBackoffMs(attempt: number): number {
   // ±25% random jitter
   const jitter = 0.75 + Math.random() * 0.5;
   return Math.round(exp * jitter);
+}
+
+/**
+ * Where a line with time `t` goes in `messages`, which are in time order: after every
+ * line that is not newer. The scan starts at the end, where new lines usually go.
+ */
+function timeOrderIndex(messages: readonly ChatMessage[], t: number): number {
+  let at = messages.length;
+  while (at > 0 && messages[at - 1]!.timestamp.getTime() > t) at--;
+  return at;
+}
+
+/**
+ * Moves your line `id`, whose time the Echo just set, to its place in time order among
+ * other people's lines. It never passes another line of yours, because the server got
+ * your lines in the order you sent them:
+ *
+ *   before: hi, one (t), two (t), between (t+3)      echoes say t+5
+ *   after:  hi, between, one, two
+ *
+ * When the line moves, your line next to it on the side it left may now follow, so
+ * that one is placed again too. Changes `messages`; returns true if a line moved.
+ */
+function placeOwnLine(messages: ChatMessage[], id: string): boolean {
+  const from = messages.findLastIndex((m) => m.id === id);
+  if (from < 0) return false;
+  const line = messages[from]!;
+  const t = line.timestamp.getTime();
+  // How far it may go: up to, not past, your next line on either side.
+  let first = from;
+  while (first > 0 && !messages[first - 1]!.isSelf) first--;
+  let last = from;
+  while (last < messages.length - 1 && !messages[last + 1]!.isSelf) last++;
+
+  let at = from;
+  while (at < last && messages[at + 1]!.timestamp.getTime() <= t) at++;
+  if (at === from) while (at > first && messages[at - 1]!.timestamp.getTime() > t) at--;
+  if (at === from) return false;
+  messages.splice(from, 1);
+  messages.splice(at, 0, line);
+
+  const neighbor = at > from ? messages[first - 1] : messages[last + 1];
+  if (neighbor?.timeFromServer) placeOwnLine(messages, neighbor.id);
+  return true;
 }
 
 let nextMsgId = 1;
@@ -1520,6 +1565,8 @@ export class IrcManager {
           );
         }
       }
+      // The Replay counts of this batch, per buffer. See replay.ts.
+      const batchReplays = new Map<string, HistoryBatch>();
       for (const raw of batch.params.messages) {
         const cmd = raw.command;
         if (cmd !== "privmsg" && cmd !== "notice") continue;
@@ -1536,6 +1583,9 @@ export class IrcManager {
         const msgKind: MessageKind =
           cmd === "notice" ? "notice" : actionMatch ? "action" : "message";
         const text = actionMatch ? actionMatch[1]! : rawText;
+        const bufferKey = this.bufferKey(serverId, target);
+        let replays = batchReplays.get(bufferKey);
+        if (!replays) batchReplays.set(bufferKey, (replays = new HistoryBatch()));
 
         this.pushMessage(
           serverId,
@@ -1543,10 +1593,11 @@ export class IrcManager {
           makeMessage(msgKind, text, {
             from,
             msgid: raw.tags?.msgid,
-            timestamp: tagTime(raw.tags),
+            ...lineTime(raw.tags),
             isSelf,
             isHistory: true,
           }),
+          replays,
         );
       }
     });
@@ -1590,7 +1641,7 @@ export class IrcManager {
         const echo = { kind, text: msg.params.text };
         const shownId = this.echoes.take(serverId, this.key(serverId, target), echo);
         if (shownId) {
-          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid);
+          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid, lineTime(tags));
           return;
         }
       }
@@ -1601,7 +1652,7 @@ export class IrcManager {
         makeMessage(kind, msg.params.text, {
           from,
           msgid: tags?.msgid,
-          timestamp: tagTime(tags),
+          ...lineTime(tags),
           isMention,
           isSelf,
           isHistory,
@@ -1634,7 +1685,7 @@ export class IrcManager {
         makeMessage("notice", msg.params.text, {
           from,
           msgid: tags?.msgid,
-          timestamp: tagTime(tags),
+          ...lineTime(tags),
           isHistory: isHistoryBatch(tags),
         }),
       );
@@ -1816,7 +1867,9 @@ export class IrcManager {
 
   /**
    * The echo of a line you sent: the line shows the text the server has (trimmed, or
-   * the first part of a split line) and gets its msgid, so history doesn't add it again.
+   * the first part of a split line) and gets its msgid and time, so history doesn't add
+   * it again. With the server's time it also moves to its place in time order: History
+   * is matched by the server's time (see replay.ts), and honk's clock can be off.
    */
   private applyEcho(
     serverId: string,
@@ -1824,13 +1877,27 @@ export class IrcManager {
     messageId: string,
     text: string,
     msgid: string | undefined,
+    time: ReturnType<typeof lineTime>,
   ): void {
-    this.updateMessages(serverId, this.bufferKey(serverId, target), new Set([messageId]), (m) => ({
+    const bufferName = this.bufferKey(serverId, target);
+    this.updateMessages(serverId, bufferName, new Set([messageId]), (m) => ({
       ...m,
       text,
       ...(msgid ? { msgid } : {}),
+      ...(time.timeFromServer ? time : {}),
     }));
+    if (time.timeFromServer) this.moveToTimeOrder(serverId, bufferName, messageId);
     this.emit();
+  }
+
+  /** Moves your line whose Echo set its time to its place among other lines. See placeOwnLine. */
+  private moveToTimeOrder(serverId: string, bufferName: string, messageId: string): void {
+    const server = this.servers.get(serverId);
+    const buf = server?.buffers[bufferName];
+    if (!server || !buf) return;
+    const messages = [...buf.messages];
+    if (!placeOwnLine(messages, messageId)) return;
+    server.buffers = { ...server.buffers, [bufferName]: { ...buf, messages } };
   }
 
   /** Sets the delivery state of sent lines. `undefined` means the server has them. */
@@ -2143,28 +2210,26 @@ export class IrcManager {
     this.emit();
   }
 
+  /** `batch` is the History batch `message` came in, if any. See replay.ts. */
   private pushMessage(
     serverId: string,
     targetName: string,
     message: ChatMessage,
+    batch?: HistoryBatch,
   ): void {
     const server = this.servers.get(serverId);
     const bufferName = this.bufferKey(serverId, targetName);
     const buf = this.ensureBuffer(serverId, bufferName);
     if (!server || !buf) return;
 
-    // A line the buffer already has: same msgid (a replay, or a line to yourself that
-    // came as the echo and as a message), or for history, same sender, text and time.
-    if (message.msgid && buf.messages.some((m) => m.msgid === message.msgid)) return;
-    if (message.isHistory) {
-      const msgTime = message.timestamp.getTime();
-      const isDup = buf.messages.some(
-        (m) =>
-          m.from === message.from &&
-          m.text === message.text &&
-          Math.abs(m.timestamp.getTime() - msgTime) < 2000,
-      );
-      if (isDup) return;
+    // A Replay of a line the buffer already has is dropped. See replay.ts.
+    const verdict = checkReplay(buf.messages, message, batch);
+    if (verdict.type === "replay") return;
+    if (verdict.type === "give-msgid") {
+      const { msgid } = verdict;
+      this.updateMessages(serverId, bufferName, new Set([verdict.line.id]), (m) => ({ ...m, msgid }));
+      this.emit();
+      return;
     }
 
     // A history line that arrived while the connection was down counts as unread, and
@@ -2183,11 +2248,9 @@ export class IrcManager {
     // Live lines go at the end. History lines (CHATHISTORY playback, /history BEFORE)
     // are inserted in time order; the scan from the end replaces a full re-sort.
     const messages = [...buf.messages];
-    let at = messages.length;
-    if (message.isHistory) {
-      const t = message.timestamp.getTime();
-      while (at > 0 && messages[at - 1]!.timestamp.getTime() > t) at--;
-    }
+    const at = message.isHistory
+      ? timeOrderIndex(messages, message.timestamp.getTime())
+      : messages.length;
     messages.splice(at, 0, message);
     // History lines go in front of older lines, so trimming the oldest would drop them
     // right away. Grow the buffer's limit for them instead.

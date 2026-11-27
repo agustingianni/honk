@@ -8,7 +8,9 @@ The screen and the **Log** use the same rule to decide whether an incoming
 2. A Line from **History** without a msgid matches a kept Line with the same
    kind, nick, text without formatting, and time in whole seconds. Matches
    are counted: if History holds "lol" twice in one second and honk has it
-   once, one more is kept.
+   once, one more is kept. A kept Line whose time came from honk's clock, not
+   from the server, matches when the two times are less than 2 seconds apart,
+   because the two clocks can differ.
 3. A History Line with a msgid that matches a kept Line without one gives
    that Line its msgid.
 4. A live Line without a msgid is always new.
@@ -25,7 +27,8 @@ Other clients that matched Lines inside a time window kept running into
 trouble. Halloy broke when a clock was 7 minutes off, and removed a rule
 because it "had unintended consequences". The rule honk had before this
 decision, the same sender and text within 2 seconds, drops a real repeated
-"lol". Clients with no rule at all, such as The Lounge and Goguma, stored the
-same Lines 2 to 10 times. Whole seconds in rule 2 are needed because soju's
+"lol". Rule 2 keeps a 2-second window only for times from honk's own
+clock, where no server time exists to compare. Clients with no rule at
+all, such as The Lounge and Goguma, stored the same Lines 2 to 10 times. Whole seconds in rule 2 are needed because soju's
 file store and ZNC cut times to the second and drop msgids. Sources are in
 `docs/research/message-log.md`.

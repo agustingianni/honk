@@ -484,12 +484,28 @@ export class FakeIrcd {
     this.history = [...lines, ...this.history];
   }
 
-  /** Sends a raw line to every registered client, or one. "$NICK" becomes the client's nick. */
+  /**
+   * Sends a raw line to every registered client, or one. "$NICK" becomes the client's
+   * nick. Tags the line starts with replace the server's own, but only those the client
+   * asked for go out, as from a real server (batch, time, msgid, label):
+   * "@time=2026-11-27T21:35:07.000Z :alice!a@h PRIVMSG #honk :lol".
+   */
   sendRaw(line: string, clientId?: number): number {
     let n = 0;
     for (const c of this.clients) {
       if (!c.registered || (clientId !== undefined && c.id !== clientId)) continue;
-      this.send(c, line.replaceAll("$NICK", c.nick ?? "*"));
+      const out = line.replaceAll("$NICK", c.nick ?? "*");
+      if (!out.startsWith("@")) {
+        this.send(c, out);
+      } else {
+        const space = out.indexOf(" ");
+        const tags: Record<string, string> = {};
+        for (const tag of out.slice(1, space).split(";")) {
+          const [key = "", ...value] = tag.split("=");
+          tags[key] = value.join("=");
+        }
+        this.send(c, out.slice(space + 1), tags);
+      }
       n++;
     }
     return n;

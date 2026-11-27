@@ -143,13 +143,36 @@ describe("your own lines with echo-message", () => {
     expect(texts()).toEqual(["hi", "slow line"]);
   });
 
-  test("many lines sent before their echoes each show once", async () => {
+  test("many lines sent before their echoes each show once, in the order sent", async () => {
+    // Two lines go out in one ms and the rest in the next. The server stamps every echo
+    // with the later ms, so no echo may move its line past the lines sent after it.
+    const t = Date.now();
     irc.holdEchoes = true;
-    for (let i = 0; i < 8; i++) m.handleInput(`line ${i}`);
+    setSystemTime(new Date(t));
+    for (let i = 0; i < 2; i++) m.handleInput(`line ${i}`);
+    setSystemTime(new Date(t + 5));
+    for (let i = 2; i < 8; i++) m.handleInput(`line ${i}`);
     await until(() => irc.heldEchoCount === 8);
     irc.releaseEchoes();
     await echoed(8);
     expect(texts()).toEqual(["hi", ...Array.from({ length: 8 }, (_, i) => `line ${i}`)]);
+  });
+
+  test("an echo moves your lines past someone else's older line, in the order sent", async () => {
+    const t = Date.now();
+    irc.holdEchoes = true;
+    setSystemTime(new Date(t));
+    m.handleInput("one");
+    m.handleInput("two");
+    m.handleInput("three");
+    // The server gets them later: their echoes say t + 5.
+    setSystemTime(new Date(t + 5));
+    await until(() => irc.heldEchoCount === 3);
+    irc.sendRaw(`@time=${new Date(t + 3).toISOString()} :dave!d@fake PRIVMSG goose :between`);
+    await until(() => texts().includes("between"));
+    irc.releaseEchoes();
+    await echoed(3);
+    expect(texts()).toEqual(["hi", "between", "one", "two", "three"]);
   });
 
   test("a line the library splits shows as its parts, as others see it", async () => {
