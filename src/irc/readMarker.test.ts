@@ -431,6 +431,35 @@ describe("a badge clears only when the buffer counts as read", () => {
     expect(buffer("#bun")!.unread).toBe(6);
   });
 
+  test("lines that come after you read a channel get the divider, not the lines you read", async () => {
+    await fiveUnreadInBun();
+    m.setActive("alpha", "#bun");
+    await irc.waitFor(isMarkRead("#bun"), 2000);
+    m.setFocused(false);
+    for (const text of ["a", "b", "c"]) irc.say("alice", "#bun", text);
+    await until(() => buffer("#bun")!.unread === 3);
+    expect(textOf("#bun", buffer("#bun")!.firstUnreadId)).toBe("a");
+  });
+
+  test("sending a line before the delay keeps the badge and the divider", async () => {
+    await fiveUnreadInBun();
+    m.setActive("alpha", "#bun");
+    m.handleInput("hi");
+    m.setActive("alpha", "#honk");
+    await Bun.sleep(10);
+    expect(buffer("#bun")!.unread).toBe(5);
+    expect(textOf("#bun", buffer("#bun")!.firstUnreadId)).toBe("one");
+  });
+
+  test("a marker from another client lowers the badge of the channel on screen", async () => {
+    await fiveUnreadInBun();
+    m.setFocused(false);
+    m.setActive("alpha", "#bun");
+    irc.setReadMarker("#bun", timeOf("four"));
+    await until(() => buffer("#bun")!.unread === 1);
+    expect(textOf("#bun", buffer("#bun")!.firstUnreadId)).toBe("five");
+  });
+
   test("lines that come into the channel on screen while you are away stay unread", async () => {
     await connect();
     m.setFocused(true);

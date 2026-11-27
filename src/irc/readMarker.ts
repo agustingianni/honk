@@ -235,7 +235,7 @@ export class ReadMarkerTracker {
     // You read its last lines long enough: mark them now. A buffer you only flipped
     // past is not marked.
     if (this.clock.now() - this.readingSince >= this.delayMs) {
-      this.send(leaving.serverId, leaving.buffer);
+      this.markRead(leaving.serverId, leaving.buffer);
     }
     this.startReading();
   }
@@ -304,21 +304,22 @@ export class ReadMarkerTracker {
     this.schedule();
   }
 
-  /** Sends MARKREAD for the buffer on screen after the delay, unless a send is already waiting. */
+  /** Counts the buffer on screen as read after the delay (markRead), unless that is already waiting. */
   private schedule(): void {
     if (this.timer !== null) return;
     this.timer = this.clock.setTimeout(() => {
       this.timer = null;
       const onScreen = this.callbacks.onScreen();
-      if (onScreen) this.send(onScreen.serverId, onScreen.buffer);
+      if (onScreen) this.markRead(onScreen.serverId, onScreen.buffer);
     }, this.delayMs);
   }
 
   /**
-   * Moves your read marker for a buffer up to its newest line, if you are reading. The
-   * server tells your other clients, so they stop showing it as unread.
+   * Counts a buffer as read, if you are reading: honk clears its badge (markedRead),
+   * and your read marker moves up to its newest line. The server tells your other
+   * clients, so they stop showing it as unread.
    */
-  private send(serverId: string, buffer: string): void {
+  private markRead(serverId: string, buffer: string): void {
     if (!this.isReading()) return;
     this.callbacks.markedRead(serverId, buffer);
     const time = this.callbacks.newestTime(serverId, buffer);
