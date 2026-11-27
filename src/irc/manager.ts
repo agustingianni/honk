@@ -1448,25 +1448,40 @@ export class IrcManager {
       );
     });
 
-    // A failed CHATHISTORY sends no batch, so its /history request waits for nothing.
-    // The "fail" event below has no tags, and the label is a tag, so this reads the raw line.
+    // IRCv3 FAIL, an error. This reads the raw line, not the "fail" event, because only
+    // the raw line has tags. A failed CHATHISTORY sends no batch, so its /history request
+    // waits for nothing. Its label also names the request, so the error goes to the buffer
+    // where /history was typed, not the one you switched to since. Without a label, or
+    // when that buffer is closed, it goes to the reply target like other errors.
+    //   FAIL <command> <code> [<context>...] :<description>
     client.on("raw:fail", (msg) => {
-      if (isStale() || msg.params[0]?.toUpperCase() !== "CHATHISTORY") return;
-      const ctrl = this.getControl(serverId);
-      ctrl.historyRequests = afterHistoryFail(ctrl.historyRequests, msg.tags?.label);
+      if (isStale()) return;
+      const command = msg.params[0] ?? "";
+      const description = msg.params.length > 2 ? (msg.params.at(-1) ?? "") : "";
+      let where = this.replyTarget(serverId);
+      if (command.toUpperCase() === "CHATHISTORY") {
+        const ctrl = this.getControl(serverId);
+        const label = msg.tags?.label;
+        const failed =
+          label !== undefined ? takeHistoryRequest(ctrl.historyRequests, label, "") : undefined;
+        ctrl.historyRequests = afterHistoryFail(ctrl.historyRequests, label);
+        if (failed && this.hasBuffer(serverId, failed.target)) where = failed.target;
+      }
+      this.pushMessage(
+        serverId,
+        where,
+        makeMessage("error", describeStandardReply(command, description)),
+      );
     });
 
-    // IRCv3 standard replies. FAIL is an error; WARN and NOTE are information.
-    for (const kind of ["fail", "warn", "note"] as const) {
+    // IRCv3 WARN and NOTE, information.
+    for (const kind of ["warn", "note"] as const) {
       client.on(kind, (msg) => {
         if (isStale()) return;
         this.pushMessage(
           serverId,
           this.replyTarget(serverId),
-          makeMessage(
-            kind === "fail" ? "error" : "system",
-            describeStandardReply(msg.params.command, msg.params.description),
-          ),
+          makeMessage("system", describeStandardReply(msg.params.command, msg.params.description)),
         );
       });
     }

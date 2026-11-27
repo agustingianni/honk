@@ -152,10 +152,21 @@ test("a SASL login that works says which account", async () => {
   expect(texts("*status")).toContain("Logged in to the account goose.");
 });
 
+/**
+ * Joins #other and waits until fakeircd has answered the history honk fetches on join,
+ * so a later failHistoryIn.add("#other") fails only the /history a test types.
+ */
+async function joinOther(): Promise<void> {
+  m.handleInput("/join #other");
+  await until(() =>
+    irc.received.some((l) => l.command === "CHATHISTORY" && l.params[1] === "#other"),
+  );
+  await until(() => Boolean(server().buffers["#other"]));
+}
+
 test("/history sends a label, and a FAIL for one channel leaves another /history waiting", async () => {
   await inHonk();
-  m.handleInput("/join #other");
-  await until(() => Boolean(server().buffers["#other"]));
+  await joinOther();
   irc.failHistoryIn.add("#other");
   // Both requests leave before any reply comes back. The FAIL for #other arrives first.
   m.setActive("alpha", "#other");
@@ -167,6 +178,28 @@ test("/history sends a label, and a FAIL for one channel leaves another /history
   const sent = irc.received.filter((l) => l.command === "CHATHISTORY" && l.params[0] === "LATEST");
   expect(sent.slice(-2).every((l) => l.raw.startsWith("@label="))).toBe(true);
 });
+
+test.each([
+  [true, "#other"],
+  [false, "#honk"],
+])(
+  "a failed /history shows its error once (labeled-response: %p, in %p)",
+  async (labeledResponse, expected) => {
+    // With a label, the error goes where /history was typed. Without one, honk can't
+    // tell which request failed, so it goes where you are.
+    irc.labeledResponse = labeledResponse;
+    await inHonk();
+    await joinOther();
+    irc.failHistoryIn.add("#other");
+    m.setActive("alpha", "#other");
+    m.handleInput("/history 5");
+    // You switch away before the FAIL arrives.
+    m.setActive("alpha", "#honk");
+    await until(() => texts(expected).some((t) => t.startsWith("Could not load history")));
+    await Bun.sleep(100);
+    expect(allTexts().filter((t) => t.startsWith("Could not load history"))).toHaveLength(1);
+  },
+);
 
 test("history plays back without HistServ lines (draft/event-playback)", async () => {
   irc.join("dave", "#honk"); // a JOIN in the history, as Ergo keeps it
