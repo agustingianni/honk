@@ -63,10 +63,15 @@ describe("safeLinkUrl", () => {
 
   test("the result is plain ASCII with no character a shell, awk, or a browser reads specially", () => {
     expect(safeLinkUrl("https://example.com/café")).toBe("https://example.com/caf%C3%A9");
-    // xdg-open 1.3 passes the URL through `awk -v`, which turns "\040" into a space.
+    // xdg-open 1.3 passes the URL through `awk -v`, which turns "\040" into a
+    // space, and then splits the URL on whitespace into browser arguments.
     expect(safeLinkUrl("https://example.com/?q\\040--incognito")).toBe(
       "https://example.com/?q%5C040--incognito",
     );
+    // Raw whitespace splits the URL in xdg-open 1.3 too: the URL parser encodes
+    // a space and drops tabs and newlines.
+    expect(safeLinkUrl("https://a.com/?q --x")).toBe("https://a.com/?q%20--x");
+    expect(safeLinkUrl("https://a.com/?q\t--x\n")).toBe("https://a.com/?q--x");
     expect(safeLinkUrl("https://a.com/x#a|b{c}^d")).toBe("https://a.com/x#a%7Cb%7Bc%7D%5Ed");
     expect(safeLinkUrl("https://a.com/\u202Emoc")).toBe("https://a.com/%E2%80%AEmoc");
   });

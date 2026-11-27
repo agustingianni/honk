@@ -10,9 +10,15 @@ const NOT_URL_CHAR = /[^A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]/g;
  * - No user name or password: "https://github.com@evil.example/" opens evil.example.
  * - Encoded, plain ASCII. Non-ASCII becomes "%C3%A9", which older versions of
  *   `open` need to see a URL. Characters that WHATWG URLs keep, such as "\" and
- *   "|" in the query, are encoded too: newer xdg-open passes the URL through
- *   `awk -v`, which turns "\040" into a space, and the browser then gets the
- *   rest of the URL as extra arguments, such as "--proxy-server=...".
+ *   "|" in the query, are encoded too. xdg-open 1.3 hands the URL to `awk -v`,
+ *   which decodes escapes such as "\040", "\t", and "\x20", and then splits it
+ *   on spaces, tabs, and newlines. Each piece reaches the browser as its own
+ *   argument, such as "--proxy-server=...". So the result must hold no
+ *   whitespace and no backslash.
+ *
+ * The result always starts with "http", so it never looks like an option.
+ * Callers pass it as the only argument, without "--": xdg-open 1.3 passes
+ * anything after "--" on to gio or kde-open, even "--help-all".
  */
 export function safeLinkUrl(text: string): string | undefined {
   let parsed: URL;
