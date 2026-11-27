@@ -28,6 +28,11 @@ export interface AppConfig {
   /** Color theme id, such as "nord". See src/themes/index.ts. */
   theme?: string;
   /**
+   * Draw only ASCII symbols. When unset, honk decides from TERM and the locale.
+   * See src/ui/glyphs.ts.
+   */
+  ascii?: boolean;
+  /**
    * The config file: the one honk read, or the --config path even if that file
    * does not exist yet. Settings saved from the UI go there. Set by loadConfig,
    * never read from the file.

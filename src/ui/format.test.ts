@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { theme } from "../theme.ts";
+import { applyGlyphs } from "./glyphs.ts";
 import { parseIrcText, plainSegments, truncateSegments, underlineRange } from "./format.tsx";
 
 const plain = (text: string) =>
@@ -51,6 +52,16 @@ describe("truncateSegments", () => {
   test("a segment that fills the room exactly still ends in an ellipsis", () => {
     const segs = truncateSegments(parseIrcText("\x02abcd\x02efgh"), 4);
     expect(shown(segs)).toBe("abc…");
+  });
+
+  test("with --ascii, the segment before the cut leaves room for ...", () => {
+    applyGlyphs(true);
+    try {
+      expect(shown(truncateSegments(parseIrcText("\x02abcd\x02efgh"), 6))).toBe("abc...");
+      expect(shown(truncateSegments(parseIrcText("\x034red\x03 and more text"), 8))).toBe("red a...");
+    } finally {
+      applyGlyphs(false);
+    }
   });
 });
 

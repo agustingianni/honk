@@ -134,3 +134,21 @@ describe("loadConfig with a broken file", () => {
     expect((err as Error).message).toEndWith('must hold a JSON object, such as {"servers": [...]}');
   });
 });
+
+describe("the ascii setting", () => {
+  test("comes from the file, and --ascii or --no-ascii wins for one run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "honk-config-"));
+    try {
+      const path = join(dir, "config.json");
+      writeFileSync(path, '{ "ascii": true, "servers": [] }');
+      expect(loadConfig(["--config", path]).ascii).toBe(true);
+      expect(loadConfig(["--config", path, "--no-ascii"]).ascii).toBe(false);
+      writeFileSync(path, '{ "servers": [] }');
+      expect(loadConfig(["--config", path]).ascii).toBeUndefined();
+      expect(loadConfig(["--ascii", "--config", path]).ascii).toBe(true);
+      expect(loadConfig(["--config", path, "--ascii"]).ascii).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+});

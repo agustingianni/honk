@@ -48,7 +48,7 @@ function charClass(ch: string): CharClass {
   if (ch >= "0" && ch <= "9") return CharClass.Number;
   if (/\s/.test(ch)) return CharClass.White;
   if (DELIMITERS.includes(ch)) return CharClass.Delimiter;
-  // Letters outside ASCII ("é", "ñ") are word characters too.
+  // Letters outside ASCII ("\u00e9", "\u00f1") are word characters too.
   if (ch.toLowerCase() !== ch.toUpperCase()) return CharClass.Lower;
   return CharClass.NonWord;
 }

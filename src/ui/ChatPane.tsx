@@ -9,6 +9,7 @@ import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from ".
 import { getCompletions } from "./completion.ts";
 import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
+import { glyphs } from "./glyphs.ts";
 
 interface ChatPaneProps {
   server: ServerState | undefined;
@@ -66,7 +67,7 @@ function shortNick(nick: string): string {
 function UnreadDivider({ paneWidth }: { paneWidth: number }) {
   const half = (
     <text flexGrow={1} flexShrink={1} flexBasis={0} minWidth={1} wrapMode="none" fg={theme.red}>
-      {"─".repeat(Math.max(1, paneWidth))}
+      {glyphs.rule.repeat(Math.max(1, paneWidth))}
     </text>
   );
   return (
@@ -145,7 +146,7 @@ const MessageRow = memo(function MessageRow({
       break;
     default: {
       // join, part, system
-      label = msg.kind === "join" ? "→" : msg.kind === "part" ? "←" : "·";
+      label = msg.kind === "join" ? glyphs.join : msg.kind === "part" ? glyphs.part : glyphs.system;
       labelFg = theme.fgDim;
       body =
         msg.kind === "system" ? (
@@ -197,6 +198,7 @@ const MessageRow = memo(function MessageRow({
         marginLeft={1}
         paddingLeft={1}
         border={["left"]}
+        customBorderChars={glyphs.border}
         borderColor={theme.gutter}
       >
         {segments ? (
@@ -437,11 +439,17 @@ export function ChatPane({
 
   const title = buffer ? buffer.name : STATUS_BUFFER;
   // Cut at the end to fit beside the title and the user count (2 + 2 padding,
-  // " — ", and the count with its margin). FormattedText cuts it after it
-  // parses it, so a cut link still opens the whole URL.
+  // the separator with a space on each side, and the count with its margin).
+  // FormattedText cuts it after it parses it, so a cut link still opens the
+  // whole URL.
   const usersText = buffer?.kind === "channel" ? `${buffer.users.length} users` : "";
   const topicRoom =
-    paneWidth - 4 - cellWidth(title) - 3 - (usersText ? cellWidth(usersText) + 2 : 0);
+    paneWidth -
+    4 -
+    cellWidth(title) -
+    cellWidth(glyphs.topicSeparator) -
+    2 -
+    (usersText ? cellWidth(usersText) + 2 : 0);
   const topic = topicRoom >= 4 ? (buffer?.topic ?? "") : "";
   const promptLabel = server
     ? `${server.name}/${title}`
@@ -498,7 +506,7 @@ export function ChatPane({
           </span>
           {topic ? (
             <>
-              <span fg={theme.fgMuted}> — </span>
+              <span fg={theme.fgMuted}> {glyphs.topicSeparator} </span>
               <FormattedText text={topic} defaultFg={theme.fgMuted} maxWidth={topicRoom} />
             </>
           ) : null}
@@ -579,7 +587,7 @@ export function ChatPane({
           <span fg={theme.accent}>
             <strong>{promptLabel}</strong>
           </span>
-          <span fg={theme.cyan}> ❯ </span>
+          <span fg={theme.cyan}> {glyphs.prompt} </span>
         </text>
         <input
           ref={inputRef}

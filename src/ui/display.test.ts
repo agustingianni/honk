@@ -1,10 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { cellWidth, indexAtCell, setWidthMethod, truncate } from "./display.ts";
+import { applyGlyphs } from "./glyphs.ts";
 
 const FAMILY = "👨‍👩‍👧‍👦";
 
 afterEach(() => {
   setWidthMethod("unicode");
+  applyGlyphs(false);
 });
 
 test("truncate leaves a string that fits alone", () => {
@@ -28,6 +30,31 @@ test("truncate gives nothing for no room, and only the ellipsis for one cell", (
   expect(truncate("fern", 0)).toBe("");
   expect(truncate("fern", -3)).toBe("");
   expect(truncate("fern", 1)).toBe("…");
+});
+
+test("with --ascii, truncate leaves room for the 3 cells of ...", () => {
+  applyGlyphs(true);
+  expect(truncate("abcdefgh", 6)).toBe("abc...");
+  expect(truncate("abcdef", 6)).toBe("abcdef");
+  expect(truncate("田中さん", 6)).toBe("田...");
+  // 8 cells: the emoji takes 2.
+  expect(truncate(`ab${FAMILY}cdef`, 7)).toBe(`ab${FAMILY}...`);
+  expect(truncate(`ab${FAMILY}cdef`, 6)).toBe("ab...");
+  expect(truncate(`ab${FAMILY}cdef`, 4)).toBe("a...");
+});
+
+test("truncate gives the part of the marker that fits when the whole one does not", () => {
+  applyGlyphs(true);
+  expect(truncate("fern", 1)).toBe(".");
+  expect(truncate("fernando", 2)).toBe("..");
+  expect(truncate("fernando", 3)).toBe("...");
+  expect(truncate("田中さん", 2)).toBe("..");
+});
+
+test("truncate takes the marker as an argument", () => {
+  expect(truncate("abcdefgh", 6, " [+]")).toBe("ab [+]");
+  expect(truncate("abcdefgh", 6, "")).toBe("abcdef");
+  expect(truncate("田中さん", 5, "")).toBe("田中");
 });
 
 test("a ZWJ emoji takes 2 cells with the unicode method", () => {

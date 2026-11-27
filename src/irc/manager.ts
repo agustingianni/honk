@@ -556,7 +556,7 @@ export class IrcManager {
         this.pushMessage(
           id,
           STATUS_BUFFER,
-          makeMessage("system", "The computer woke from sleep. Reconnecting…"),
+          makeMessage("system", "The computer woke from sleep. Reconnecting..."),
         );
         void this.connectServer(id, { manual: true });
       }
@@ -579,7 +579,7 @@ export class IrcManager {
         this.pushMessage(
           id,
           STATUS_BUFFER,
-          makeMessage("system", "The network changed. Reconnecting now…"),
+          makeMessage("system", "The network changed. Reconnecting now..."),
         );
         void this.connectServer(id, { manual: true });
       } else if (server.status === "connected") {
@@ -844,7 +844,7 @@ export class IrcManager {
       STATUS_BUFFER,
       makeMessage(
         "system",
-        `Connecting to ${cfg.host}:${port} (${tls ? "TLS" : "no TLS"}) as ${cfg.nick}…`,
+        `Connecting to ${cfg.host}:${port} (${tls ? "TLS" : "no TLS"}) as ${cfg.nick}...`,
       ),
     );
 
@@ -972,7 +972,7 @@ export class IrcManager {
     this.pushMessage(
       serverId,
       STATUS_BUFFER,
-      makeMessage("system", `Reconnecting in ${secs}s (attempt ${attempt})…`),
+      makeMessage("system", `Reconnecting in ${secs}s (attempt ${attempt})...`),
     );
 
     ctrl.reconnectTimer = setTimeout(() => {
@@ -1131,7 +1131,7 @@ export class IrcManager {
       this.pushMessage(
         serverId,
         STATUS_BUFFER,
-        makeMessage("system", "Connected. Registering…"),
+        makeMessage("system", "Connected. Registering..."),
       );
     });
 
@@ -1248,7 +1248,7 @@ export class IrcManager {
         STATUS_BUFFER,
         makeMessage("system", "Connection lost."),
       );
-      this.noteOffline(serverId, "Connection lost. Reconnecting…");
+      this.noteOffline(serverId, "Connection lost. Reconnecting...");
       this.scheduleReconnect(serverId);
     });
 
@@ -1918,7 +1918,7 @@ export class IrcManager {
       this.pushMessage(
         serverId,
         STATUS_BUFFER,
-        makeMessage("system", `Nick ${subject[0] ?? ""} is not available, trying ${fallback}…`),
+        makeMessage("system", `Nick ${subject[0] ?? ""} is not available, trying ${fallback}...`),
       );
       client.nick(fallback);
       return;

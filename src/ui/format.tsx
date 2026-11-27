@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { theme, useThemeVersion } from "../theme.ts";
 import { safeLinkUrl } from "../openUrl.ts";
 import { cellWidth, truncate } from "./display.ts";
+import { glyphs } from "./glyphs.ts";
 
 // Standard mIRC 0-15 colors (tuned slightly for dark TrueColor backgrounds)
 const IRC_COLORS_16: readonly string[] = [
@@ -231,26 +232,31 @@ export function parseIrcText(input: string): FormattedSegment[] {
 }
 
 /**
- * Cuts the shown text of `segments` to at most `max` terminal cells, with "…"
- * at the end when it cuts. A link that is cut stops being a link.
+ * Cuts the shown text of `segments` to at most `max` terminal cells, with
+ * `glyphs.ellipsis` at the end when it cuts. A link that is cut stops being a link.
  */
 export function truncateSegments(segments: FormattedSegment[], max: number): FormattedSegment[] {
   const total = segments.reduce((sum, seg) => sum + cellWidth(seg.text), 0);
   if (total <= max) return segments;
   const out: FormattedSegment[] = [];
+  const markerWidth = cellWidth(glyphs.ellipsis);
   let room = max;
   for (const seg of segments) {
     const width = cellWidth(seg.text);
-    // The last segment that fits must leave one cell for the "…".
-    if (width < room) {
+    // The last segment that fits must leave room for the ellipsis.
+    if (width + markerWidth <= room) {
       out.push(seg);
       room -= width;
       continue;
     }
-    // More text follows, so this segment must end in "…". The extra space makes
-    // truncate() cut even when the segment alone fills the room exactly.
-    const cut = { ...seg, text: truncate(`${seg.text} `, room) };
-    // A cut link is not a link: "https://github.com…" could hide the real host,
+    // More text follows, so this segment must end in the ellipsis, even when
+    // the segment alone fits in the room.
+    const text =
+      room < markerWidth
+        ? truncate(glyphs.ellipsis, room, "")
+        : `${truncate(seg.text, room - markerWidth, "")}${glyphs.ellipsis}`;
+    const cut = { ...seg, text };
+    // A cut link is not a link: "https://github.com..." could hide the real host,
     // as in "https://github.com.evil.example/".
     if (cut.href) {
       delete cut.href;

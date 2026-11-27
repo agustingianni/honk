@@ -1,6 +1,7 @@
 import { measureEditText, type WidthMethod } from "@opentui/core";
 import { theme } from "../theme.ts";
 import type { BufferState, ConnectionStatus } from "../types.ts";
+import { glyphs } from "./glyphs.ts";
 
 /**
  * Rows of the three top headers (sidebar, chat, user list). They must match so the
@@ -56,8 +57,9 @@ export function cellWidth(str: string): number {
 
 /**
  * The index in `str` of the grapheme that covers cell `col` (counted from 0),
- * or -1 when `str` ends before that cell. In "日本" cells 0 and 1 are "日"
- * (index 0), and cells 2 and 3 are "本" (index 1).
+ * or -1 when `str` ends before that cell. In "\u65e5\u672c" (two wide
+ * characters) cells 0 and 1 are the first character (index 0), and cells 2 and
+ * 3 are the second (index 1).
  */
 export function indexAtCell(str: string, col: number): number {
   if (col < 0) return -1;
@@ -71,21 +73,28 @@ export function indexAtCell(str: string, col: number): number {
 }
 
 /**
- * Cuts `str` to at most `max` terminal cells, with "…" at the end when it cuts.
- * It measures cells, not UTF-16 code units: "田中さん" is 4 code units and 8 cells.
- * It cuts between graphemes, so an emoji with a skin tone or a ZWJ stays whole.
- * When a wide character does not fit, the result can be one cell short of `max`.
+ * Cuts `str` to at most `max` terminal cells, with `marker` at the end when it
+ * cuts. The marker is the ellipsis glyph, so truncate("abcdefgh", 6) is "abcde"
+ * and a 1-cell ellipsis, or "abc..." with --ascii.
+ * It measures cells, not UTF-16 code units: 4 Japanese characters are 4 code
+ * units and 8 cells. It cuts between graphemes, so an emoji with a skin tone or
+ * a ZWJ stays whole. When a wide character does not fit, the result can be one
+ * cell short of `max`. When `max` has no room for the whole marker, the result
+ * is the part of the marker that fits.
  */
-export function truncate(str: string, max: number): string {
+export function truncate(str: string, max: number, marker = glyphs.ellipsis): string {
   if (max <= 0) return "";
-  if (PRINTABLE_ASCII.test(str)) return str.length <= max ? str : `${str.slice(0, max - 1)}…`;
-  // Where the text ends if it gets cut: the most that fits before the "…".
+  const markerWidth = cellWidth(marker);
+  const cut = (end: number) =>
+    markerWidth > max ? truncate(marker, max, "") : `${str.slice(0, end)}${marker}`;
+  if (PRINTABLE_ASCII.test(str)) return str.length <= max ? str : cut(max - markerWidth);
+  // Where the text ends if it gets cut: the most that fits before the marker.
   let cutAt = -1;
   let width = 0;
   for (const { segment, index } of graphemes.segment(str)) {
     width += graphemeWidth(segment);
-    if (cutAt < 0 && width > max - 1) cutAt = index;
-    if (width > max) return `${str.slice(0, cutAt)}…`;
+    if (cutAt < 0 && width > max - markerWidth) cutAt = index;
+    if (width > max) return cut(cutAt);
   }
   return str;
 }
@@ -93,14 +102,14 @@ export function truncate(str: string, max: number): string {
 export function statusIndicator(status: ConnectionStatus): { glyph: string; color: string } {
   switch (status) {
     case "connected":
-      return { glyph: "●", color: theme.green };
+      return { glyph: glyphs.statusOn, color: theme.green };
     case "connecting":
     case "reconnecting":
-      return { glyph: "◐", color: theme.yellow };
+      return { glyph: glyphs.statusConnecting, color: theme.yellow };
     case "error":
-      return { glyph: "●", color: theme.red };
+      return { glyph: glyphs.statusOn, color: theme.red };
     default:
-      return { glyph: "○", color: theme.fgMuted };
+      return { glyph: glyphs.statusOff, color: theme.fgMuted };
   }
 }
 
@@ -118,6 +127,9 @@ export function scrollboxStyle(bg: string) {
     viewportOptions: { backgroundColor: bg },
     contentOptions: { backgroundColor: bg },
     scrollbarOptions: {
+      // Any `visible` value turns off showing the scrollbar only when the
+      // content is longer than the box, so pass it only to hide the scrollbar.
+      ...(!glyphs.scrollbar && { visible: false }),
       showArrows: false,
       trackOptions: { foregroundColor: theme.gutter, backgroundColor: bg },
     },

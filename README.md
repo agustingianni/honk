@@ -136,8 +136,8 @@ honk --demo
 ```
 
 Flags: `--server host[:port]`, `--port`, `--nick`, `--channel` (can repeat),
-`--password` (uses SASL), `--sasl`, `--no-tls`, `--config path`, `--demo`,
-`--version` (or `-v`), `--help` (or `-h`).
+`--password` (uses SASL), `--sasl`, `--no-tls`, `--config path`, `--theme`,
+`--ascii`, `--demo`, `--version` (or `-v`), `--help` (or `-h`).
 TLS is on by default. Type `/help` inside the client for the commands.
 
 ### Keys
@@ -285,6 +285,22 @@ To add a theme, put any Base16 or Base24 scheme file from that collection in
 `~/.config/honk/themes/kanagawa.yaml` is `"theme": "kanagawa"`. honk skips a
 file whose text would be hard to read on its background, and says why in
 `*status`.
+
+### Symbols that show as boxes or break the layout
+
+honk draws a few Unicode symbols, such as the connection dot and the arrows on
+join and part lines. If your font has no glyph for them, or your terminal draws
+them 2 columns wide (iTerm2 does with "Treat ambiguous-width characters as
+double width"), draw plain ASCII instead, in the config file or for one run
+with `--ascii`:
+
+```json
+{ "ascii": true, "servers": [] }
+```
+
+honk turns this on by itself when `TERM` is `dumb` or `linux`, or when the
+locale (`LC_ALL`, `LC_CTYPE` or `LANG`) is not UTF-8. `--no-ascii` turns it off
+for one run.
 
 ### Emoji that break the layout
 

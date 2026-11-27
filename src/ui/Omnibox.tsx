@@ -8,6 +8,7 @@ import type { ActiveBuffer, ServerState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
 import { bufferDisplayName, cellWidth, truncate, unreadBadge } from "./display.ts";
 import { type FuzzyMatch, fuzzyMatch, matchLabel, rankMatches, shorterFirst } from "./fuzzy.ts";
+import { glyphs } from "./glyphs.ts";
 
 interface OmniboxItem {
   id: string;
@@ -262,14 +263,14 @@ function fitRow(item: OmniboxItem, width: number): { label: string; detail?: str
 
 /**
  * Splits a fitted label into runs of matched and unmatched characters, for the
- * highlight. A label cut short ("Server: Reconn…") drops the matches past the cut.
+ * highlight. A label cut short ("Server: Reconn...") drops the matches past the cut.
  */
 export function highlightRuns(
   label: string,
   fullLength: number,
   highlights: readonly number[] = [],
 ): { text: string; hit: boolean }[] {
-  const shown = label.length < fullLength ? label.length - 1 : label.length;
+  const shown = label.length < fullLength ? label.length - glyphs.ellipsis.length : label.length;
   const hits = new Set(highlights.filter((p) => p < shown));
   const runs: { text: string; hit: boolean }[] = [];
   for (let i = 0; i < label.length; i++) {
@@ -766,6 +767,7 @@ export function Omnibox({
       backgroundColor={theme.bgOverlay}
       border
       borderStyle="rounded"
+      customBorderChars={glyphs.border}
       borderColor={theme.borderOverlay}
     >
       {/* Input row */}
@@ -777,7 +779,7 @@ export function Omnibox({
         flexDirection="row"
       >
         <text fg={theme.accent}>
-          <strong>❯ </strong>
+          <strong>{glyphs.prompt} </strong>
         </text>
         <input
           flexGrow={1}
@@ -786,7 +788,7 @@ export function Omnibox({
           placeholder={
             mode === "theme"
               ? "Color theme (Up/Down to preview, Enter to keep, Esc to cancel)"
-              : "Jump to buffer… (> actions, / commands, @ users, ? help)"
+              : `Jump to buffer${glyphs.ellipsis} (> actions, / commands, @ users, ? help)`
           }
           backgroundColor={theme.bgInput}
           textColor={theme.fgBright}
@@ -822,7 +824,7 @@ export function Omnibox({
               >
                 <text>
                   <span fg={isSel ? theme.accent : theme.bgOverlay}>
-                    {isSel ? "▎" : " "}
+                    {isSel ? glyphs.selectedRow : " "}
                   </span>
                   <span fg={item.labelColor ?? theme.fgPrimary}> </span>
                   {/* The characters the query matched stand out, as in VS Code and fzf. */}

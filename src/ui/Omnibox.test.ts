@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { applyGlyphs } from "./glyphs.ts";
 import { highlightRuns, rankActions, type RecentActions } from "./Omnibox.tsx";
 
 type Action = { id: string; label: string; detail?: string; historyKey?: string };
@@ -95,6 +96,16 @@ test("highlight runs split the label into matched and plain parts", () => {
     { text: "Re", hit: true },
     { text: "…", hit: false },
   ]);
+  applyGlyphs(true);
+  try {
+    expect(highlightRuns("Server: Re...", 23, [8, 9, 10, 11, 15])).toEqual([
+      { text: "Server: ", hit: false },
+      { text: "Re", hit: true },
+      { text: "...", hit: false },
+    ]);
+  } finally {
+    applyGlyphs(false);
+  }
 });
 
 test("a match in the label ranks above one in the detail", () => {

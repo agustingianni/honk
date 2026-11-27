@@ -79,10 +79,12 @@ function readConfigFile(path: string): AppConfig | null {
   }
   const notifications = parsed.notifications ?? true;
   const theme = typeof parsed.theme === "string" ? parsed.theme : undefined;
-  if (!Array.isArray(parsed.servers)) return { servers: [], notifications, theme };
+  const ascii = typeof parsed.ascii === "boolean" ? parsed.ascii : undefined;
+  if (!Array.isArray(parsed.servers)) return { servers: [], notifications, theme, ascii };
   return {
     notifications,
     theme,
+    ascii,
     servers: parsed.servers.map((s, idx) => ({
       id: s.id || s.name || s.host || `server-${idx + 1}`,
       name: s.name || s.id || s.host,
@@ -129,6 +131,8 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
   }
 
   if (typeof flags.theme === "string") config = { ...config, theme: flags.theme };
+  // --ascii, or --no-ascii to undo "ascii": true for one run.
+  if (typeof flags.ascii === "boolean") config = { ...config, ascii: flags.ascii };
 
   // 2. Allow quick CLI --server override/addition
   if (typeof flags.server === "string") {
