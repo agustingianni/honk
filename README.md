@@ -298,9 +298,8 @@ with `--ascii`:
 { "ascii": true, "servers": [] }
 ```
 
-honk turns this on by itself when `TERM` is `dumb` or `linux`, or when the
-locale (`LC_ALL`, `LC_CTYPE` or `LANG`) is not UTF-8. `--no-ascii` turns it off
-for one run.
+honk turns this on by itself when `TERM` is `dumb` or `linux`. `--no-ascii`
+turns it off for one run.
 
 ### Emoji that break the layout
 

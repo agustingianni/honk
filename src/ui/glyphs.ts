@@ -95,17 +95,16 @@ export function applyGlyphs(ascii: boolean): void {
 
 /**
  * Whether to draw ASCII. The config ("ascii" or --ascii, --no-ascii) decides
- * when it is set. Otherwise ASCII is on for a terminal that likely can't draw
- * the symbols: TERM is "dumb" or "linux" (the Linux console), or the locale does
- * not say UTF-8. The locale is the first one set of LC_ALL, LC_CTYPE and LANG,
- * so LC_ALL=C wins over LANG=en_US.UTF-8.
+ * when it is set. Otherwise ASCII is on only for a terminal that likely can't
+ * draw the symbols: TERM is "dumb" or "linux" (the Linux console). The locale
+ * is no help: it describes honk's environment, not the terminal. A container
+ * with no LANG, or LC_ALL=C in .bashrc, usually runs in a terminal that draws
+ * Unicode fine.
  */
 export function wantsAscii(
   setting: boolean | undefined,
   env: Record<string, string | undefined>,
 ): boolean {
   if (setting !== undefined) return setting;
-  if (env.TERM === "dumb" || env.TERM === "linux") return true;
-  const locale = env.LC_ALL || env.LC_CTYPE || env.LANG || "";
-  return !/utf-?8/i.test(locale);
+  return env.TERM === "dumb" || env.TERM === "linux";
 }

@@ -55,11 +55,7 @@ test("ASCII is on by itself for a dumb terminal or the Linux console", () => {
   expect(wantsAscii(undefined, { TERM: "linux", LANG: "en_US.UTF-8" })).toBe(true);
 });
 
-test("ASCII is on by itself when the locale is not UTF-8", () => {
-  expect(wantsAscii(undefined, { TERM: "xterm" })).toBe(true);
-  expect(wantsAscii(undefined, { TERM: "xterm", LANG: "C" })).toBe(true);
-  expect(wantsAscii(undefined, { TERM: "xterm", LC_CTYPE: "UTF-8" })).toBe(false);
-  expect(wantsAscii(undefined, { TERM: "xterm", LC_ALL: "de_DE.utf8" })).toBe(false);
-  // LC_ALL wins over LANG, as in setlocale.
-  expect(wantsAscii(undefined, { TERM: "xterm", LC_ALL: "C", LANG: "en_US.UTF-8" })).toBe(true);
+test("the locale does not turn ASCII on", () => {
+  expect(wantsAscii(undefined, { TERM: "xterm-256color" })).toBe(false);
+  expect(wantsAscii(undefined, { TERM: "xterm-256color", LC_ALL: "C" })).toBe(false);
 });
