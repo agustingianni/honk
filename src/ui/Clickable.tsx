@@ -162,6 +162,9 @@ type LinkAreaProps = Omit<
  *
  * A drag across a link still selects text, and Shift, Alt, or Ctrl with a
  * click leaves the link to the terminal (Cmd+click in most of them).
+ *
+ * The pointer is checked only when the mouse moves. After a wheel scroll or a
+ * new line under a still mouse, it is updated on the next move.
  */
 export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
   const renderer = useRenderer();
