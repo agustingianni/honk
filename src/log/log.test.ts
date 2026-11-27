@@ -102,7 +102,9 @@ test("a new file is private and named once in *status", () => {
 });
 
 test("logs: enabled false keeps no file", () => {
-  expect(open({ enabled: false }).log).toBeUndefined();
+  const result = open({ enabled: false });
+  expect(result.log).toBeUndefined();
+  expect(result.off).toBe("logs.enabled is false in the config");
   expect(() => statSync(path)).toThrow();
 });
 
@@ -114,6 +116,7 @@ test("a file from a newer honk is left alone and logging turns off", () => {
   const again = open();
   expect(again.log).toBeUndefined();
   expect(again.notices[0]).toContain("from a newer honk");
+  expect(again.off).toStartWith("the log is from a newer honk");
 });
 
 test("lines wait about a second, or until 100 lines, then go to the file in one write", () => {

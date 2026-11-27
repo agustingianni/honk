@@ -137,7 +137,7 @@ export function checkSqlite(db: Database): string | undefined {
 /** The file's schema version is newer than this honk knows. */
 export class NewerSchemaError extends Error {
   constructor(version: number) {
-    super(`it is from a newer honk (schema ${version}, this honk knows ${SCHEMA_VERSION})`);
+    super(`is from a newer honk (schema ${version}, this honk knows ${SCHEMA_VERSION})`);
   }
 }
 

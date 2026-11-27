@@ -5,15 +5,19 @@ import {
   useTerminalDimensions,
 } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { searchCommand } from "./irc/commands.ts";
 import type { IrcManager } from "./irc/manager.ts";
 import { casemappingOf, STATUS_BUFFER } from "./irc/names.ts";
 import { withActionUsed } from "./state.ts";
 import { applyTheme, theme, ThemeVersion } from "./theme.ts";
 import type { ThemeEntry } from "./themes/index.ts";
+import type { LogContext } from "./log/search.ts";
 import { ChatPane } from "./ui/ChatPane.tsx";
+import { ContextView } from "./ui/ContextView.tsx";
 import { setWidthMethod } from "./ui/display.ts";
 import { Nicklist } from "./ui/Nicklist.tsx";
 import { Omnibox, recentKey } from "./ui/Omnibox.tsx";
+import type { LogSearch } from "./ui/logSearch.ts";
 import { Sidebar } from "./ui/Sidebar.tsx";
 import { StatusBar } from "./ui/StatusBar.tsx";
 
@@ -33,6 +37,25 @@ interface AppProps {
   initialRecentActions: Record<string, number>;
   /** Called after an action is used, to save the new order. */
   onRecentActionsChanged: (recent: Record<string, number>) => void;
+  /** The Log that search reads, or why there is none. */
+  logSearch: LogSearch;
+}
+
+/**
+ * The open omnibox. `key` changes each time it opens, so it starts fresh. `search` opens
+ * it in search mode with that text; `selectedId` selects a row.
+ */
+interface OmniboxOpen {
+  key: number;
+  search?: string;
+  selectedId?: string;
+}
+
+/** A Context view on screen, and the search it came from, to go back to. */
+interface ContextOpen {
+  view: LogContext;
+  query: string;
+  selectedId: string;
 }
 
 export function App({
@@ -42,6 +65,7 @@ export function App({
   onThemeChosen,
   initialRecentActions,
   onRecentActionsChanged,
+  logSearch,
 }: AppProps) {
   const renderer = useRenderer();
   const { width } = useTerminalDimensions();
@@ -49,7 +73,22 @@ export function App({
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [nicklistOpen, setNicklistOpen] = useState(true);
-  const [omniboxOpen, setOmniboxOpen] = useState(false);
+  const [omnibox, setOmnibox] = useState<OmniboxOpen | null>(null);
+  const omniboxOpen = omnibox !== null;
+  const omniboxCount = useRef(0);
+  const openOmnibox = useCallback((how: Omit<OmniboxOpen, "key"> = {}) => {
+    omniboxCount.current += 1;
+    setOmnibox({ key: omniboxCount.current, ...how });
+  }, []);
+  const [context, setContext] = useState<ContextOpen | null>(null);
+  /** Ctrl+F and /search: the search mode of the omnibox, over whatever is on screen. */
+  const openSearch = useCallback(
+    (text: string) => {
+      setContext(null);
+      openOmnibox({ search: text });
+    },
+    [openOmnibox],
+  );
   const [recentKeys, setRecentKeys] = useState<string[]>([]);
   const [themeId, setThemeId] = useState(initialThemeId);
   const [themeVersion, setThemeVersion] = useState(0);
@@ -115,9 +154,11 @@ export function App({
   // Stable handlers, so memoized children (Nicklist, the Omnibox item list) skip work.
   const submit = useCallback(
     (value: string) => {
-      if (manager.handleInput(value) === "quit") quit();
+      const words = searchCommand(value);
+      if (words !== undefined) openSearch(words);
+      else if (manager.handleInput(value) === "quit") quit();
     },
-    [manager, quit],
+    [manager, quit, openSearch],
   );
   const runCommandOn = useCallback(
     (serverId: string, command: string) => {
@@ -125,19 +166,53 @@ export function App({
     },
     [manager, quit],
   );
+  // Going to a buffer leaves a Context view.
   const selectBuffer = useCallback(
-    (serverId: string, buf: string) => manager.setActive(serverId, buf),
+    (serverId: string, buf: string) => {
+      setContext(null);
+      manager.setActive(serverId, buf);
+    },
     [manager],
   );
   const openDm = useCallback(
-    (serverId: string, nick: string) => manager.openDm(serverId, nick),
+    (serverId: string, nick: string) => {
+      setContext(null);
+      manager.openDm(serverId, nick);
+    },
     [manager],
+  );
+  const openHit = useCallback(
+    (id: number, query: string, selectedId: string) => {
+      const view = "off" in logSearch ? undefined : logSearch.context(id);
+      if (view) setContext({ view, query, selectedId });
+    },
+    [logSearch],
+  );
+  // Esc in a Context view: the results again, the hit still selected.
+  const closeContext = useCallback(() => {
+    if (!context) return;
+    setContext(null);
+    openOmnibox({ search: context.query, selectedId: context.selectedId });
+  }, [context, openOmnibox]);
+  const contextServerId = context?.view.serverId;
+  const openContextNick = useCallback(
+    (nick: string) => {
+      if (contextServerId) openDm(contextServerId, nick);
+    },
+    [openDm, contextServerId],
+  );
+  const openContextChannel = useCallback(
+    (channel: string) => {
+      setContext(null);
+      if (contextServerId) manager.openChannel(contextServerId, channel);
+    },
+    [manager, contextServerId],
   );
   const pasteLines = useCallback(
     (lines: string[]) => manager.sendLines(lines),
     [manager],
   );
-  const closeOmnibox = useCallback(() => setOmniboxOpen(false), []);
+  const closeOmnibox = useCallback(() => setOmnibox(null), []);
   const toggleSidebar = useCallback(() => setSidebarOpen((v) => !v), []);
   const toggleNicklist = useCallback(() => setNicklistOpen((v) => !v), []);
 
@@ -147,10 +222,16 @@ export function App({
       return;
     }
     if (key.ctrl && key.name === "k") {
-      setOmniboxOpen((v) => !v);
+      if (omniboxOpen) setOmnibox(null);
+      else openOmnibox();
       return;
     }
-    if (omniboxOpen) return;
+    if (key.ctrl && key.name === "f") {
+      openSearch("");
+      return;
+    }
+    // The Context view takes its own keys (Esc, scrolling).
+    if (omniboxOpen || context) return;
 
     if (key.ctrl && key.name === "b") {
       setSidebarOpen((v) => !v);
@@ -195,7 +276,8 @@ export function App({
   const nicklistFits = width >= NICKLIST_MIN_WIDTH;
   const showSidebar = sidebarOpen && sidebarFits;
   // DMs and *status have no user list, so the panel would only show "No users".
-  const showNicklist = nicklistOpen && nicklistFits && activeBuffer?.kind === "channel";
+  const showNicklist =
+    nicklistOpen && nicklistFits && activeBuffer?.kind === "channel" && !context;
   const chatWidth =
     width - (showSidebar ? 24 : 0) - (showNicklist ? 20 : 0);
 
@@ -219,6 +301,16 @@ export function App({
             />
           )}
 
+          {context ? (
+            <ContextView
+              context={context.view}
+              focused={!omniboxOpen}
+              paneWidth={chatWidth}
+              onBack={closeContext}
+              onOpenNick={openContextNick}
+              onOpenChannel={openContextChannel}
+            />
+          ) : (
           <ChatPane
             server={activeServer}
             buffer={activeBuffer}
@@ -229,6 +321,7 @@ export function App({
             onSelectUser={selectUser}
             onJoinChannel={joinChannel}
           />
+          )}
 
           {showNicklist && (
             <Nicklist
@@ -248,8 +341,13 @@ export function App({
           update={snapshot.update}
         />
 
-        {omniboxOpen && (
+        {omnibox && (
           <Omnibox
+            key={omnibox.key}
+            initialSearch={omnibox.search}
+            initialSelectedId={omnibox.selectedId}
+            logSearch={logSearch}
+            onOpenHit={openHit}
             servers={snapshot.servers}
             active={snapshot.active}
             recentKeys={recentKeys}

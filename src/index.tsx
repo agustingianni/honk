@@ -9,6 +9,7 @@ import { Notifier } from "./notify.ts";
 import { chooseNotificationProtocol, parseNotificationSetting, readTmuxInfo } from "./notifyProtocol.ts";
 import { applyTheme } from "./theme.ts";
 import { applyGlyphs, wantsAscii } from "./ui/glyphs.ts";
+import type { LogSearch } from "./ui/logSearch.ts";
 import { allThemes, loadUserThemes, selectTheme, type ThemeEntry } from "./themes/index.ts";
 import { defaultStatePath, loadState, saveState } from "./state.ts";
 import { startUpdateCheck } from "./updateCheck.ts";
@@ -48,6 +49,8 @@ interface HotState {
   /** The omnibox actions used last (see state.ts), kept here across hot reloads too. */
   recentActions: Record<string, number>;
   saveRecentActions: (recent: Record<string, number>) => void;
+  /** The Log that search reads, or why there is none. */
+  logSearch: LogSearch;
 }
 
 const g = globalThis as unknown as { __ircHot?: HotState };
@@ -67,8 +70,8 @@ if (!g.__ircHot) {
   const config = loadConfigOrExit();
   const demo = process.argv.includes("--demo");
   // The Log of your chats on disk. Not for the demo. See src/log/log.ts.
-  const { log, notices: logNotices } = demo
-    ? { log: undefined, notices: [] }
+  const { log, notices: logNotices, off: logOff } = demo
+    ? { log: undefined, notices: [], off: "the demo keeps no log" }
     : openLog(defaultLogPath(), config.logs ?? DEFAULT_LOG_SETTINGS, {
         onError: (text) => manager.addAppNotice(text),
       });
@@ -178,6 +181,7 @@ if (!g.__ircHot) {
     saveTheme,
     recentActions: loadState(statePath).recentActions,
     saveRecentActions,
+    logSearch: log ?? { off: logOff ?? "honk keeps no log" },
   };
   g.__ircHot = hot;
 }
@@ -195,6 +199,7 @@ hot.root.render(
     onThemeChosen={hot.saveTheme}
     initialRecentActions={hot.recentActions}
     onRecentActionsChanged={hot.saveRecentActions}
+    logSearch={hot.logSearch}
   />,
 );
 hot.renderer.requestRender();

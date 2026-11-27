@@ -3092,7 +3092,7 @@ export class IrcManager {
         for (const c of SLASH_COMMANDS) {
           reply(`${syntax(c)} - ${c.summary}`);
         }
-        reply("Press Ctrl+K for the omnibox, then ? to see what it does.");
+        reply("Press Ctrl+K for the omnibox, then ? to see what it does. Ctrl+F searches your chat logs.");
         return;
       }
 

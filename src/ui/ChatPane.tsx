@@ -73,7 +73,7 @@ function shortNick(nick: string): string {
  * width the feed has, with or without its scrollbar. Each half keeps at least
  * one dash.
  */
-function Divider({ label, color, paneWidth }: { label: string; color: string; paneWidth: number }) {
+export function Divider({ label, color, paneWidth }: { label: string; color: string; paneWidth: number }) {
   const half = (
     <text flexGrow={1} flexShrink={1} flexBasis={0} minWidth={1} wrapMode="none" fg={color}>
       {glyphs.rule.repeat(Math.max(1, paneWidth))}
@@ -95,17 +95,20 @@ function Divider({ label, color, paneWidth }: { label: string; color: string; pa
  * Memoized because message objects keep their identity across store updates,
  * so typing or a new line only renders the rows that changed.
  */
-const MessageRow = memo(function MessageRow({
+export const MessageRow = memo(function MessageRow({
   msg,
   grouped,
   highlightMentions,
   names,
+  highlighted = false,
 }: {
   msg: ChatMessage;
   grouped: boolean;
   /** False in a DM: every line there is to you, so painting each one adds nothing. */
   highlightMentions: boolean;
   names: NameActions;
+  /** The search hit in a Context view. */
+  highlighted?: boolean;
 }) {
   const themeVersion = useThemeVersion(); // re-render when the theme changes
   const mention = highlightMentions && Boolean(msg.isMention);
@@ -166,6 +169,8 @@ const MessageRow = memo(function MessageRow({
         );
     }
   }
+
+  if (highlighted) bg = theme.bgOverlaySel;
 
   // After the message, so its words are not names.
   const notSent = msg.delivery === "failed" && <span fg={theme.red}> (not sent)</span>;
