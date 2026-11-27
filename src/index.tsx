@@ -100,9 +100,11 @@ if (!g.__ircHot) {
   });
   const root = createRoot(renderer);
 
-  // The buffer on screen counts as read only while the window has focus. See readMarker.ts.
+  // The buffer on screen counts as read only while the window has focus, or, in a
+  // terminal that never reports focus, shortly after a key press. See readMarker.ts.
   renderer.on("focus", () => manager.setFocused(true));
   renderer.on("blur", () => manager.setFocused(false));
+  renderer.keyInput.on("keypress", () => manager.noteKeyPress());
 
   // Mentions and DMs become desktop notifications, shown by the terminal. See src/notify.ts.
   if (notifications.enabled) {

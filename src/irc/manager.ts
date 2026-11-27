@@ -123,12 +123,16 @@ interface ServerControl {
    */
   awayShown: Map<string, Map<string, string>>;
   /**
-   * How far you have read each buffer (ms), by buffer name (see nameKey). Set by the
-   * server's MARKREAD and by the ones honk sends. Kept across reconnects. See readMarker.ts.
+   * How far you have read each buffer (ms), by buffer name (see nameKey), as the
+   * server last said in a MARKREAD. Kept across reconnects. See readMarker.ts.
    */
   readMarkers: Map<string, number>;
-  /** Waits before sending MARKREAD, so a burst of lines sends one. */
-  markReadTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * The markers honk sent on this connection, which the server may not have taken yet,
+   * so the same one isn't sent twice. Cleared at each new connection, so a marker that
+   * was lost with the old one is sent again.
+   */
+  sentReadMarkers: Map<string, number>;
 }
 
 function createControl(): ServerControl {
@@ -148,7 +152,7 @@ function createControl(): ServerControl {
     historyRequests: [],
     awayShown: new Map(),
     readMarkers: new Map(),
-    markReadTimer: null,
+    sentReadMarkers: new Map(),
   };
 }
 
@@ -162,6 +166,8 @@ const MISSED_REPORT_DELAY_MS = 3_000;
  * lines, or flipping through buffers, sends one. See readMarker.ts.
  */
 const MARK_READ_DELAY_MS = 1_000;
+/** In a terminal that doesn't report focus, how long after a key press you count as reading. */
+const PRESENT_AFTER_KEY_MS = 2 * 60_000;
 
 /**
  * The TLS error code if the server's certificate was rejected (self-signed, expired,
@@ -410,8 +416,14 @@ export class IrcManager {
   private listeners = new Set<() => void>();
   private mentionListeners = new Set<(event: MentionEvent) => void>();
   private missedListeners = new Set<(events: MentionEvent[]) => void>();
-  /** Whether the terminal window has focus. See setFocused. */
-  private focused = true;
+  /** What the terminal last said about focus. "unknown" until it says anything. See isReading. */
+  private focus: "unknown" | "focused" | "blurred" = "unknown";
+  /** When you last pressed a key (ms). See noteKeyPress. */
+  private lastKeyAt = 0;
+  /** Waits before sending MARKREAD for the buffer on screen. See scheduleMarkRead. */
+  private markReadTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the buffer on screen became active (ms). See setActive. */
+  private activeSince = 0;
   /** Confirms that the lines you send reach the server. See delivery.ts. */
   private delivery = new DeliveryTracker({
     delivered: (serverId, lines) => this.setDelivery(serverId, lines, undefined),
@@ -544,10 +556,6 @@ export class IrcManager {
     if (ctrl.stableTimer) {
       clearTimeout(ctrl.stableTimer);
       ctrl.stableTimer = null;
-    }
-    if (ctrl.markReadTimer) {
-      clearTimeout(ctrl.markReadTimer);
-      ctrl.markReadTimer = null;
     }
   }
 
@@ -900,6 +908,10 @@ export class IrcManager {
   }
 
   disconnectAll(): void {
+    if (this.markReadTimer) {
+      clearTimeout(this.markReadTimer);
+      this.markReadTimer = null;
+    }
     if (this.wakeInterval) {
       clearInterval(this.wakeInterval);
       this.wakeInterval = null;
@@ -1007,6 +1019,7 @@ export class IrcManager {
       ctrl.registered = true;
       const isReconnect = ctrl.hasEverConnected;
       ctrl.hasEverConnected = true;
+      ctrl.sentReadMarkers.clear();
       ctrl.nickCollisionTries = 0;
 
       // Only reset backoff after staying registered stably for STABLE_RESET_MS
@@ -1061,7 +1074,13 @@ export class IrcManager {
       for (const nick of nicks) buffers.add(this.bufferKey(serverId, nick));
       ctrl.missed = { ...ctrl.missed, buffers };
       const since = historyTimestamp(ctrl.missed.since - MISSED_MARGIN_MS);
-      for (const nick of nicks) requestHistory(client, "AFTER", nick, since, 50);
+      const markers = client.state.caps.enabled.has(READ_MARKER_CAP);
+      for (const nick of nicks) {
+        // A DM has no JOIN to bring its marker, so ask for it. The server answers before
+        // the history, so a line you read on another client isn't counted as missed.
+        if (markers) void client.send("MARKREAD" as never, nick as never);
+        requestHistory(client, "AFTER", nick, since, 50);
+      }
     });
 
     client.on("isupport:network", (msg) => {
@@ -1931,7 +1950,7 @@ export class IrcManager {
       },
     };
     this.emit();
-    if (isActive) this.scheduleMarkRead(serverId);
+    if (isActive) this.scheduleMarkRead();
 
     if (message.isMention && !message.isHistory && !message.isSelf) {
       const event: MentionEvent = {
@@ -1993,40 +2012,64 @@ export class IrcManager {
 
   /**
    * Tells honk whether the terminal window has focus. While it doesn't, the buffer on
-   * screen is not being read, so honk does not move its read marker. A terminal that
-   * does not report focus is treated as focused.
+   * screen is not being read, so honk does not move its read marker.
    */
   setFocused(focused: boolean): void {
-    this.focused = focused;
-    if (focused && this.active) this.scheduleMarkRead(this.active.serverId);
+    this.focus = focused ? "focused" : "blurred";
+    if (focused) this.scheduleMarkRead();
   }
 
-  /** Sends MARKREAD for the buffer on screen soon, once a burst of lines is over. */
-  private scheduleMarkRead(serverId: string): void {
-    const ctrl = this.getControl(serverId);
-    if (ctrl.markReadTimer) return;
-    ctrl.markReadTimer = setTimeout(() => {
-      ctrl.markReadTimer = null;
-      this.sendMarkRead(serverId);
+  /**
+   * Tells honk you pressed a key. A terminal that never reports focus (tmux without
+   * focus-events, for one) gives no other sign that you are there.
+   */
+  noteKeyPress(): void {
+    this.lastKeyAt = Date.now();
+    if (this.focus === "unknown") this.scheduleMarkRead();
+  }
+
+  /**
+   * Whether you are reading the buffer on screen: the window has focus. If the terminal
+   * never said, a key pressed in the last few minutes stands in for focus, so a honk
+   * left open in a detached tmux doesn't mark everything read overnight.
+   */
+  private isReading(): boolean {
+    if (this.focus !== "unknown") return this.focus === "focused";
+    return Date.now() - this.lastKeyAt < PRESENT_AFTER_KEY_MS;
+  }
+
+  /**
+   * Sends MARKREAD for the buffer on screen soon. New lines don't push the time back,
+   * so a busy channel is still marked once a second. A buffer switch does (see
+   * setActive), so flipping past a buffer doesn't mark it.
+   */
+  private scheduleMarkRead(): void {
+    if (this.markReadTimer) return;
+    this.markReadTimer = setTimeout(() => {
+      this.markReadTimer = null;
+      if (this.active) this.sendMarkRead(this.active.serverId, this.active.buffer);
     }, MARK_READ_DELAY_MS);
   }
 
   /**
-   * Moves your read marker for the buffer on screen up to its newest line, if you are
-   * looking at it. The server tells your other clients, so they stop showing it as unread.
+   * Moves your read marker for a buffer up to its newest line, if you are reading. The
+   * server tells your other clients, so they stop showing it as unread.
    */
-  private sendMarkRead(serverId: string): void {
-    if (!this.focused || this.active?.serverId !== serverId) return;
+  private sendMarkRead(serverId: string, bufferName: string): void {
+    if (!this.isReading()) return;
     const client = this.clients.get(serverId);
     const ctrl = this.getControl(serverId);
-    const bufferName = this.active.buffer;
     const buf = this.servers.get(serverId)?.buffers[bufferName];
     if (!client || !ctrl.registered || !buf || buf.kind === "status") return;
     if (!client.state.caps.enabled.has(READ_MARKER_CAP)) return;
     const time = newestServerTime(buf.messages);
-    const known = ctrl.readMarkers.get(nameKey(bufferName));
-    if (time === undefined || (known !== undefined && time <= known)) return;
-    ctrl.readMarkers.set(nameKey(bufferName), time);
+    const key = nameKey(bufferName);
+    const known = Math.max(
+      ctrl.readMarkers.get(key) ?? -Infinity,
+      ctrl.sentReadMarkers.get(key) ?? -Infinity,
+    );
+    if (time === undefined || time <= known) return;
+    ctrl.sentReadMarkers.set(key, time);
     void client.send("MARKREAD" as never, bufferName as never, markReadParam(time) as never);
   }
 
@@ -2071,16 +2114,26 @@ export class IrcManager {
     const buf = server.buffers[bufferName];
     if (!buf) return;
 
-    // Clear the unread divider on the buffer we are leaving
-    if (
+    const leaving =
       this.active &&
       (this.active.serverId !== serverId || this.active.buffer !== bufferName)
-    ) {
-      this.clearUnreadDivider(this.active.serverId, this.active.buffer);
+        ? this.active
+        : null;
+    if (leaving) {
+      // Clear the unread divider on the buffer we are leaving
+      this.clearUnreadDivider(leaving.serverId, leaving.buffer);
+      // Its last lines were on screen long enough to read: mark them now. A buffer you
+      // only flipped past is not marked. The timer starts over for the new buffer.
+      if (Date.now() - this.activeSince >= MARK_READ_DELAY_MS) {
+        this.sendMarkRead(leaving.serverId, leaving.buffer);
+      }
+      if (this.markReadTimer) clearTimeout(this.markReadTimer);
+      this.markReadTimer = null;
+      this.activeSince = Date.now();
     }
 
     this.active = { serverId, buffer: bufferName };
-    this.scheduleMarkRead(serverId);
+    this.scheduleMarkRead();
     if (buf.unread > 0 || buf.hasMention) {
       server.buffers = {
         ...server.buffers,

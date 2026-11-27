@@ -60,14 +60,15 @@ export function isAfterMarker(marker: number | undefined, message: ChatMessage):
 
 /**
  * The time to send as your marker for a buffer you are looking at: its newest line
- * that came from the server. Lines honk made itself ("You joined") have the local
- * clock's time, and a line still being sent has no server time yet, so both are
- * skipped. Undefined when there is no such line.
+ * from someone else, with the server's time. Lines honk made itself ("You joined") and
+ * lines you sent have the local clock's time, so both are skipped: a clock that runs
+ * behind would put the marker before a line you have read. Your own lines never count
+ * as unread, so leaving them out loses nothing. Undefined when there is no such line.
  */
 export function newestServerTime(messages: readonly ChatMessage[]): number | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;
-    if (m.delivery) continue;
+    if (m.isSelf) continue;
     if (m.kind === "message" || m.kind === "action" || m.kind === "notice") {
       return m.timestamp.getTime();
     }

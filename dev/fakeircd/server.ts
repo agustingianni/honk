@@ -169,6 +169,8 @@ export class FakeIrcd {
    * before a client connects: CAP LS reads it.
    */
   labeledResponse = true;
+  /** MARKREAD from clients is dropped without a reply while this is true, like a lost line. */
+  ignoreMarkRead = false;
 
   private server: Server | null = null;
   /**
@@ -884,6 +886,7 @@ export class FakeIrcd {
    * future becomes now.
    */
   private onMarkRead(c: Client, params: string[]): void {
+    if (this.ignoreMarkRead) return;
     const [target, value] = params;
     if (!target) return this.send(c, `:${SERVER_NAME} FAIL MARKREAD NEED_MORE_PARAMS :Missing target`);
     if (value === undefined) return this.sendMarkRead(c, target);

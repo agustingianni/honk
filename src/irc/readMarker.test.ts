@@ -80,11 +80,12 @@ describe("unreadAfter", () => {
 });
 
 describe("newestServerTime", () => {
-  test("skips lines honk made itself and lines still being sent", () => {
+  test("skips lines honk made itself and your own lines, which have the local time", () => {
     const lines = [
       line("chat", 1),
       line("notice", 2, { kind: "notice" }),
       line("sending", 3, { isSelf: true, delivery: "pending" }),
+      line("sent", 3, { isSelf: true }),
       line("joined", 4, { kind: "join" }),
       line("system", 5, { kind: "system" }),
     ];
@@ -155,6 +156,7 @@ test("after a restart, history past the marker is unread in a channel you are no
 test("the channel on screen gets the divider and moves the marker", async () => {
   await readUpTo("#honk");
   await connect();
+  m.setFocused(true);
   m.setActive("alpha", "#honk");
   await until(() => buffer("#honk")!.messages.some((x) => x.text === "not read either"));
   expect(textOf("#honk", buffer("#honk")!.firstUnreadId)).toBe("goose: are you there?");
@@ -181,6 +183,7 @@ test("reading a channel on another client clears its badge here", async () => {
 
 test("without focus, the channel on screen is not marked read", async () => {
   await connect();
+  m.setFocused(true);
   m.setActive("alpha", "#honk");
   // Let the marker for the join settle first.
   await Bun.sleep(1200);
@@ -205,3 +208,87 @@ test("a live line in the channel on screen gets no divider", async () => {
   expect(buffer("#honk")!.firstUnreadId).toBeUndefined();
   expect(buffer("#honk")!.unread).toBe(0);
 });
+
+/** True if honk sends MARKREAD for `target` within `ms`. */
+const sendsMarkRead = (target: string, ms: number) =>
+  irc.waitFor(isMarkRead(target), ms).then(
+    () => true,
+    () => false,
+  );
+
+test("a terminal that never reports focus marks read only after a key press", async () => {
+  await connect();
+  m.setActive("alpha", "#honk");
+  irc.say("alice", "#honk", "anyone?");
+  expect(await sendsMarkRead("#honk", 1500)).toBe(false);
+
+  m.noteKeyPress();
+  expect(await sendsMarkRead("#honk", 2000)).toBe(true);
+});
+
+test("flipping past a channel does not mark it read", async () => {
+  await connect();
+  m.setFocused(true);
+  m.setActive("alpha", "#honk");
+  irc.say("alice", "#bun", "you skipped me");
+  await until(() => buffer("#bun")!.unread === 1);
+  await Bun.sleep(1100);
+  // A line in #honk starts the timer; you switch to #bun just before it fires.
+  irc.say("alice", "#honk", "starts the timer");
+  await until(() => buffer("#honk")!.messages.some((x) => x.text === "starts the timer"));
+  await Bun.sleep(800);
+  m.setActive("alpha", "#bun");
+  expect(await sendsMarkRead("#bun", 500)).toBe(false);
+  m.setActive("alpha", "#honk");
+  expect(await sendsMarkRead("#bun", 1200)).toBe(false);
+});
+
+test("leaving a channel you stayed on marks its newest line at once", async () => {
+  await connect();
+  m.setFocused(true);
+  m.setActive("alpha", "#honk");
+  irc.say("alice", "#honk", "first");
+  await irc.waitFor(isMarkRead("#honk"), 2000);
+
+  irc.say("alice", "#honk", "just before you leave");
+  await until(() => buffer("#honk")!.messages.some((x) => x.text === "just before you leave"));
+  m.setActive("alpha", "#bun");
+  const last = buffer("#honk")!.messages.findLast((x) => x.text === "just before you leave")!;
+  await until(() => irc.readMarker("#honk") === last.timestamp.getTime(), 300);
+});
+
+test("a DM you read on another client while honk was offline is not missed", async () => {
+  await connect();
+  irc.say("dave", "goose", "hi");
+  await until(() => Boolean(buffer("dave")));
+
+  irc.drop();
+  await until(() => server().status !== "connected");
+  irc.say("dave", "goose", "goose: read this on your phone");
+  await Bun.sleep(5);
+  irc.setReadMarker("dave", Date.now());
+
+  await until(
+    () => buffer("dave")!.messages.some((x) => x.text === "goose: read this on your phone"),
+    10_000,
+  );
+  // The phone read everything up to its marker, "hi" from before the drop too.
+  expect(buffer("dave")!.unread).toBe(0);
+  expect(buffer("dave")!.hasMention).toBe(false);
+}, 15_000);
+
+test("a marker the server never got is sent again after a reconnect", async () => {
+  await connect();
+  m.setFocused(true);
+  m.setActive("alpha", "#honk");
+  irc.ignoreMarkRead = true;
+  irc.say("alice", "#honk", "read me");
+  await irc.waitFor(isMarkRead("#honk"), 2000);
+  expect(irc.readMarker("#honk")).toBeUndefined();
+
+  irc.ignoreMarkRead = false;
+  irc.drop();
+  await until(() => server().status !== "connected");
+  await irc.waitFor(isMarkRead("#honk"), 10_000);
+  await until(() => irc.readMarker("#honk") !== undefined);
+}, 15_000);
