@@ -12,9 +12,11 @@ interface StatusBarProps {
   nicklistFits: boolean;
   /** A newer honk release, or null. */
   update: UpdateNotice | null;
+  /** A short message, such as "Copied", shown for a moment in place of the key hints. */
+  notice?: string | null;
 }
 
-export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: StatusBarProps) {
+export function StatusBar({ server, width, sidebarFits, nicklistFits, update, notice }: StatusBarProps) {
   const [now, setNow] = useState(() => Date.now());
   const isReconnecting =
     server?.status === "reconnecting" && Boolean(server.reconnectInfo);
@@ -89,14 +91,20 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: 
         )}
       </text>
 
-      <text fg={theme.fgMuted} flexShrink={0} wrapMode="none">
-        {hints.map((h, i) => (
-          <span key={h.key}>
-            {i > 0 ? "  " : ""}
-            <span fg={theme.accent}>{h.key}</span> {h.label}
-          </span>
-        ))}
-      </text>
+      {notice ? (
+        <text fg={theme.accent} flexShrink={0} wrapMode="none">
+          {notice}
+        </text>
+      ) : (
+        <text fg={theme.fgMuted} flexShrink={0} wrapMode="none">
+          {hints.map((h, i) => (
+            <span key={h.key}>
+              {i > 0 ? "  " : ""}
+              <span fg={theme.accent}>{h.key}</span> {h.label}
+            </span>
+          ))}
+        </text>
+      )}
     </box>
   );
 }

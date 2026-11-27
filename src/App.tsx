@@ -5,6 +5,7 @@ import {
   useTerminalDimensions,
 } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { CopyResult, CopyText } from "./clipboard.ts";
 import type { IrcManager } from "./irc/manager.ts";
 import { STATUS_BUFFER } from "./irc/names.ts";
 import { withActionUsed } from "./state.ts";
@@ -16,6 +17,17 @@ import { Nicklist } from "./ui/Nicklist.tsx";
 import { Omnibox } from "./ui/Omnibox.tsx";
 import { Sidebar } from "./ui/Sidebar.tsx";
 import { StatusBar } from "./ui/StatusBar.tsx";
+import { useSelectionCopy } from "./ui/useSelectionCopy.ts";
+
+/** How long the status line shows "Copied". */
+const COPY_NOTICE_MS = 2000;
+
+const COPY_NOTICES: Record<CopyResult, string> = {
+  copied: "Copied",
+  // Over SSH: the terminal may still ignore it, and honk cannot tell.
+  sent: "Sent to the terminal clipboard",
+  failed: "Could not copy",
+};
 
 /** Narrower than this, the panel is hidden whatever its toggle says. */
 const SIDEBAR_MIN_WIDTH = 65;
@@ -33,6 +45,8 @@ interface AppProps {
   initialRecentActions: Record<string, number>;
   /** Called after an action is used, to save the new order. */
   onRecentActionsChanged: (recent: Record<string, number>) => void;
+  /** Puts text on the clipboard. See src/clipboard.ts. */
+  copyText: CopyText;
 }
 
 export function App({
@@ -42,6 +56,7 @@ export function App({
   onThemeChosen,
   initialRecentActions,
   onRecentActionsChanged,
+  copyText,
 }: AppProps) {
   const renderer = useRenderer();
   const { width } = useTerminalDimensions();
@@ -111,6 +126,18 @@ export function App({
     renderer.destroy();
     process.exit(0);
   }, [manager, renderer]);
+
+  // A short message in the status line after a copy.
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(noticeTimer.current), []);
+  const showCopyNotice = useCallback((result: CopyResult) => {
+    clearTimeout(noticeTimer.current);
+    setCopyNotice(COPY_NOTICES[result]);
+    noticeTimer.current = setTimeout(() => setCopyNotice(null), COPY_NOTICE_MS);
+  }, []);
+
+  const copyOnRelease = useSelectionCopy(copyText, showCopyNotice);
 
   // Stable handlers, so memoized children (Nicklist, the Omnibox item list) skip work.
   const submit = useCallback(
@@ -206,6 +233,8 @@ export function App({
         width="100%"
         height="100%"
         backgroundColor={theme.bgBase}
+        // Mouse events bubble up to here, so a selection anywhere is copied.
+        onMouseUp={copyOnRelease}
       >
         <box flexDirection="row" flexGrow={1} width="100%">
           {showSidebar && (
@@ -245,6 +274,7 @@ export function App({
           sidebarFits={sidebarFits}
           nicklistFits={nicklistFits && activeBuffer?.kind === "channel"}
           update={snapshot.update}
+          notice={copyNotice}
         />
 
         {omniboxOpen && (

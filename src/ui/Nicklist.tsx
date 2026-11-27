@@ -91,7 +91,7 @@ const NickRow = memo(function NickRow({ nick, prefix, isSelf, onSelectUser }: Ni
       // Your own nick does nothing on a click, so it gets no hover look.
       onMouseDown={isSelf ? undefined : () => onSelectUser(nick)}
     >
-      <text>
+      <text selectable={false}>
         <span fg={prefixColor(prefix)}>{prefix ? prefix : " "}</span>
         <span fg={isSelf ? theme.accent : nickColor(nick)}>
           {isSelf ? <strong>{truncate(nick, 16)}</strong> : truncate(nick, 16)}

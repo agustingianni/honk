@@ -6,8 +6,9 @@ import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, NickEntry, ServerState } from "../types.ts";
 import { linkOpener } from "../openUrl.ts";
 import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from "./Clickable.tsx";
+import { tagBody, tagRow } from "./chatCopy.ts";
 import { getCompletions } from "./completion.ts";
-import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
+import { cellWidth, formatTime, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { dayLabelBefore } from "./dayDivider.ts";
 import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
 
@@ -46,12 +47,6 @@ const SHIFT_SCROLL_LINES = 3;
 /** Lines that the "new messages below" bar counts. */
 function isChatLine(m: ChatMessage): boolean {
   return (m.kind === "message" || m.kind === "action" || m.kind === "notice") && !m.isSelf;
-}
-
-function formatTime(date: Date): string {
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
 }
 
 /** Cuts a label to the nick column. The layout right-aligns it in the column. */
@@ -166,6 +161,8 @@ const MessageRow = memo(function MessageRow({
   // continues down beside it.
   return (
     <box
+      // A copy finds the message of each selected piece of text through these tags.
+      ref={(box) => tagRow(box, msg)}
       width="100%"
       flexDirection="row"
       paddingLeft={1}
@@ -194,6 +191,7 @@ const MessageRow = memo(function MessageRow({
         )}
       </box>
       <box
+        ref={(box) => tagBody(box, msg)}
         flexGrow={1}
         flexShrink={1}
         marginLeft={1}

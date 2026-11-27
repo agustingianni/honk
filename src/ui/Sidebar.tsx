@@ -68,7 +68,7 @@ export function Sidebar({
                   }
                 }}
               >
-                <text>
+                <text selectable={false}>
                   <span fg={st.color}>{st.glyph} </span>
                   <span fg={theme.fgBright}>
                     <strong>{truncate(server.name, 19)}</strong>
@@ -98,7 +98,7 @@ export function Sidebar({
                     hoverColor={isActive ? undefined : theme.bgRowHover}
                     onMouseDown={() => onSelect(server.id, bufName)}
                   >
-                    <text>
+                    <text selectable={false}>
                       <span fg={isActive ? theme.accent : theme.bgSidebar}>
                         {isActive ? "▎" : " "}
                       </span>
@@ -125,7 +125,7 @@ export function Sidebar({
                     </text>
 
                     {buf.unread > 0 && (
-                      <text fg={buf.hasMention ? theme.red : theme.accent}>
+                      <text selectable={false} fg={buf.hasMention ? theme.red : theme.accent}>
                         <strong>{unreadBadge(buf.unread)}</strong>
                       </text>
                     )}
