@@ -737,6 +737,7 @@ export class IrcManager {
     ) {
       this.servers.delete("local");
       this.controls.delete("local");
+      this.readMarkerTracker.forget("local");
       this.serverOrder = [];
       this.active = null;
     }
@@ -2262,10 +2263,9 @@ export class IrcManager {
     const buf = server.buffers[bufferName];
     if (!buf) return;
 
-    const previous = this.active;
     const leaving =
-      previous && (previous.serverId !== serverId || previous.buffer !== bufferName)
-        ? previous
+      this.active?.serverId !== serverId || this.active.buffer !== bufferName
+        ? this.active
         : null;
     // Clear the unread divider on the buffer we are leaving
     if (leaving) this.clearUnreadDivider(leaving.serverId, leaving.buffer);
@@ -2340,6 +2340,7 @@ export class IrcManager {
     if (this.servers.has("local") && this.serverOrder.length === 1) {
       this.servers.delete("local");
       this.controls.delete("local");
+      this.readMarkerTracker.forget("local");
       this.serverOrder = [];
     }
 

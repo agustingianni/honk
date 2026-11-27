@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MARK_READ_DELAY_MS,
   PRESENT_AFTER_KEY_MS,
   ReadMarkerTracker,
   type Clock,
 } from "./readMarker.ts";
 import type { ActiveBuffer } from "../types.ts";
 
-const DELAY = 1000;
+const DELAY = MARK_READ_DELAY_MS;
 
 /** A clock whose timers only fire when the test advances it. */
 function fakeClock() {
@@ -190,6 +191,13 @@ describe("ReadMarkerTracker", () => {
     show("#honk");
     advance(DELAY);
     expect(sent).toEqual([]);
+  });
+
+  test("forget drops a server's markers", () => {
+    const { markers } = setup();
+    markers.onServerMarker("libera", "#honk", 100);
+    markers.forget("libera");
+    expect(markers.serverMarker("libera", "#honk")).toBeUndefined();
   });
 
   test("stop cancels the timer", () => {

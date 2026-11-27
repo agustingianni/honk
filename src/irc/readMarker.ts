@@ -224,7 +224,7 @@ export class ReadMarkerTracker {
       // only flipped past is not marked. The timer starts over for the new buffer.
       const now = this.clock.now();
       if (now - this.activeSince >= this.delayMs) this.send(leaving.serverId, leaving.buffer);
-      this.cancel();
+      this.stop();
       this.activeSince = now;
     }
     this.schedule();
@@ -251,9 +251,16 @@ export class ReadMarkerTracker {
     return this.serverMarkers.get(serverId)?.get(nameKey(buffer));
   }
 
-  /** Cancels the timer, when honk shuts down. */
+  /** Forgets a server's markers, when its ServerControl goes away. */
+  forget(serverId: string): void {
+    this.serverMarkers.delete(serverId);
+    this.sentMarkers.delete(serverId);
+  }
+
+  /** Cancels the timer: on a buffer switch, and when honk shuts down. */
   stop(): void {
-    this.cancel();
+    if (this.timer !== null) this.clock.clearTimeout(this.timer);
+    this.timer = null;
   }
 
   /**
@@ -264,11 +271,6 @@ export class ReadMarkerTracker {
   private isReading(): boolean {
     if (this.focus !== "unknown") return this.focus === "focused";
     return this.clock.now() - this.lastKeyAt < PRESENT_AFTER_KEY_MS;
-  }
-
-  private cancel(): void {
-    if (this.timer !== null) this.clock.clearTimeout(this.timer);
-    this.timer = null;
   }
 
   /** Sends MARKREAD for the buffer on screen after the delay, unless a send is already waiting. */
@@ -292,7 +294,7 @@ export class ReadMarkerTracker {
     const key = nameKey(buffer);
     const sent = markersOf(this.sentMarkers, serverId);
     const known = Math.max(
-      this.serverMarker(serverId, buffer) ?? -Infinity,
+      this.serverMarkers.get(serverId)?.get(key) ?? -Infinity,
       sent.get(key) ?? -Infinity,
     );
     if (time <= known) return;
