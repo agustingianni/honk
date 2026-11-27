@@ -121,8 +121,8 @@ export function unreadAfter(
  * lines, or flipping through buffers, sends one. Tests pass a shorter one.
  */
 export const MARK_READ_DELAY_MS = 1_000;
-/** In a terminal that doesn't report focus, how long after a key press you count as reading. */
-export const PRESENT_AFTER_KEY_MS = 2 * 60_000;
+/** How long after your last input (a key, a click, the wheel, focus coming back) you count as reading. */
+export const PRESENT_AFTER_INPUT_MS = 2 * 60_000;
 
 export interface ReadMarkerCallbacks {
   /** The buffer on screen, asked when the timer fires. */
@@ -148,8 +148,8 @@ export interface ReadMarkerCallbacks {
 /**
  * Decides when to move your read marker for the buffer on screen.
  *
- * - It sends only while you are reading: the window has focus, or, in a terminal that
- *   never reports focus, you pressed a key in the last PRESENT_AFTER_KEY_MS.
+ * - It sends only while you are reading: the window does not say it lost focus, and
+ *   you used the terminal in the last PRESENT_AFTER_INPUT_MS. See isReading.
  * - It waits `delayMs` after a new line, and new lines don't push the time back, so a
  *   busy channel is marked once per delay.
  * - A buffer switch starts the wait over. The buffer you leave is marked at once if you
@@ -167,8 +167,8 @@ export interface ReadMarkerCallbacks {
 export class ReadMarkerTracker {
   /** What the terminal last said about focus. "unknown" until it says anything. See isReading. */
   private focus: "unknown" | "focused" | "blurred" = "unknown";
-  /** When you last pressed a key (ms). See noteKeyPress. */
-  private lastKeyAt = 0;
+  /** When you last used the terminal (ms). See noteActivity. */
+  private lastInputAt = 0;
   /** Waits before sending MARKREAD for the buffer on screen. See schedule. */
   private timer: unknown = null;
   /**
@@ -200,21 +200,20 @@ export class ReadMarkerTracker {
 
   /**
    * The terminal window got or lost focus. While it doesn't have focus, the buffer on
-   * screen is not being read, so its marker doesn't move.
+   * screen is not being read, so its marker doesn't move. Getting focus counts as
+   * input: you just came to the window.
    */
   setFocused(focused: boolean): void {
     const wasReading = this.isReading();
     this.focus = focused ? "focused" : "blurred";
+    if (focused) this.lastInputAt = this.clock.now();
     if (!wasReading && this.isReading()) this.startReading();
   }
 
-  /**
-   * You pressed a key. A terminal that never reports focus (tmux without focus-events,
-   * for one) gives no other sign that you are there.
-   */
-  noteKeyPress(): void {
+  /** You used the terminal: a key, a click, or the scroll wheel. */
+  noteActivity(): void {
     const wasReading = this.isReading();
-    this.lastKeyAt = this.clock.now();
+    this.lastInputAt = this.clock.now();
     if (!wasReading && this.isReading()) this.startReading();
   }
 
@@ -282,18 +281,20 @@ export class ReadMarkerTracker {
   }
 
   /**
-   * Whether you are reading the buffer on screen: the window has focus. If the terminal
-   * never said, a key pressed in the last few minutes stands in for focus, so a honk
-   * left open in a detached tmux doesn't mark everything read overnight.
+   * Whether you are reading the buffer on screen: the window has not lost focus, and
+   * you used the terminal in the last PRESENT_AFTER_INPUT_MS. Focus alone is not
+   * enough, so a focused honk on a locked screen doesn't mark everything read
+   * overnight. A terminal that never reports focus (tmux without focus-events) is
+   * judged by the input alone.
    */
   isReading(): boolean {
-    if (this.focus !== "unknown") return this.focus === "focused";
-    return this.clock.now() - this.lastKeyAt < PRESENT_AFTER_KEY_MS;
+    if (this.focus === "blurred") return false;
+    return this.clock.now() - this.lastInputAt < PRESENT_AFTER_INPUT_MS;
   }
 
   /**
    * You started reading the buffer on screen: you switched to it, focus came back, or
-   * you pressed a key after a time without one. It counts as read only once you have
+   * you used the terminal after a time without input. It counts as read only once you have
    * read it for `delayMs` since then, so the lines that came while you were away are
    * not marked when you come back and switch away at once. A timer set before starts
    * over too.

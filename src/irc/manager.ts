@@ -2272,12 +2272,14 @@ export class IrcManager {
     const isActive =
       this.active?.serverId === serverId && this.active.buffer === bufferName;
     // A history line is unread if it is newer than your read marker, or if it came
-    // while the connection was down. A line in the buffer on screen is seen only while
-    // you are reading it and it has no badge. See markedRead.
+    // while the connection was down. You are watching the buffer on screen while you
+    // are reading (see ReadMarkerTracker.isReading); a line there is read at once only
+    // if the buffer has no badge. See markedRead.
     const afterMarker = isAfterMarker(marker, message);
-    const seen = isActive && this.readMarkerTracker.isReading() && !hasBadge(buf);
+    const watching = isActive && this.readMarkerTracker.isReading();
+    const readAtOnce = watching && !hasBadge(buf);
     const countsAsUnread =
-      !seen && isReadableLine(message) && (!message.isHistory || afterMarker || missed);
+      !readAtOnce && isReadableLine(message) && (!message.isHistory || afterMarker || missed);
     // History you have not read gets the divider even when you see it come in.
     // History can arrive out of order, so the divider goes on the oldest unread line.
     // The first unread line in a buffer with no badge starts the divider over: the
@@ -2316,7 +2318,7 @@ export class IrcManager {
         kind: message.kind,
         from: message.from ?? "",
         text: message.text,
-        isActiveBuffer: isActive,
+        seen: watching,
       };
       for (const listener of this.mentionListeners) listener(event);
     } else if (missed && message.isMention) {
@@ -2327,7 +2329,7 @@ export class IrcManager {
         kind: message.kind,
         from: message.from ?? "",
         text: message.text,
-        isActiveBuffer: isActive,
+        seen: watching,
       });
     }
   }
@@ -2378,12 +2380,9 @@ export class IrcManager {
     this.readMarkerTracker.setFocused(focused);
   }
 
-  /**
-   * Tells honk you pressed a key. A terminal that never reports focus (tmux without
-   * focus-events, for one) gives no other sign that you are there.
-   */
-  noteKeyPress(): void {
-    this.readMarkerTracker.noteKeyPress();
+  /** Tells honk you used the terminal: a key, a click, or the scroll wheel. */
+  noteActivity(): void {
+    this.readMarkerTracker.noteActivity();
   }
 
   /**

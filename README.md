@@ -213,9 +213,11 @@ Each server takes `host`, `nick`, and optionally `port`, `tls`, `channels`,
 ### Notifications
 
 When someone mentions your nick or sends you a DM, honk shows a desktop
-notification. It does not notify for the buffer on screen while the terminal
-window has focus, and it sends at most one notification per buffer every 10
-seconds.
+notification. It does not notify for the buffer on screen while you are at the
+terminal: its window has focus, and you pressed a key, clicked, or scrolled in
+the last 2 minutes. In a terminal that does not report focus, such as tmux
+without `set -g focus-events on`, only the input counts. honk sends at most one
+notification per buffer every 10 seconds.
 
 honk asks your terminal to show the notification, so it works over SSH too: the
 notification appears on the computer you are sitting at. Terminals that support

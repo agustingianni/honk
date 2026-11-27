@@ -105,19 +105,19 @@ if (!g.__ircHot) {
   });
   const root = createRoot(renderer);
 
-  // The buffer on screen counts as read only while the window has focus, or, in a
-  // terminal that never reports focus, shortly after a key press. See readMarker.ts.
+  // You count as reading the buffer on screen shortly after any input, unless the
+  // window lost focus. See ReadMarkerTracker.isReading. Any input is every byte from
+  // the terminal: keys, clicks and the wheel, also those a scrollbar keeps to itself.
+  // Prepended, so it runs before honk handles the key or click.
   renderer.on("focus", () => manager.setFocused(true));
   renderer.on("blur", () => manager.setFocused(false));
-  renderer.keyInput.on("keypress", () => manager.noteKeyPress());
+  renderer.stdin.prependListener("data", () => manager.noteActivity());
 
   // Mentions and DMs become desktop notifications, shown by the terminal. See src/notify.ts.
   if (notifications.enabled) {
     const notifier = new Notifier((message, title) =>
       renderer.triggerNotification(message, title),
     );
-    renderer.on("focus", () => notifier.setFocused(true));
-    renderer.on("blur", () => notifier.setFocused(false));
     manager.onMention((event) => notifier.notify(event));
     manager.onMissedMentions((events) => notifier.notifyMissed(events));
   }

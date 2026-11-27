@@ -18,7 +18,7 @@ function event(overrides: Partial<MentionEvent> = {}): MentionEvent {
     kind: "message",
     from: "alice",
     text: "goose: ping",
-    isActiveBuffer: false,
+    seen: false,
     ...overrides,
   };
 }
@@ -115,17 +115,10 @@ describe("Notifier", () => {
     expect(sent).toEqual([{ message: "goose: ping", title: "alice in #honk" }]);
   });
 
-  test("stays quiet for the buffer on screen while the terminal has focus", () => {
+  test("stays quiet for a line you saw: the buffer on screen while you read it", () => {
     const { notifier, sent } = setup();
-    expect(notifier.notify(event({ isActiveBuffer: true }))).toBe(false);
+    expect(notifier.notify(event({ seen: true }))).toBe(false);
     expect(sent).toEqual([]);
-  });
-
-  test("notifies for the buffer on screen when the terminal lost focus", () => {
-    const { notifier, sent } = setup();
-    notifier.setFocused(false);
-    expect(notifier.notify(event({ isActiveBuffer: true }))).toBe(true);
-    expect(sent.length).toBe(1);
   });
 
   test("sends at most one notification per buffer in the cooldown", () => {
@@ -171,10 +164,10 @@ describe("missed mentions", () => {
     ]);
   });
 
-  test("skips the buffer on screen while the terminal has focus", () => {
+  test("skips the lines you saw", () => {
     const { notifier, sent } = setup();
-    expect(notifier.notifyMissed([event({ isActiveBuffer: true })])).toBe(false);
-    notifier.notifyMissed([event({ isActiveBuffer: true }), event({ bufferName: "#other" })]);
+    expect(notifier.notifyMissed([event({ seen: true })])).toBe(false);
+    notifier.notifyMissed([event({ seen: true }), event({ bufferName: "#other" })]);
     expect(sent.map((s) => s.title)).toEqual(["alice in #other"]);
   });
 

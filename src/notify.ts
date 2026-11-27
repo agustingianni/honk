@@ -21,8 +21,11 @@ export interface MentionEvent {
   kind: MessageKind;
   from: string;
   text: string;
-  /** True when this buffer is the one shown on screen. */
-  isActiveBuffer: boolean;
+  /**
+   * True when you saw the line come in: its buffer is on screen and you are reading
+   * (see ReadMarkerTracker.isReading). Such a line needs no notification.
+   */
+  seen: boolean;
 }
 
 /** Sends one notification. Returns false when the terminal can't show it. */
@@ -63,12 +66,6 @@ export function formatNotification(event: MentionEvent): { title: string; body: 
 }
 
 export class Notifier {
-  /**
-   * Whether the terminal window has focus. OpenTUI reports this with focus tracking
-   * (mode 1004). A terminal without it never reports, so we treat it as focused, and
-   * notify only for buffers that are not on screen.
-   */
-  private focused = true;
   private lastSent = new Map<string, number>();
 
   private readonly send: SendNotification;
@@ -81,13 +78,9 @@ export class Notifier {
       send(message.replace(BIDI_AND_C1, ""), title.replace(BIDI_AND_C1, ""));
   }
 
-  setFocused(focused: boolean): void {
-    this.focused = focused;
-  }
-
-  /** Shows a notification for `event` unless the user is already looking at it. Returns true if one was sent. */
+  /** Shows a notification for `event` unless you saw it. Returns true if one was sent. */
   notify(event: MentionEvent): boolean {
-    if (this.focused && event.isActiveBuffer) return false;
+    if (event.seen) return false;
 
     const key = `${event.serverId}\0${event.bufferName}`;
     const now = this.clock.now();
@@ -106,7 +99,7 @@ export class Notifier {
    * not a burst of banners.
    */
   notifyMissed(events: MentionEvent[]): boolean {
-    const unseen = events.filter((e) => !(this.focused && e.isActiveBuffer));
+    const unseen = events.filter((e) => !e.seen);
     if (unseen.length === 0) return false;
     if (unseen.length === 1) return this.notify(unseen[0]!);
     return this.send(formatMissedSummary(unseen), "Missed mentions");
