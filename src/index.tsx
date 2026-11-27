@@ -7,6 +7,7 @@ import { IrcManager } from "./irc/manager.ts";
 import { Notifier } from "./notify.ts";
 import { chooseNotificationProtocol, parseNotificationSetting, readTmuxInfo } from "./notifyProtocol.ts";
 import { applyTheme } from "./theme.ts";
+import { applyGlyphs, wantsAscii } from "./ui/glyphs.ts";
 import { allThemes, loadUserThemes, selectTheme, type ThemeEntry } from "./themes/index.ts";
 import { defaultStatePath, loadState, saveState } from "./state.ts";
 import { startUpdateCheck } from "./updateCheck.ts";
@@ -40,6 +41,8 @@ interface HotState {
   themes: ThemeEntry[];
   /** The theme in use. Kept here so a hot reload, which resets src/theme.ts, keeps it. */
   themeId: string;
+  /** Draw only ASCII. Kept here for the same reason, for src/ui/glyphs.ts. */
+  ascii: boolean;
   saveTheme: (id: string) => void;
   /** The omnibox actions used last (see state.ts), kept here across hot reloads too. */
   recentActions: Record<string, number>;
@@ -161,6 +164,7 @@ if (!g.__ircHot) {
     version: 0,
     themes,
     themeId: selected.entry.id,
+    ascii: wantsAscii(config.ascii, process.env),
     saveTheme,
     recentActions: loadState(statePath).recentActions,
     saveRecentActions,
@@ -171,6 +175,7 @@ if (!g.__ircHot) {
 const hot = g.__ircHot;
 hot.version += 1;
 applyTheme(hot.themes.find((t) => t.id === hot.themeId)!.theme);
+applyGlyphs(hot.ascii);
 hot.root.render(
   <App
     key={hot.version}

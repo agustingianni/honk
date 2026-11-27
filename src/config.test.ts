@@ -173,3 +173,22 @@ describe("the mouse setting", () => {
     }
   });
 });
+
+describe("the ascii setting", () => {
+  test("comes from the file, and --ascii or --no-ascii wins for one run", () => {
+    expect(load('{ "ascii": true, "servers": [] }').ascii).toBe(true);
+    expect(load('{ "ascii": true, "servers": [] }', "--no-ascii").ascii).toBe(false);
+    expect(load('{ "servers": [] }').ascii).toBeUndefined();
+    expect(load('{ "ascii": null }').ascii).toBeUndefined();
+    expect(load('{ "servers": [] }', "--ascii").ascii).toBe(true);
+    expect(load(null, "--ascii").ascii).toBe(true);
+  });
+
+  test("a value that is not a boolean is a ConfigError", () => {
+    for (const value of ['"true"', "1"]) {
+      const err = loadError(`{ "ascii": ${value}, "servers": [] }`);
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as Error).message).toEndWith(`honk.json: "ascii" must be true or false, not ${value}`);
+    }
+  });
+});

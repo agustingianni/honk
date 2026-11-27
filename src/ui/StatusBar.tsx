@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { theme } from "../theme.ts";
 import type { ServerState, UpdateNotice } from "../types.ts";
 import { cellWidth, statusIndicator } from "./display.ts";
+import { glyphs } from "./glyphs.ts";
 import { statusHints } from "./statusHints.ts";
 
 interface StatusBarProps {
@@ -41,7 +42,7 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: 
     isReconnecting && server?.reconnectInfo
       ? `  reconnecting in ${retrySeconds}s (attempt ${server.reconnectInfo.attempt})`
       : status === "connecting"
-        ? "  connecting…"
+        ? `  connecting${glyphs.ellipsis}`
         : server?.nick
           ? `  nick: ${server.nick}`
           : "";
@@ -79,7 +80,7 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: 
             {server.reconnectInfo.attempt})
           </span>
         ) : status === "connecting" ? (
-          <span fg={theme.yellow}>{"  "}connecting…</span>
+          <span fg={theme.yellow}>{"  "}connecting{glyphs.ellipsis}</span>
         ) : (
           server?.nick && (
             <span fg={theme.fgMuted}>

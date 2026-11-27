@@ -10,6 +10,7 @@ import {
   unreadBadge,
   HEADER_HEIGHT,
 } from "./display.ts";
+import { glyphs } from "./glyphs.ts";
 
 interface SidebarProps {
   servers: ServerState[];
@@ -100,7 +101,7 @@ export function Sidebar({
                   >
                     <text>
                       <span fg={isActive ? theme.accent : theme.bgSidebar}>
-                        {isActive ? "▎" : " "}
+                        {isActive ? glyphs.selectedRow : " "}
                       </span>
                       <span
                         fg={

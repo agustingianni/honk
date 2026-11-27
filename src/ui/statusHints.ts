@@ -1,4 +1,5 @@
 import type { UpdateNotice } from "../types.ts";
+import { glyphs } from "./glyphs.ts";
 
 export interface Hint {
   /** Drawn in the accent color, such as "^K", or the new version "v0.3.0". */
@@ -40,7 +41,7 @@ export function statusHints(o: StatusHintOptions, room: number): Hint[] {
     { key: "^K", label: "omnibox", priority: 0 },
     ...(o.sidebarFits ? [{ key: "^B", label: "sidebar", priority: 3 }] : []),
     ...(o.nicklistFits ? [{ key: "Alt+U", label: "users", priority: 4 }] : []),
-    { key: "Alt+↑/↓", label: "switch", priority: 2 },
+    { key: `Alt+${glyphs.upDown}`, label: "switch", priority: 2 },
     { key: "^C", label: "quit", priority: 1 },
   ];
 

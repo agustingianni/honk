@@ -8,6 +8,7 @@ import type { ActiveBuffer, ServerState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
 import { bufferDisplayName, cellWidth, truncate, unreadBadge } from "./display.ts";
 import { type FuzzyMatch, fuzzyMatch, matchLabel, rankMatches, shorterFirst } from "./fuzzy.ts";
+import { glyphs } from "./glyphs.ts";
 
 interface OmniboxItem {
   id: string;
@@ -256,20 +257,23 @@ function fitRow(item: OmniboxItem, width: number): { label: string; detail?: str
   const labelMax = Math.max(room - detailWanted, Math.min(cellWidth(item.label), Math.ceil(room / 2)));
   const label = truncate(item.label, labelMax);
   const detailRoom = room - cellWidth(label) - 2;
-  const detail = item.detail && detailRoom >= 4 ? truncate(item.detail, detailRoom) : undefined;
+  // At least 3 cells of the detail, plus the ellipsis.
+  const detailFits = detailRoom >= 3 + cellWidth(glyphs.ellipsis);
+  const detail = item.detail && detailFits ? truncate(item.detail, detailRoom) : undefined;
   return { label, detail };
 }
 
 /**
  * Splits a fitted label into runs of matched and unmatched characters, for the
- * highlight. A label cut short ("Server: Reconn…") drops the matches past the cut.
+ * highlight. A label cut short (`cut`, as in "Server: Reconn...") drops the
+ * matches past the cut.
  */
 export function highlightRuns(
   label: string,
-  fullLength: number,
+  cut: boolean,
   highlights: readonly number[] = [],
 ): { text: string; hit: boolean }[] {
-  const shown = label.length < fullLength ? label.length - 1 : label.length;
+  const shown = cut ? label.length - glyphs.ellipsis.length : label.length;
   const hits = new Set(highlights.filter((p) => p < shown));
   const runs: { text: string; hit: boolean }[] = [];
   for (let i = 0; i < label.length; i++) {
@@ -766,6 +770,7 @@ export function Omnibox({
       backgroundColor={theme.bgOverlay}
       border
       borderStyle="rounded"
+      customBorderChars={glyphs.border}
       borderColor={theme.borderOverlay}
     >
       {/* Input row */}
@@ -777,7 +782,7 @@ export function Omnibox({
         flexDirection="row"
       >
         <text fg={theme.accent}>
-          <strong>❯ </strong>
+          <strong>{glyphs.prompt} </strong>
         </text>
         <input
           flexGrow={1}
@@ -786,7 +791,7 @@ export function Omnibox({
           placeholder={
             mode === "theme"
               ? "Color theme (Up/Down to preview, Enter to keep, Esc to cancel)"
-              : "Jump to buffer… (> actions, / commands, @ users, ? help)"
+              : `Jump to buffer${glyphs.ellipsis} (> actions, / commands, @ users, ? help)`
           }
           backgroundColor={theme.bgInput}
           textColor={theme.fgBright}
@@ -822,11 +827,11 @@ export function Omnibox({
               >
                 <text>
                   <span fg={isSel ? theme.accent : theme.bgOverlay}>
-                    {isSel ? "▎" : " "}
+                    {isSel ? glyphs.selectedRow : " "}
                   </span>
                   <span fg={item.labelColor ?? theme.fgPrimary}> </span>
                   {/* The characters the query matched stand out, as in VS Code and fzf. */}
-                  {highlightRuns(label, item.label.length, item.highlights).map((run, i) => (
+                  {highlightRuns(label, label !== item.label, item.highlights).map((run, i) => (
                     <span key={i} fg={run.hit ? theme.orange : (item.labelColor ?? theme.fgPrimary)}>
                       {isSel || run.hit ? <strong>{run.text}</strong> : run.text}
                     </span>

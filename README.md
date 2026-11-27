@@ -137,7 +137,7 @@ honk --demo
 
 Flags: `--server host[:port]`, `--port`, `--nick`, `--channel` (can repeat),
 `--password` (uses SASL), `--sasl`, `--no-tls`, `--config path`, `--theme`,
-`--no-mouse`, `--demo`, `--version` (or `-v`), `--help` (or `-h`).
+`--ascii`, `--no-mouse`, `--demo`, `--version` (or `-v`), `--help` (or `-h`).
 TLS is on by default. Type `/help` inside the client for the commands.
 
 ### Keys
@@ -311,6 +311,21 @@ copy mode works on honk's pane. These stop working:
   Shift+Down. Some terminals turn the wheel into Up and Down keys in
   full-screen programs, so the wheel walks through the lines you sent instead.
   Scroll back down to get your unsent text back.
+
+### Symbols that show as boxes or break the layout
+
+honk draws a few Unicode symbols, such as the connection dot and the arrows on
+join and part lines. If your font has no glyph for them, or your terminal draws
+them 2 columns wide (iTerm2 does with "Treat ambiguous-width characters as
+double width"), draw plain ASCII instead, in the config file or for one run
+with `--ascii`:
+
+```json
+{ "ascii": true, "servers": [] }
+```
+
+honk turns this on by itself when `TERM` is `dumb` or `linux`. `--no-ascii`
+turns it off for one run.
 
 ### Emoji that break the layout
 

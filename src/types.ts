@@ -34,6 +34,11 @@ export interface AppConfig {
    */
   mouse?: boolean;
   /**
+   * Draw only ASCII symbols, in the config file or with --ascii. When unset,
+   * honk decides from TERM. See src/ui/glyphs.ts.
+   */
+  ascii?: boolean;
+  /**
    * The config file: the one honk read, or the --config path even if that file
    * does not exist yet. Settings saved from the UI go there. Set by loadConfig,
    * never read from the file.

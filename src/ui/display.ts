@@ -1,6 +1,7 @@
 import { measureEditText, type WidthMethod } from "@opentui/core";
 import { theme } from "../theme.ts";
 import type { BufferState, ConnectionStatus } from "../types.ts";
+import { glyphs } from "./glyphs.ts";
 
 /**
  * Rows of the three top headers (sidebar, chat, user list). They must match so the
@@ -71,21 +72,30 @@ export function indexAtCell(str: string, col: number): number {
 }
 
 /**
- * Cuts `str` to at most `max` terminal cells, with "…" at the end when it cuts.
+ * Cuts `str` to at most `max` terminal cells, with `glyphs.ellipsis` at the end
+ * when it cuts: "abcde…", or "abc..." with --ascii for `max` 6.
  * It measures cells, not UTF-16 code units: "田中さん" is 4 code units and 8 cells.
  * It cuts between graphemes, so an emoji with a skin tone or a ZWJ stays whole.
  * When a wide character does not fit, the result can be one cell short of `max`.
+ * When `max` has no room for the whole ellipsis, the result is the part of it
+ * that fits: ".." for `max` 2 with --ascii.
  */
 export function truncate(str: string, max: number): string {
   if (max <= 0) return "";
-  if (PRINTABLE_ASCII.test(str)) return str.length <= max ? str : `${str.slice(0, max - 1)}…`;
-  // Where the text ends if it gets cut: the most that fits before the "…".
+  if (PRINTABLE_ASCII.test(str) && str.length <= max) return str;
+  const marker = glyphs.ellipsis;
+  const markerWidth = cellWidth(marker);
+  // Both ellipsis glyphs are 1 cell or plain ASCII, so slicing cuts by cells.
+  const cut = (end: number) =>
+    markerWidth > max ? marker.slice(0, max) : `${str.slice(0, end)}${marker}`;
+  if (PRINTABLE_ASCII.test(str)) return cut(max - markerWidth);
+  // Where the text ends if it gets cut: the most that fits before the ellipsis.
   let cutAt = -1;
   let width = 0;
   for (const { segment, index } of graphemes.segment(str)) {
     width += graphemeWidth(segment);
-    if (cutAt < 0 && width > max - 1) cutAt = index;
-    if (width > max) return `${str.slice(0, cutAt)}…`;
+    if (cutAt < 0 && width > max - markerWidth) cutAt = index;
+    if (width > max) return cut(cutAt);
   }
   return str;
 }
@@ -93,14 +103,14 @@ export function truncate(str: string, max: number): string {
 export function statusIndicator(status: ConnectionStatus): { glyph: string; color: string } {
   switch (status) {
     case "connected":
-      return { glyph: "●", color: theme.green };
+      return { glyph: glyphs.statusOn, color: theme.green };
     case "connecting":
     case "reconnecting":
-      return { glyph: "◐", color: theme.yellow };
+      return { glyph: glyphs.statusConnecting, color: theme.yellow };
     case "error":
-      return { glyph: "●", color: theme.red };
+      return { glyph: glyphs.statusOn, color: theme.red };
     default:
-      return { glyph: "○", color: theme.fgMuted };
+      return { glyph: glyphs.statusOff, color: theme.fgMuted };
   }
 }
 
@@ -118,6 +128,9 @@ export function scrollboxStyle(bg: string) {
     viewportOptions: { backgroundColor: bg },
     contentOptions: { backgroundColor: bg },
     scrollbarOptions: {
+      // Any `visible` value turns off showing the scrollbar only when the
+      // content is longer than the box, so pass it only to hide the scrollbar.
+      ...(!glyphs.scrollbar && { visible: false }),
       showArrows: false,
       trackOptions: { foregroundColor: theme.gutter, backgroundColor: bg },
     },
