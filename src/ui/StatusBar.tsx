@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { theme } from "../theme.ts";
 import type { ServerState, UpdateNotice } from "../types.ts";
-import { statusIndicator } from "./display.ts";
+import { cellWidth, statusIndicator } from "./display.ts";
 import { statusHints } from "./statusHints.ts";
 
 interface StatusBarProps {
@@ -46,7 +46,7 @@ export function StatusBar({ server, width, sidebarFits, nicklistFits, update }: 
           ? `  nick: ${server.nick}`
           : "";
   // 2 + 2 columns of padding, the dot and its space, and a gap of 2 before the hints.
-  const leftWidth = 2 + name.length + viaText.length + tlsText.length + stateText.length;
+  const leftWidth = 2 + cellWidth(name + viaText + tlsText + stateText);
   const room = width - 4 - leftWidth - 2;
   const hints = statusHints({ sidebarFits, nicklistFits, update }, room);
 

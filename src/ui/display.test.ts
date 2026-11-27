@@ -1,0 +1,62 @@
+import { afterEach, expect, test } from "bun:test";
+import { cellWidth, setWidthMethod, truncate } from "./display.ts";
+
+const FAMILY = "👨‍👩‍👧‍👦";
+
+afterEach(() => {
+  setWidthMethod("unicode");
+});
+
+test("truncate leaves a string that fits alone", () => {
+  expect(truncate("fern", 12)).toBe("fern");
+  expect(truncate("#日本語", 7)).toBe("#日本語");
+});
+
+test("truncate counts terminal cells, not code units", () => {
+  // 4 code units, 8 cells: it does not fit in 6 cells.
+  expect(truncate("田中さん", 6)).toBe("田中…");
+  expect(cellWidth(truncate("田中さん", 6))).toBe(5);
+  expect(truncate("abcdefgh", 6)).toBe("abcde…");
+});
+
+test("truncate never cuts an emoji in half", () => {
+  expect(truncate("👍🏽👍🏽👍🏽", 4)).toBe("👍🏽…");
+  expect(truncate("🇯🇵🇯🇵🇯🇵", 5)).toBe("🇯🇵🇯🇵…");
+});
+
+test("truncate gives nothing for no room, and only the ellipsis for one cell", () => {
+  expect(truncate("fern", 0)).toBe("");
+  expect(truncate("fern", -3)).toBe("");
+  expect(truncate("fern", 1)).toBe("…");
+});
+
+test("a ZWJ emoji takes 2 cells with the unicode method", () => {
+  expect(cellWidth(FAMILY)).toBe(2);
+  expect(truncate(`ab${FAMILY}cd`, 6)).toBe(`ab${FAMILY}cd`);
+  expect(truncate(`ab${FAMILY}cd`, 5)).toBe(`ab${FAMILY}…`);
+});
+
+test("a ZWJ emoji takes 8 cells with the wcwidth method", () => {
+  expect(setWidthMethod("wcwidth")).toBe(true);
+  expect(cellWidth(FAMILY)).toBe(8);
+  expect(cellWidth("❤️")).toBe(1);
+  expect(cellWidth("田中")).toBe(4);
+  // The emoji does not fit in the 3 cells left before the ellipsis.
+  expect(truncate(`ab${FAMILY}cd`, 6)).toBe("ab…");
+});
+
+test("setWidthMethod says whether the method changed", () => {
+  expect(setWidthMethod("unicode")).toBe(false);
+  expect(setWidthMethod("wcwidth")).toBe(true);
+  expect(setWidthMethod("wcwidth")).toBe(false);
+});
+
+test("control characters take no cells, as <text> hides them", () => {
+  expect(cellWidth("a\x01b")).toBe(2);
+  expect(cellWidth("a\x9bb")).toBe(2);
+});
+
+test("a tab takes 2 cells, as <text> draws it", () => {
+  expect(cellWidth("a\tb")).toBe(4);
+  expect(truncate("rules:\tbe nice", 9)).toBe("rules:\t…");
+});

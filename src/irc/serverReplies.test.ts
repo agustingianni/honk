@@ -152,10 +152,21 @@ test("a SASL login that works says which account", async () => {
   expect(texts("*status")).toContain("Logged in to the account goose.");
 });
 
+/**
+ * Joins #other and waits until fakeircd has answered the history honk fetches on join,
+ * so a later failHistoryIn.add("#other") fails only the /history a test types.
+ */
+async function joinOther(): Promise<void> {
+  m.handleInput("/join #other");
+  await until(() =>
+    irc.received.some((l) => l.command === "CHATHISTORY" && l.params[1] === "#other"),
+  );
+  await until(() => Boolean(server().buffers["#other"]));
+}
+
 test("/history sends a label, and a FAIL for one channel leaves another /history waiting", async () => {
   await inHonk();
-  m.handleInput("/join #other");
-  await until(() => Boolean(server().buffers["#other"]));
+  await joinOther();
   irc.failHistoryIn.add("#other");
   // Both requests leave before any reply comes back. The FAIL for #other arrives first.
   m.setActive("alpha", "#other");
@@ -166,6 +177,87 @@ test("/history sends a label, and a FAIL for one channel leaves another /history
   expect(texts("#honk").at(-1)).toBe("The server has no older messages in #honk.");
   const sent = irc.received.filter((l) => l.command === "CHATHISTORY" && l.params[0] === "LATEST");
   expect(sent.slice(-2).every((l) => l.raw.startsWith("@label="))).toBe(true);
+});
+
+test.each([true, false])(
+  "a failed /history shows its error once, where it was typed (labeled-response: %p)",
+  async (labeledResponse) => {
+    // With a label, the label names the request. Without one, the target in the FAIL does.
+    irc.labeledResponse = labeledResponse;
+    await inHonk();
+    await joinOther();
+    irc.failHistoryIn.add("#other");
+    m.setActive("alpha", "#other");
+    m.handleInput("/history 5");
+    // You switch away before the FAIL arrives.
+    m.setActive("alpha", "#honk");
+    await until(() => texts("#other").some((t) => t.startsWith("Could not load history")));
+    await Bun.sleep(100);
+    expect(allTexts().filter((t) => t.startsWith("Could not load history"))).toHaveLength(1);
+  },
+);
+
+test.each([true, false])(
+  "a failed history fetch on join shows its error in that channel (labeled-response: %p)",
+  async (labeledResponse) => {
+    // The fetch on join never has a label, so only the target says where the error goes.
+    irc.labeledResponse = labeledResponse;
+    await inHonk();
+    irc.failHistoryIn.add("#b");
+    irc.holdHistoryIn.add("#b");
+    m.handleInput("/join #b");
+    await until(() =>
+      irc.received.some((l) => l.command === "CHATHISTORY" && l.params[1] === "#b"),
+    );
+    await until(() => Boolean(server().buffers["#b"]));
+    // You switch away before the FAIL arrives.
+    m.setActive("alpha", "#honk");
+    irc.releaseHistory();
+    await until(() => allTexts().some((t) => t.startsWith("Could not load history")));
+    await Bun.sleep(100);
+    expect(texts("#b").filter((t) => t.startsWith("Could not load history"))).toHaveLength(1);
+    expect(texts("#honk").some((t) => t.startsWith("Could not load history"))).toBe(false);
+  },
+);
+
+test("an unlabeled FAIL for one channel leaves /history in another channel waiting", async () => {
+  irc.labeledResponse = false;
+  await inHonk();
+  irc.holdHistoryIn.add("#honk");
+  irc.failHistoryIn.add("#b");
+  m.handleInput("/history 5");
+  // The history fetch for #b fails while the reply for #honk is held.
+  m.handleInput("/join #b");
+  await until(() => texts("#b").some((t) => t.startsWith("Could not load history")));
+  irc.releaseHistory();
+  await until(() => texts("#honk").some((t) => t.includes("no older messages")));
+  expect(texts("#honk").at(-1)).toBe("The server has no older messages in #honk.");
+});
+
+test("an unlabeled FAIL for a target with no buffer leaves /history elsewhere waiting", async () => {
+  irc.labeledResponse = false;
+  await inHonk();
+  irc.holdHistoryIn.add("#honk");
+  m.handleInput("/history 5");
+  await until(() =>
+    irc.received.some((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk"),
+  );
+  // Like the fetch honk sends on reconnect for a nick that wrote while you were away.
+  irc.sendRaw(":fake.irc FAIL CHATHISTORY MESSAGE_ERROR AFTER bob :Messages could not be retrieved");
+  await until(() => texts("#honk").some((t) => t.startsWith("Could not load history")));
+  irc.releaseHistory();
+  await until(() => texts("#honk").some((t) => t.includes("no older messages")));
+  expect(texts("#honk").at(-1)).toBe("The server has no older messages in #honk.");
+});
+
+test("an unlabeled FAIL for a DM with a nick like a subcommand goes to that DM", async () => {
+  irc.labeledResponse = false;
+  await inHonk();
+  m.openDm("alpha", "after");
+  m.setActive("alpha", "#honk");
+  irc.sendRaw(":fake.irc FAIL CHATHISTORY MESSAGE_ERROR BEFORE after :Messages could not be retrieved");
+  await until(() => allTexts().some((t) => t.startsWith("Could not load history")));
+  expect(texts("after").some((t) => t.startsWith("Could not load history"))).toBe(true);
 });
 
 test("history plays back without HistServ lines (draft/event-playback)", async () => {

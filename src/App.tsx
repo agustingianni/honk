@@ -1,3 +1,4 @@
+import { CliRenderEvents } from "@opentui/core";
 import {
   useKeyboard,
   useRenderer,
@@ -10,6 +11,7 @@ import { withActionUsed } from "./state.ts";
 import { applyTheme, theme, ThemeVersion } from "./theme.ts";
 import type { ThemeEntry } from "./themes/index.ts";
 import { ChatPane } from "./ui/ChatPane.tsx";
+import { setWidthMethod } from "./ui/display.ts";
 import { Nicklist } from "./ui/Nicklist.tsx";
 import { Omnibox } from "./ui/Omnibox.tsx";
 import { Sidebar } from "./ui/Sidebar.tsx";
@@ -63,6 +65,20 @@ export function App({
     },
     [onRecentActionsChanged],
   );
+
+  // Measure text as the renderer does. The width method comes from the terminal's
+  // answers, which can arrive after the first frame. When it changes, the theme
+  // version makes memoized components cut and pad their text again.
+  useEffect(() => {
+    const sync = () => {
+      if (setWidthMethod(renderer.widthMethod)) setThemeVersion((v) => v + 1);
+    };
+    sync();
+    renderer.on(CliRenderEvents.CAPABILITIES, sync);
+    return () => {
+      renderer.off(CliRenderEvents.CAPABILITIES, sync);
+    };
+  }, [renderer]);
 
   // Copies the colors into the shared `theme` object, then re-renders. The
   // version tells memoized components to render again too.

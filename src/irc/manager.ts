@@ -24,6 +24,7 @@ import {
 import type { MentionEvent } from "../notify.ts";
 import { findSlashCommand, SLASH_COMMANDS, syntax } from "./commands.ts";
 import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine } from "./delivery.ts";
+import { EchoTracker, type SentPart } from "./echo.ts";
 import {
   dmTargets,
   isMissedLine,
@@ -315,22 +316,59 @@ function takeHistoryRequest(
   return i === -1 ? undefined : pending.splice(i, 1)[0];
 }
 
+/** The CHATHISTORY subcommands, which come before the target in a FAIL's context. */
+const HISTORY_SUBCOMMANDS = new Set(["LATEST", "BEFORE", "AFTER", "AROUND", "BETWEEN", "TARGETS"]);
+
 /**
- * The /history requests still waiting after a FAIL CHATHISTORY. A labeled FAIL ends
- * only its own request. An unlabeled FAIL can't say which request it answers, so every
- * unlabeled request stops waiting; labeled ones still get their own reply.
+ * The target a FAIL CHATHISTORY names. The spec form is
+ * `FAIL CHATHISTORY <code> <subcommand> <target> :<description>`, so after a subcommand
+ * the next param is the target, even one honk has no buffer for. Some servers leave out
+ * the subcommand; then the target is the first param for which `known` says yes.
  *
- *   [#a h1, #b h2], FAIL label h2 -> [#a h1]
- *   [#a, #b],       FAIL no label -> []
- *   [#a h1],        FAIL no label -> [#a h1]   (the FAIL is for a request honk sent unlabeled)
+ *   ["LATEST", "#a", "*"], known -  -> "#a"
+ *   ["BEFORE", "after"],   known -  -> "after"  (a DM with the nick "after")
+ *   ["#a"],                known #a -> "#a"
+ *   ["#a"],                known -  -> undefined
  */
-function afterHistoryFail(
+function historyFailTarget(
+  context: string[],
+  known: (name: string) => boolean,
+): string | undefined {
+  if (HISTORY_SUBCOMMANDS.has((context[0] ?? "").toUpperCase())) {
+    const target = context[1];
+    return target && target !== "*" ? target : undefined;
+  }
+  return context.find(known);
+}
+
+/**
+ * Takes the /history request a FAIL CHATHISTORY answers out of `pending`, the way
+ * takeHistoryRequest does for a batch. A labeled FAIL matches by label. An unlabeled one
+ * matches an unlabeled request for the target it names. An unlabeled FAIL that names no
+ * target can't say which request it answers, so every unlabeled request stops waiting;
+ * labeled ones still get their own reply.
+ *
+ * Without labels, a FAIL for the history honk fetches on join looks the same as a FAIL
+ * for a /history in that channel, so it can take that /history request. Its own reply
+ * then shows nothing.
+ *
+ *   [#a h1, #b h2], FAIL label h2      -> the #b request, leaves [#a h1]
+ *   [#a, #b],       FAIL no label, #b  -> the #b request, leaves [#a]
+ *   [#a h1],        FAIL no label, #a  -> undefined, leaves [#a h1]  (the join fetch failed)
+ *   [#a, #b h2],    FAIL no label, none -> undefined, leaves [#b h2]
+ */
+function takeFailedHistoryRequest(
   pending: HistoryRequest[],
   label: string | undefined,
-): HistoryRequest[] {
-  return label !== undefined
-    ? pending.filter((r) => r.label !== label)
-    : pending.filter((r) => r.label !== undefined);
+  target: string | undefined,
+): HistoryRequest | undefined {
+  if (label !== undefined || target !== undefined) {
+    return takeHistoryRequest(pending, label, target ?? "");
+  }
+  for (let i = pending.length - 1; i >= 0; i--) {
+    if (pending[i]!.label === undefined) pending.splice(i, 1);
+  }
+  return undefined;
 }
 
 function createBuffer(name: string, kind: BufferKind): BufferState {
@@ -369,11 +407,30 @@ function beforeEmit(
   client: Client,
   hook: (event: string, payload: unknown) => void,
 ): void {
+  beforeCall(client, "emit", hook as (...args: unknown[]) => void);
+}
+
+/**
+ * Calls `hook` with the arguments of every `client.send`, before the line goes out. The
+ * first argument is the tags object when the call has tags.
+ */
+function beforeSend(client: Client, hook: (...args: unknown[]) => void): void {
+  beforeCall(client, "send", hook);
+}
+
+/** Runs `hook` before each call of a client method, through irc-client-ts's own hooks. */
+function beforeCall(client: Client, key: "emit" | "send", hook: (...args: unknown[]) => void): void {
   (
     client as unknown as {
-      hooks: { beforeCall(key: "emit", hook: (event: string, payload: unknown) => void): void };
+      hooks: { beforeCall(key: string, hook: (...args: unknown[]) => void): void };
     }
-  ).hooks.beforeCall("emit", hook);
+  ).hooks.beforeCall(key, hook);
+}
+
+/** A PRIVMSG text as a line: "\x01ACTION waves\x01" is the action "waves". */
+function sentPart(text: string): SentPart {
+  if (!text.startsWith("\x01ACTION ")) return { kind: "message", text };
+  return { kind: "action", text: text.slice(8, text.endsWith("\x01") ? -1 : undefined) };
 }
 
 /** Buffer order for the sidebar: *status, then channels, then DMs, each sorted by name. */
@@ -437,6 +494,10 @@ export class IrcManager {
   private markReadTimer: ReturnType<typeof setTimeout> | null = null;
   /** When the buffer on screen became active (ms). See setActive. */
   private activeSince = 0;
+  /** Matches the echo of each line you send to the line already shown. See echo.ts. */
+  private echoes = new EchoTracker();
+  /** While pushSent sends one of your lines: each PRIVMSG that went out. See beforeSend. */
+  private outgoing: SentPart[] | null = null;
   /** Confirms that the lines you send reach the server. See delivery.ts. */
   private delivery = new DeliveryTracker({
     delivered: (serverId, lines) => this.setDelivery(serverId, lines, undefined),
@@ -837,6 +898,14 @@ export class IrcManager {
     if (!client.state.caps.requested.includes(READ_MARKER_CAP)) {
       client.state.caps.requested.push(READ_MARKER_CAP);
     }
+
+    // The text of each PRIVMSG as it goes out: irc-client-ts splits a long line into
+    // several. The echo has these parts, not what you typed.
+    beforeSend(client, (...args) => {
+      if (!this.outgoing) return;
+      const [command, , text] = typeof args[0] === "object" ? args.slice(1) : args;
+      if (command === "PRIVMSG" && typeof text === "string") this.outgoing.push(sentPart(text));
+    });
 
     this.clients.set(serverId, client);
     this.bindClientEvents(serverId, client);
@@ -1396,8 +1465,16 @@ export class IrcManager {
         !isHistory &&
         (!isChannelName(target) || mentionsNick(msg.params.text, server.nick));
 
-      if (!isHistory && isSelf && this.wasRecentlyEchoed(serverId, target, msg.params.text)) {
-        return;
+      // The echo of a line you sent here takes over the line already shown, so it
+      // shows once, with the server's text and msgid. Only the first part of a split
+      // line does; the other parts are new lines, as everyone else sees them.
+      if (isSelf && !isHistory) {
+        const echo = { kind, text: msg.params.text };
+        const shownId = this.echoes.take(serverId, this.bufferKey(serverId, target), echo);
+        if (shownId) {
+          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid);
+          return;
+        }
       }
 
       this.pushMessage(
@@ -1419,7 +1496,7 @@ export class IrcManager {
 
     // With echo-message, the library reports our own lines (typed here, or sent from
     // another client on the same bouncer account) as echo:* instead of privmsg/notice.
-    // onChat drops the echo of a line this client already showed.
+    // onChat merges the echo of a line this client already showed. See echo.ts.
     client.on("echo:privmsg", (msg) => onChat("message", msg));
 
     const onNotice = (msg: {
@@ -1513,25 +1590,48 @@ export class IrcManager {
       );
     });
 
-    // A failed CHATHISTORY sends no batch, so its /history request waits for nothing.
-    // The "fail" event below has no tags, and the label is a tag, so this reads the raw line.
+    // IRCv3 FAIL, an error. This reads the raw line, not the "fail" event, because only
+    // the raw line has tags. A failed CHATHISTORY sends no batch, so its /history request
+    // waits for nothing. Its label, or without one the target it names, picks the request,
+    // so the error goes to the buffer where /history was typed, not the one you switched
+    // to since. The history honk fetches on join has no request, so its error goes to the
+    // target's buffer. When that buffer is closed, the error goes to the reply target like
+    // other errors.
+    //   FAIL <command> <code> [<context>...] :<description>
     client.on("raw:fail", (msg) => {
-      if (isStale() || msg.params[0]?.toUpperCase() !== "CHATHISTORY") return;
-      const ctrl = this.getControl(serverId);
-      ctrl.historyRequests = afterHistoryFail(ctrl.historyRequests, msg.tags?.label);
+      if (isStale()) return;
+      const command = msg.params[0] ?? "";
+      const description = msg.params.length > 2 ? (msg.params.at(-1) ?? "") : "";
+      let where = this.replyTarget(serverId);
+      if (command.toUpperCase() === "CHATHISTORY") {
+        const ctrl = this.getControl(serverId);
+        const label = msg.tags?.label;
+        const target = historyFailTarget(
+          msg.params.slice(2, -1),
+          (name) =>
+            name !== STATUS_BUFFER &&
+            (this.hasBuffer(serverId, name) ||
+              ctrl.historyRequests.some((r) => r.target === nameKey(name))),
+        );
+        const failed = takeFailedHistoryRequest(ctrl.historyRequests, label, target);
+        const buffer = failed?.target ?? target;
+        if (buffer !== undefined && this.hasBuffer(serverId, buffer)) where = buffer;
+      }
+      this.pushMessage(
+        serverId,
+        where,
+        makeMessage("error", describeStandardReply(command, description)),
+      );
     });
 
-    // IRCv3 standard replies. FAIL is an error; WARN and NOTE are information.
-    for (const kind of ["fail", "warn", "note"] as const) {
+    // IRCv3 WARN and NOTE, information.
+    for (const kind of ["warn", "note"] as const) {
       client.on(kind, (msg) => {
         if (isStale()) return;
         this.pushMessage(
           serverId,
           this.replyTarget(serverId),
-          makeMessage(
-            kind === "fail" ? "error" : "system",
-            describeStandardReply(msg.params.command, msg.params.description),
-          ),
+          makeMessage("system", describeStandardReply(msg.params.command, msg.params.description)),
         );
       });
     }
@@ -1542,15 +1642,54 @@ export class IrcManager {
    * lists, which are stale until the server re-joins (and sends NAMES again).
    */
   /**
-   * Shows a line you just sent as "sending" and starts confirming it with a PING.
-   * See delivery.ts.
+   * Sends one of your lines, shows it as "sending", and starts confirming it with a
+   * PING (see delivery.ts). With echo-message, its echo is awaited (see echo.ts).
    */
-  private pushSent(serverId: string, client: Client, target: string, message: ChatMessage): void {
-    message.isSelf = true;
+  private pushSent(
+    serverId: string,
+    client: Client,
+    target: string,
+    kind: "message" | "action",
+    text: string,
+  ): void {
+    const parts: SentPart[] = [];
+    this.outgoing = parts;
+    try {
+      if (kind === "action") client.action(target, text);
+      else client.privmsg(target, text);
+    } finally {
+      this.outgoing = null;
+    }
+    const nick = this.servers.get(serverId)?.nick;
+    const message = makeMessage(kind, text, { from: nick, isSelf: true });
     message.delivery = "pending";
     this.pushMessage(serverId, target, message);
-    const line: SentLine = { bufferName: this.bufferKey(serverId, target), messageId: message.id };
+    const bufferName = this.bufferKey(serverId, target);
+    const line: SentLine = { bufferName, messageId: message.id };
     this.delivery.track(serverId, line, (token) => void client.send("PING", token));
+    // With echo-message the server sends the line back. A line to yourself comes back
+    // even without it; a second copy of it is dropped by msgid in pushMessage.
+    const echoed = client.state.caps.enabled.has("echo-message") || sameNick(target, nick);
+    if (echoed) this.echoes.add(serverId, bufferName, message.id, parts);
+  }
+
+  /**
+   * The echo of a line you sent: the line shows the text the server has (trimmed, or
+   * the first part of a split line) and gets its msgid, so history doesn't add it again.
+   */
+  private applyEcho(
+    serverId: string,
+    target: string,
+    messageId: string,
+    text: string,
+    msgid: string | undefined,
+  ): void {
+    this.updateMessages(serverId, this.bufferKey(serverId, target), new Set([messageId]), (m) => ({
+      ...m,
+      text,
+      ...(msgid ? { msgid } : {}),
+    }));
+    this.emit();
   }
 
   /** Sets the delivery state of sent lines. `undefined` means the server has them. */
@@ -1568,20 +1707,31 @@ export class IrcManager {
       idsByBuffer.set(l.bufferName, ids);
     }
     for (const [name, ids] of idsByBuffer) {
-      const buf = server.buffers[name];
-      if (!buf) continue;
-      const messages = buf.messages.map((m) => {
-        if (!ids.has(m.id)) return m;
+      this.updateMessages(serverId, name, ids, (m) => {
         const { delivery: _, ...rest } = m;
         return state ? { ...rest, delivery: state } : rest;
       });
-      server.buffers = { ...server.buffers, [name]: { ...buf, messages } };
     }
     this.emit();
   }
 
+  /** Replaces the messages with these ids in one buffer by `update(message)`. */
+  private updateMessages(
+    serverId: string,
+    bufferName: string,
+    ids: Set<string>,
+    update: (m: ChatMessage) => ChatMessage,
+  ): void {
+    const server = this.servers.get(serverId);
+    const buf = server?.buffers[bufferName];
+    if (!server || !buf) return;
+    const messages = buf.messages.map((m) => (ids.has(m.id) ? update(m) : m));
+    server.buffers = { ...server.buffers, [bufferName]: { ...buf, messages } };
+  }
+
   /** Lines still waiting for their PONG when the connection closes may not have arrived. */
   private failPendingLines(serverId: string): void {
+    this.echoes.drop(serverId);
     this.setDelivery(serverId, this.delivery.drop(serverId), "failed");
   }
 
@@ -1654,7 +1804,10 @@ export class IrcManager {
     // next PONG mark it delivered.
     if (isErrorKind(name, "message") && subject[0]) {
       const refused = this.delivery.reject(serverId, subject[0]);
-      if (refused) this.setDelivery(serverId, [refused], "failed");
+      if (refused) {
+        this.setDelivery(serverId, [refused], "failed");
+        this.echoes.forget(serverId, refused.messageId);
+      }
     }
     const described = describeErrorReply(name, subject, text);
     if (described === null) return;
@@ -1746,27 +1899,6 @@ export class IrcManager {
   /** Where replies to a command (errors, WHOIS) go: the active buffer if it is on this server. */
   private replyTarget(serverId: string): string {
     return this.active?.serverId === serverId ? this.active.buffer : STATUS_BUFFER;
-  }
-
-  private wasRecentlyEchoed(
-    serverId: string,
-    target: string,
-    text: string,
-  ): boolean {
-    const buf = this.servers.get(serverId)?.buffers[this.bufferKey(serverId, target)];
-    if (!buf || buf.messages.length === 0) return false;
-    const now = Date.now();
-    for (
-      let i = buf.messages.length - 1;
-      i >= Math.max(0, buf.messages.length - 5);
-      i--
-    ) {
-      const m = buf.messages[i]!;
-      if (m.isSelf && m.text === text && now - m.timestamp.getTime() < 5000) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private ensureBuffer(
@@ -1887,15 +2019,16 @@ export class IrcManager {
     const buf = this.ensureBuffer(serverId, bufferName);
     if (!server || !buf) return;
 
-    // Deduplicate history / replay messages by msgid or (timestamp + sender + text)
+    // A line the buffer already has: same msgid (a replay, or a line to yourself that
+    // came as the echo and as a message), or for history, same sender, text and time.
+    if (message.msgid && buf.messages.some((m) => m.msgid === message.msgid)) return;
     if (message.isHistory) {
       const msgTime = message.timestamp.getTime();
       const isDup = buf.messages.some(
         (m) =>
-          (message.msgid && m.msgid === message.msgid) ||
-          (m.from === message.from &&
-            m.text === message.text &&
-            Math.abs(m.timestamp.getTime() - msgTime) < 2000),
+          m.from === message.from &&
+          m.text === message.text &&
+          Math.abs(m.timestamp.getTime() - msgTime) < 2000,
       );
       if (isDup) return;
     }
@@ -2552,9 +2685,9 @@ export class IrcManager {
       return false;
     }
 
-    client.privmsg(buffer, raw);
     this.clearUnreadDivider(serverId, buffer);
-    this.pushSent(serverId, client, buffer, makeMessage("message", raw, { from: server.nick }));
+    // The library would trim the end anyway; show what it sends.
+    this.pushSent(serverId, client, buffer, "message", raw.trimEnd());
     return true;
   }
 
@@ -2719,8 +2852,7 @@ export class IrcManager {
         this.ensureBuffer(server.id, target);
         this.setActive(server.id, target);
         if (text) {
-          client.privmsg(target, text);
-          this.pushSent(server.id, client, target, makeMessage("message", text, { from: server.nick }));
+          this.pushSent(server.id, client, target, "message", text);
         }
         return;
       }
@@ -2732,8 +2864,7 @@ export class IrcManager {
         if (server.status !== "connected") {
           return reply(this.notConnectedText(server), "error");
         }
-        client.action(activeBuffer, rest);
-        this.pushSent(server.id, client, activeBuffer, makeMessage("action", rest, { from: server.nick }));
+        this.pushSent(server.id, client, activeBuffer, "action", rest);
         return;
       }
 

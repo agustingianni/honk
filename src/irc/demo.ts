@@ -123,11 +123,14 @@ export const DEMO_NETWORKS: DemoNetwork[] = [
       },
       {
         name: "#birds",
-        topic: "Photos, sightings and bad puns",
+        // Wide characters and emoji, so the demo shows how honk cuts and lines them up.
+        topic: "🦢🪿 Photos, sightings and bad puns / 野鳥観察の話もどうぞ / pics in the pins 📷",
         users: ["@robin", "heron", "pip", "wren"],
         lines: [
           { mins: 39, kind: "message", from: "wren", text: "saw a heron at the lake this morning" },
           { mins: 38, kind: "message", from: "heron", text: "wasn't me" },
+          { mins: 37, kind: "message", from: "robin", text: "カワセミを見ました! a kingfisher at the river in Kyoto 🇯🇵" },
+          { mins: 36, kind: "message", from: "pip", text: "took the kids 👨‍👩‍👧‍👦 to feed the geese, they were not impressed 🪿" },
         ],
       },
       {

@@ -6,7 +6,7 @@ import { findSlashCommand, needsArgs, SLASH_COMMANDS, syntax } from "../irc/comm
 import { sameNick } from "../irc/names.ts";
 import type { ActiveBuffer, ServerState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
-import { bufferDisplayName, truncate, unreadBadge } from "./display.ts";
+import { bufferDisplayName, cellWidth, truncate, unreadBadge } from "./display.ts";
 import { type FuzzyMatch, fuzzyMatch, matchLabel, rankMatches, shorterFirst } from "./fuzzy.ts";
 
 interface OmniboxItem {
@@ -250,13 +250,12 @@ export function quickOpenRows(q: string, ctx: QuickOpenContext): OmniboxItem[] {
 
 /** Fits a row into `width` columns: the label keeps at least half, then the detail is cut. */
 function fitRow(item: OmniboxItem, width: number): { label: string; detail?: string } {
-  const extras =
-    (item.hint ? item.hint.length + 1 : 0) + (item.badge ? item.badge.length + 1 : 0);
+  const extras = (item.hint ? cellWidth(item.hint) + 1 : 0) + (item.badge ? cellWidth(item.badge) + 1 : 0);
   const room = Math.max(4, width - extras);
-  const detailWanted = item.detail ? item.detail.length + 2 : 0;
-  const labelMax = Math.max(room - detailWanted, Math.min(item.label.length, Math.ceil(room / 2)));
+  const detailWanted = item.detail ? cellWidth(item.detail) + 2 : 0;
+  const labelMax = Math.max(room - detailWanted, Math.min(cellWidth(item.label), Math.ceil(room / 2)));
   const label = truncate(item.label, labelMax);
-  const detailRoom = room - label.length - 2;
+  const detailRoom = room - cellWidth(label) - 2;
   const detail = item.detail && detailRoom >= 4 ? truncate(item.detail, detailRoom) : undefined;
   return { label, detail };
 }

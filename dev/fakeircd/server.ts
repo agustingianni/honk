@@ -167,8 +167,14 @@ export class FakeIrcd {
   rejectSasl = false;
   /** CHATHISTORY gets a FAIL and no batch while this is true. */
   failHistory = false;
+  /** While set, echo-message echoes wait in heldEchoes until releaseEchoes(). */
+  holdEchoes = false;
+  private heldEchoes: (() => void)[] = [];
   /** Lowercase targets whose CHATHISTORY gets a FAIL and no batch, as failHistory does. */
   readonly failHistoryIn = new Set<string>();
+  /** Lowercase targets whose CHATHISTORY gets no reply until releaseHistory(). */
+  readonly holdHistoryIn = new Set<string>();
+  private heldHistory: (() => void)[] = [];
   /**
    * Offer labeled-response, so CHATHISTORY's reply carries the request's label. Set it
    * before a client connects: CAP LS reads it.
@@ -667,7 +673,21 @@ export class FakeIrcd {
       const to = this.clientByNick(target);
       if (to && to !== sender) this.send(to, line, tags);
     }
-    if (sender?.caps.has("echo-message")) this.send(sender, line, tags);
+    if (sender?.caps.has("echo-message")) {
+      if (this.holdEchoes) this.heldEchoes.push(() => this.send(sender, line, tags));
+      else this.send(sender, line, tags);
+    }
+  }
+
+  /** Sends the echoes held by holdEchoes, in order, and stops holding them. */
+  releaseEchoes(): void {
+    this.holdEchoes = false;
+    for (const send of this.heldEchoes.splice(0)) send();
+  }
+
+  /** How many echoes holdEchoes is holding. */
+  get heldEchoCount(): number {
+    return this.heldEchoes.length;
   }
 
   // ---- Client commands ----
@@ -1005,6 +1025,12 @@ export class FakeIrcd {
     this.reply(c, "318", `${shown} :End of /WHOIS list.`);
   }
 
+  /** Answers the CHATHISTORY requests that holdHistoryIn held, and stops holding. */
+  releaseHistory(): void {
+    this.holdHistoryIn.clear();
+    for (const answer of this.heldHistory.splice(0)) answer();
+  }
+
   /**
    * CHATHISTORY LATEST, BEFORE, AFTER and TARGETS, from the stored messages. With
    * labeled-response, the `label` goes on the FAIL or on the opening BATCH line.
@@ -1012,10 +1038,14 @@ export class FakeIrcd {
   private onChathistory(c: Client, params: string[], label?: string): void {
     const sub = (params[0] ?? "").toUpperCase();
     const labelTag = { label: label ?? "" };
+    if (this.holdHistoryIn.has(lower(params[1] ?? ""))) {
+      this.heldHistory.push(() => this.onChathistory(c, params, label));
+      return;
+    }
     if (this.failHistory || this.failHistoryIn.has(lower(params[1] ?? ""))) {
       this.send(
         c,
-        `:${SERVER_NAME} FAIL CHATHISTORY MESSAGE_ERROR ${params[1] ?? "*"} :Messages could not be retrieved`,
+        `:${SERVER_NAME} FAIL CHATHISTORY MESSAGE_ERROR ${sub || "*"} ${params[1] ?? "*"} :Messages could not be retrieved`,
         labelTag,
       );
       return;

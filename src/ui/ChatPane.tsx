@@ -6,7 +6,7 @@ import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
 import { Clickable, isPlainClick } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
-import { HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
+import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 import { FormattedText, LinkedText } from "./format.tsx";
 
 interface ChatPaneProps {
@@ -44,8 +44,9 @@ function formatTime(date: Date): string {
   return `${hh}:${mm}`;
 }
 
-function padNick(nick: string): string {
-  return truncate(nick, NICK_COL_WIDTH).padStart(NICK_COL_WIDTH, " ");
+/** Cuts a label to the nick column. The layout right-aligns it in the column. */
+function shortNick(nick: string): string {
+  return truncate(nick, NICK_COL_WIDTH);
 }
 
 /**
@@ -102,7 +103,7 @@ const MessageRow = memo(function MessageRow({
 
   switch (msg.kind) {
     case "message":
-      label = <strong>{padNick(sender)}</strong>;
+      label = <strong>{shortNick(sender)}</strong>;
       labelFg = senderColor;
       if (!msg.isSelf && isUserSender(sender)) clickableNick = sender;
       bg = mention ? theme.bgMention : theme.bgBase;
@@ -114,7 +115,7 @@ const MessageRow = memo(function MessageRow({
       );
       break;
     case "action":
-      label = padNick("*");
+      label = "*";
       labelFg = theme.accentAlt;
       bg = mention ? theme.bgMention : theme.bgBase;
       body = (
@@ -131,18 +132,18 @@ const MessageRow = memo(function MessageRow({
       );
       break;
     case "notice":
-      label = padNick(`-${msg.from ?? "notice"}-`);
+      label = shortNick(`-${msg.from ?? "notice"}-`);
       labelFg = theme.yellow;
       body = <FormattedText text={msg.text} defaultFg={theme.yellow} />;
       break;
     case "error":
-      label = padNick("!");
+      label = "!";
       labelFg = theme.red;
       body = <span fg={theme.red}>{msg.text}</span>;
       break;
     default: {
       // join, part, system
-      label = padNick(msg.kind === "join" ? "→" : msg.kind === "part" ? "←" : "·");
+      label = msg.kind === "join" ? "→" : msg.kind === "part" ? "←" : "·";
       labelFg = theme.fgDim;
       body =
         msg.kind === "system" ? (
@@ -180,19 +181,18 @@ const MessageRow = memo(function MessageRow({
               {BLANK_TIME} {BLANK_NICK}
             </span>
           </text>
-        ) : clickableNick ? (
-          <>
-            <text>
-              <span fg={theme.fgMuted}>{formatTime(msg.timestamp)} </span>
-              {padNick(clickableNick).slice(0, -truncate(clickableNick, NICK_COL_WIDTH).length)}
-            </text>
-            <NickLabel nick={clickableNick} color={labelFg} onSelect={onSelectUser} />
-          </>
         ) : (
-          <text>
-            <span fg={theme.fgMuted}>{formatTime(msg.timestamp)} </span>
-            <span fg={labelFg}>{label}</span>
-          </text>
+          <>
+            <text fg={theme.fgMuted}>{formatTime(msg.timestamp)} </text>
+            {/* Yoga right-aligns the nick, measuring cells as the terminal does. */}
+            <box width={NICK_COL_WIDTH} flexDirection="row" justifyContent="flex-end">
+              {clickableNick ? (
+                <NickLabel nick={clickableNick} color={labelFg} onSelect={onSelectUser} />
+              ) : (
+                <text fg={labelFg}>{label}</text>
+              )}
+            </box>
+          </>
         )}
       </box>
       <box
@@ -224,7 +224,7 @@ function NickLabel({
   onSelect: (nick: string) => void;
 }) {
   const renderer = useRenderer();
-  const shown = truncate(nick, NICK_COL_WIDTH);
+  const shown = shortNick(nick);
   return (
     <Clickable
       onMouseUp={(event) => {
@@ -396,11 +396,11 @@ export function ChatPane({
 
   const title = buffer ? buffer.name : STATUS_BUFFER;
   // Cut at the end to fit beside the title and the user count (2 + 2 padding,
-  // " — ", and the count with its margin). Formatting codes count as characters,
-  // so a coloured topic may be cut a little early.
+  // " — ", and the count with its margin). The digits of a color code count as
+  // cells, so a coloured topic may be cut a little early.
   const usersText = buffer?.kind === "channel" ? `${buffer.users.length} users` : "";
   const topicRoom =
-    paneWidth - 4 - (buffer?.name ?? STATUS_BUFFER).length - 3 - (usersText ? usersText.length + 2 : 0);
+    paneWidth - 4 - cellWidth(title) - 3 - (usersText ? cellWidth(usersText) + 2 : 0);
   const topic = topicRoom >= 4 ? truncate(buffer?.topic ?? "", topicRoom) : "";
   const promptLabel = server
     ? `${server.name}/${title}`
