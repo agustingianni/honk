@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { type AddressInfo, createServer, type Server } from "node:net";
 import { until } from "../../dev/fakeircd/testing.ts";
 import { LineSplitter } from "./ircLine.ts";
-import { createNodeRuntime, describeLineError, guardLines } from "./runtime.ts";
+import { createNodeRuntime, describeEventError, describeLineError, guardLines } from "./runtime.ts";
 
 let server: Server | undefined;
 
@@ -120,5 +120,16 @@ describe("describeLineError", () => {
     const line = `:srv NOTICE goose :${"x".repeat(2000)}`;
     const { text } = describeLineError(line, "bug");
     expect(text).toEndWith(`${line.slice(0, 512)}...`);
+  });
+});
+
+describe("describeEventError", () => {
+  test("names the event and what failed", () => {
+    const { text, key } = describeEventError("privmsg", new Error("no buffer"));
+    expect(text).toStartWith("A bug in honk: it could not handle the privmsg event (no buffer, at ");
+    expect(key).not.toBe(describeEventError("notice", new Error("no buffer")).key);
+    expect(describeEventError("join", "just a string").text).toBe(
+      "A bug in honk: it could not handle the join event (just a string)",
+    );
   });
 });

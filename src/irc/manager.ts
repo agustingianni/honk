@@ -66,7 +66,7 @@ import {
   READ_MARKER_CAP,
   unreadAfter,
 } from "./readMarker.ts";
-import { createNodeRuntime, describeLineError } from "./runtime.ts";
+import { createNodeRuntime, describeEventError, describeLineError } from "./runtime.ts";
 
 /** Messages kept per buffer from live traffic. */
 const MAX_MESSAGES = 500;
@@ -867,6 +867,12 @@ export class IrcManager {
     // one kind, such as each NAMES reply, would otherwise push everything else out of
     // *status.
     const reported = new Set<string>();
+    const reportBug = ({ key, text }: { key: string; text: string }) => {
+      if (this.clients.get(serverId) !== client) return;
+      if (reported.has(key) || reported.size >= MAX_LINE_ERROR_REPORTS) return;
+      reported.add(key);
+      this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
+    };
     (client as unknown as { runtime: ReturnType<typeof createNodeRuntime> }).runtime =
       createNodeRuntime(
         abort.signal,
@@ -875,13 +881,7 @@ export class IrcManager {
         },
         // A bug in honk, not in the server: say so, show the line, and keep going.
         // irc-client-ts still reads the line.
-        (line, err) => {
-          if (this.clients.get(serverId) !== client) return;
-          const { key, text } = describeLineError(line, err);
-          if (reported.has(key) || reported.size >= MAX_LINE_ERROR_REPORTS) return;
-          reported.add(key);
-          this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
-        },
+        (line, err) => reportBug(describeLineError(line, err)),
       );
 
     // Request IRCv3 draft/chathistory when advertised by server/bouncer (e.g. soju)
@@ -908,7 +908,7 @@ export class IrcManager {
     });
 
     this.clients.set(serverId, client);
-    this.bindClientEvents(serverId, client);
+    this.bindClientEvents(serverId, client, reportBug);
 
     // Per-attempt connect + registration timeout (catches DNS/TCP/TLS blackholes)
     ctrl.connectTimer = setTimeout(() => {
@@ -1007,7 +1007,33 @@ export class IrcManager {
     }
   }
 
-  private bindClientEvents(serverId: string, client: Client): void {
+  /**
+   * Listens to the events of `client`. irc-client-ts calls the listeners from its read
+   * loop, without await and without a catch: a listener that throws would end the loop,
+   * and nothing more would come from this server. So each listener is guarded, and what
+   * it throws goes to `reportBug`.
+   */
+  private bindClientEvents(
+    serverId: string,
+    client: Client,
+    reportBug: (report: { key: string; text: string }) => void,
+  ): void {
+    const guard =
+      <T>(event: string, listener: (payload: T) => void) =>
+      (payload: T) => {
+        try {
+          listener(payload);
+        } catch (err) {
+          try {
+            reportBug(describeEventError(event, err));
+          } catch {
+            // Reporting the error failed too. Drop it: the connection must go on.
+          }
+        }
+      };
+    // client.on, with the listener guarded.
+    const on = ((event: string, listener: (payload: unknown) => void) =>
+      client.on(event as never, guard(event, listener))) as Client["on"];
     const isStale = () => this.clients.get(serverId) !== client;
     /** The server state, or undefined if this client was replaced. */
     const live = () => (isStale() ? undefined : this.servers.get(serverId));
@@ -1020,7 +1046,7 @@ export class IrcManager {
     type Tags = Record<string, string | undefined>;
     const chatTags = new WeakMap<object, Tags>();
     let rawChatTags: Tags | undefined;
-    beforeEmit(client, (event, payload) => {
+    const notePayload = (event: string, payload: unknown) => {
       const server = live();
       if (!server || typeof payload !== "object" || payload === null) return;
       if (event === "raw:privmsg" || event === "raw:notice") {
@@ -1035,9 +1061,10 @@ export class IrcManager {
         const source = (payload as { source?: { name?: string } }).source;
         priorChannels.set(payload, channelsWithNick(server, normalizeNick(source?.name)));
       }
-    });
+    };
+    beforeEmit(client, (event, payload) => guard(event, (p) => notePayload(event, p))(payload));
 
-    client.on("error", (err) => {
+    on("error", (err) => {
       if (isStale()) return;
       const server = this.servers.get(serverId);
       const ctrl = this.getControl(serverId);
@@ -1070,18 +1097,18 @@ export class IrcManager {
     });
 
     // Anything from the server shows the connection worked until now. See missed.ts.
-    client.on("raw", () => {
+    on("raw", () => {
       if (isStale()) return;
       this.getControl(serverId).lastHeardAt = Date.now();
     });
 
     // The PONG for a PING sent after your line: the line reached the server.
-    client.on("pong", (msg) => {
+    on("pong", (msg) => {
       if (isStale()) return;
       this.delivery.pong(serverId, msg.params.key ?? msg.params.daemon);
     });
 
-    client.on("connected", () => {
+    on("connected", () => {
       if (isStale()) return;
       this.pushMessage(
         serverId,
@@ -1090,7 +1117,7 @@ export class IrcManager {
       );
     });
 
-    client.on("register", (msg) => {
+    on("register", (msg) => {
       const server = live();
       if (!server) return;
       const ctrl = this.getControl(serverId);
@@ -1146,7 +1173,7 @@ export class IrcManager {
 
     // The nicks that wrote to you while the connection was down. Load each DM from that
     // time; the missed-line checks in pushMessage then badge and notify it. See missed.ts.
-    client.on("batch_end", (batch) => {
+    on("batch_end", (batch) => {
       if (!TARGETS_BATCH_TYPES.has(batch.params.type)) return;
       const server = live();
       const ctrl = this.controls.get(serverId);
@@ -1166,7 +1193,7 @@ export class IrcManager {
       }
     });
 
-    client.on("isupport:network", (msg) => {
+    on("isupport:network", (msg) => {
       const server = live();
       const net = msg.params.value?.trim();
       if (!server || !net) return;
@@ -1175,7 +1202,7 @@ export class IrcManager {
       this.emit();
     });
 
-    client.on("disconnected", () => {
+    on("disconnected", () => {
       const server = live();
       if (!server) return;
       const ctrl = this.getControl(serverId);
@@ -1207,7 +1234,7 @@ export class IrcManager {
       this.scheduleReconnect(serverId);
     });
 
-    client.on("motd_reply", (msg) => {
+    on("motd_reply", (msg) => {
       if (isStale()) return;
       for (const line of msg.params.motd ?? []) {
         if (line.trim()) {
@@ -1216,13 +1243,13 @@ export class IrcManager {
       }
     });
 
-    client.on("error_reply", (msg) => {
+    on("error_reply", (msg) => {
       if (isStale()) return;
       // The first param is your own nick.
       this.onNumeric(serverId, msg.command, msg.params.args.slice(1), msg.params.text ?? "");
     });
 
-    client.on("join", (msg) => {
+    on("join", (msg) => {
       const server = live();
       if (!server) return;
       const channel = msg.params.channel;
@@ -1256,7 +1283,7 @@ export class IrcManager {
       }
     });
 
-    client.on("part", (msg) => {
+    on("part", (msg) => {
       const server = live();
       if (!server) return;
       const channel = msg.params.channel;
@@ -1273,7 +1300,7 @@ export class IrcManager {
       }
     });
 
-    client.on("quit", (msg) => {
+    on("quit", (msg) => {
       const server = live();
       if (!server) return;
       const who = normalizeNick(msg.source?.name);
@@ -1283,7 +1310,7 @@ export class IrcManager {
       }
     });
 
-    client.on("kick", (msg) => {
+    on("kick", (msg) => {
       const server = live();
       if (!server) return;
       const { channel, nick, comment } = msg.params;
@@ -1306,7 +1333,7 @@ export class IrcManager {
       );
     });
 
-    client.on("nick", (msg) => {
+    on("nick", (msg) => {
       const server = live();
       if (!server) return;
       const oldNick = normalizeNick(msg.source?.name);
@@ -1336,7 +1363,7 @@ export class IrcManager {
       }
     });
 
-    client.on("topic_reply", (msg) => {
+    on("topic_reply", (msg) => {
       if (isStale()) return;
       const buf = this.ensureBuffer(serverId, msg.params.channel, "channel");
       if (!buf) return;
@@ -1354,7 +1381,7 @@ export class IrcManager {
       }
     });
 
-    client.on("topic", (msg) => {
+    on("topic", (msg) => {
       if (isStale()) return;
       const buf = this.ensureBuffer(serverId, msg.params.channel, "channel");
       if (!buf) return;
@@ -1370,7 +1397,7 @@ export class IrcManager {
       );
     });
 
-    client.on("nicklist", (msg) => {
+    on("nicklist", (msg) => {
       if (isStale()) return;
       const buf = this.ensureBuffer(serverId, msg.params.channel, "channel");
       if (!buf) return;
@@ -1379,7 +1406,7 @@ export class IrcManager {
       this.emit();
     });
 
-    client.on("batch_end", (batch) => {
+    on("batch_end", (batch) => {
       if (batch.params.type !== "chathistory") return;
       const server = live();
       if (!server) return;
@@ -1491,13 +1518,13 @@ export class IrcManager {
       );
     };
 
-    client.on("privmsg", (msg) => onChat("message", msg));
-    client.on("ctcp_action", (msg) => onChat("action", msg));
+    on("privmsg", (msg) => onChat("message", msg));
+    on("ctcp_action", (msg) => onChat("action", msg));
 
     // With echo-message, the library reports our own lines (typed here, or sent from
     // another client on the same bouncer account) as echo:* instead of privmsg/notice.
     // onChat merges the echo of a line this client already showed. See echo.ts.
-    client.on("echo:privmsg", (msg) => onChat("message", msg));
+    on("echo:privmsg", (msg) => onChat("message", msg));
 
     const onNotice = (msg: {
       source?: { name?: string };
@@ -1521,10 +1548,10 @@ export class IrcManager {
         }),
       );
     };
-    client.on("notice", onNotice);
-    client.on("echo:notice", onNotice);
+    on("notice", onNotice);
+    on("echo:notice", onNotice);
 
-    client.on("whois_reply", (msg) => {
+    on("whois_reply", (msg) => {
       if (isStale()) return;
       const target = this.replyTarget(serverId);
       for (const line of whoisLines(msg.params)) {
@@ -1534,12 +1561,12 @@ export class IrcManager {
 
     // A WHOIS reply runs from 311 to 318. Its "is away" (301) goes in the WHOIS lines,
     // not on its own. Tracked by the reply itself, so a /raw WHOIS works the same.
-    client.on("raw:rpl_whoisuser", (msg) => {
+    on("raw:rpl_whoisuser", (msg) => {
       if (isStale()) return;
       const nick = msg.params[1];
       if (nick) this.getControl(serverId).pendingWhois.add(nameKey(nick));
     });
-    client.on("raw:rpl_endofwhois", (msg) => {
+    on("raw:rpl_endofwhois", (msg) => {
       if (isStale()) return;
       const nick = msg.params[1];
       if (nick) this.getControl(serverId).pendingWhois.delete(nameKey(nick));
@@ -1547,7 +1574,7 @@ export class IrcManager {
 
     // "alice is away": the server answers a message to someone who is away. It says so
     // on every message, so a DM shows it only when the away text changes.
-    client.on("raw:rpl_away", (msg) => {
+    on("raw:rpl_away", (msg) => {
       if (isStale()) return;
       const [, nick, away] = msg.params;
       if (!nick) return;
@@ -1568,7 +1595,7 @@ export class IrcManager {
     });
 
     // 900: the SASL login worked. Worth saying, since a wrong password stops honk.
-    client.on("raw:rpl_loggedin", (msg) => {
+    on("raw:rpl_loggedin", (msg) => {
       if (isStale()) return;
       const account = msg.params[2];
       if (!account) return;
@@ -1579,7 +1606,7 @@ export class IrcManager {
       );
     });
 
-    client.on("invite", (msg) => {
+    on("invite", (msg) => {
       if (isStale()) return;
       const by = normalizeNick(msg.source?.name) || "Someone";
       const channel = msg.params.channel;
@@ -1598,7 +1625,7 @@ export class IrcManager {
     // target's buffer. When that buffer is closed, the error goes to the reply target like
     // other errors.
     //   FAIL <command> <code> [<context>...] :<description>
-    client.on("raw:fail", (msg) => {
+    on("raw:fail", (msg) => {
       if (isStale()) return;
       const command = msg.params[0] ?? "";
       const description = msg.params.length > 2 ? (msg.params.at(-1) ?? "") : "";
@@ -1626,7 +1653,7 @@ export class IrcManager {
 
     // IRCv3 WARN and NOTE, information.
     for (const kind of ["warn", "note"] as const) {
-      client.on(kind, (msg) => {
+      on(kind, (msg) => {
         if (isStale()) return;
         this.pushMessage(
           serverId,
