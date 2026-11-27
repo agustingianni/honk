@@ -1,7 +1,7 @@
 import type { Clock } from "./clock.ts";
 
 /** A Clock that a test moves forward by hand. */
-export interface FakeClock extends Clock {
+interface FakeClock extends Clock {
   /**
    * Moves the time forward by `ms`, then runs each timer that is due by then, in the
    * order the timers were set. A timer that one of them sets waits for the next call.
@@ -12,8 +12,7 @@ export interface FakeClock extends Clock {
 }
 
 /**
- * A clock for tests. Time stands still until the test calls `advance`, which moves it
- * forward and runs each timer that is due by then.
+ * A clock for tests. Time stands still until the test calls `advance`.
  *
  *   const clock = fakeClock();
  *   clock.setTimeout(() => console.log("fired"), 100);
