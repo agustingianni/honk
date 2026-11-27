@@ -62,8 +62,7 @@ CI checks the subjects, and so does the pre-push hook (see below).
 Each change that gets a changelog line (`feat`, `fix`, `perf`) goes on its
 own short-lived branch and lands through a pull request. The squash merge
 turns the branch into one commit, so commits on the branch can say anything,
-such as `wip`. Only the pull request title has to follow the rules above. The
-user merges the pull request.
+such as `wip`. Only the pull request title has to follow the rules above.
 
 ```
 git switch -c join-key
@@ -71,6 +70,11 @@ git switch -c join-key
 git push -u origin join-key
 gh pr create --title "fix: /join now accepts a channel key" --fill
 ```
+
+A pull request merges only after `Typecheck and build` and
+`Check commit messages` pass. The user reviews it and then merges it, or runs
+`gh pr merge <number> --squash --auto` so that GitHub merges it once the checks
+pass.
 
 `docs`, `chore`, and `ci` changes may go straight to main.
 
