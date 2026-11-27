@@ -345,12 +345,19 @@ test("someone away is said again after a reconnect, even with the same text", as
   await until(() => texts("alice").filter((t) => t === "alice is away: lunch").length === 2);
 });
 
+/**
+ * Matches a numeric reply code as a whole number. A plain includes("437") would
+ * also match the random port in "Connecting to 127.0.0.1:43712", and the test
+ * would fail now and then.
+ */
+const numericCode = (code: string) => new RegExp(`\\b${code}\\b`);
+
 test("a nick in use at login is retried with an underscore", async () => {
   irc.join("goose", "#elsewhere");
   await connect();
   await until(() => server().status === "connected");
   expect(server().nick).toBe("goose_");
-  expect(allTexts().some((t) => t.includes("err_") || t.includes("433"))).toBe(false);
+  expect(allTexts().some((t) => t.includes("err_") || numericCode("433").test(t))).toBe(false);
 });
 
 test("a nick the network holds (437) at login is retried like one in use", async () => {
@@ -358,7 +365,7 @@ test("a nick the network holds (437) at login is retried like one in use", async
   await connect();
   await until(() => server().status === "connected");
   expect(server().nick).toBe("goose_");
-  expect(allTexts().some((t) => t.includes("err_") || t.includes("437"))).toBe(false);
+  expect(allTexts().some((t) => t.includes("err_") || numericCode("437").test(t))).toBe(false);
 });
 
 test("717 (they were told you wrote) is an ordinary line, not an error", async () => {
