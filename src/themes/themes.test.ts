@@ -147,12 +147,12 @@ describe("schemeToTheme", () => {
 
   test("makes a faint or dark omnibox selection a visible step toward the text", () => {
     const lighter = (a: string, b: string) => contrast(a, "#000000") > contrast(b, "#000000");
-    for (const [variant, palette, towardWhite] of [
+    for (const [variant, palette] of [
       // base02 is the same as the background.
-      ["dark", { ...PALETTE16, base02: "#1e1e2e" }, true],
+      ["dark", { ...PALETTE16, base02: "#1e1e2e" }],
       // base02 is darker than the omnibox: clear contrast, but a dark hole.
-      ["dark", { ...PALETTE16, base02: "#0a0a14" }, true],
-      ["light", { ...PALETTE16, base00: "#ffffff", base05: "#1f2328", base02: "#ffffff" }, false],
+      ["dark", { ...PALETTE16, base02: "#0a0a14" }],
+      ["light", { ...PALETTE16, base00: "#ffffff", base05: "#1f2328", base02: "#ffffff" }],
     ] as const) {
       const r = checkScheme({ ...scheme16(palette), variant });
       if (!r.ok) throw new Error(r.problems.join("; "));
@@ -160,7 +160,7 @@ describe("schemeToTheme", () => {
       const shown = contrast(t.bgOverlaySel, t.bgOverlay);
       expect(shown).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
       expect(shown).toBeLessThan(MIN_SELECTION_CONTRAST + 0.03);
-      expect(lighter(t.bgOverlaySel, t.bgOverlay)).toBe(towardWhite);
+      expect(lighter(t.bgOverlaySel, t.bgOverlay)).toBe(variant === "dark");
     }
   });
 

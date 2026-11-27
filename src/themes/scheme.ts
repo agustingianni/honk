@@ -157,16 +157,7 @@ export function schemeToTheme(scheme: Scheme): Theme {
   // puts a strong gray there).
   const selection = nearBg(p.base02) ?? mix(bg, p.base02!, 0.4);
   const overlay = mix(bg, fg, 0.05);
-  // The selected omnibox row must stand out from the other rows (broadcast's
-  // selection is 1.015:1 on the omnibox), on the side of the text color: in a
-  // dark theme a darker row looks like a hole, not a highlight. When it does
-  // not, step from the omnibox color toward the text color instead.
-  const towardText =
-    luminance(selection) > luminance(overlay) === luminance(fg) > luminance(overlay);
-  const overlaySel =
-    towardText && contrast(selection, overlay) >= MIN_SELECTION_CONTRAST
-      ? selection
-      : smallestStep(overlay, fg, MIN_SELECTION_CONTRAST);
+  const overlaySel = selectedColor(overlay, selection, fg);
 
   // Use a text slot only when it is readable and gray; otherwise fade the
   // main text toward the background.
@@ -287,6 +278,20 @@ export function hoverColor(background: string, selection: string, text: string):
   if (contrast(half, background) >= MIN_HOVER_CONTRAST) return half;
   const toward = contrast(selection, background) > MIN_HOVER_CONTRAST ? selection : text;
   return smallestStep(background, toward, MIN_HOVER_CONTRAST);
+}
+
+/**
+ * The background of the selected row: the selection color when it is a clear
+ * step from the other rows toward the text color. Otherwise (broadcast's is
+ * 1.015:1 on the omnibox, and in a dark theme a darker row looks like a hole)
+ * the smallest clear step toward the text color.
+ */
+function selectedColor(background: string, selection: string, text: string): string {
+  const lb = luminance(background);
+  const towardText = luminance(selection) > lb === luminance(text) > lb;
+  return towardText && contrast(selection, background) >= MIN_SELECTION_CONTRAST
+    ? selection
+    : smallestStep(background, text, MIN_SELECTION_CONTRAST);
 }
 
 /**
