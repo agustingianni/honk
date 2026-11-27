@@ -6,6 +6,7 @@ import type { Log } from "../log/log.ts";
 import { joinText, kickText, nickText, partText, quitText, topicText } from "../irc/eventText.ts";
 import type { LogContext, SearchHit } from "../log/search.ts";
 import type { ChatMessage, MessageKind } from "../types.ts";
+import { clockTime, sameDay } from "./dayDivider.ts";
 import { glyphs } from "./glyphs.ts";
 
 /** The Log to search, or why there is none, such as "logs.enabled is false in the config". */
@@ -18,8 +19,8 @@ const pad = (n: number) => String(n).padStart(2, "0");
 /** When a hit was written: "14:02" today, "Oct 1 14:02" this year, "2025-12-31" before. */
 export function hitTime(time: number, now: Date): string {
   const date = new Date(time);
-  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-  if (date.toDateString() === now.toDateString()) return clock;
+  const clock = clockTime(date);
+  if (sameDay(date, now)) return clock;
   if (date.getFullYear() === now.getFullYear()) return `${SAME_YEAR.format(date)} ${clock}`;
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }

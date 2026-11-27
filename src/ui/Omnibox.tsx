@@ -64,12 +64,12 @@ interface OmniboxProps {
   onActionUsed: (key: string) => void;
   /** Open in search mode, with this text typed. */
   initialSearch?: string;
-  /** The row selected when the omnibox opens, by its id: the hit a Context view came from. */
-  initialSelectedId?: string;
+  /** The hit selected when the omnibox opens: the one a Context view came from. */
+  initialHitId?: number;
   /** Searches the Log, or says why there is no search. */
   logSearch: LogSearch;
-  /** A search hit was chosen: show its Context view. `query` and `selectedId` bring the results back. */
-  onOpenHit: (id: number, query: string, selectedId: string) => void;
+  /** A search hit was chosen: show its Context view. `query` brings the results back. */
+  onOpenHit: (id: number, query: string) => void;
 }
 
 /** The rows the omnibox shows, and what it says about them. */
@@ -93,6 +93,8 @@ const MAX_RESULTS = 10;
 const THEME_ACTION_LABEL = "Preferences: Color Theme...";
 /** How far back the active buffer is read to rank recent speakers first in "@" mode. */
 const RECENT_SPEAKER_SCAN = 300;
+/** The omnibox row of search hit `id`. */
+const hitItemId = (id: number) => `hit-${id}`;
 /** Shown in search mode before anything is typed. */
 const SEARCH_HELP = [
   "Every word must match; check* also finds checker.",
@@ -357,7 +359,7 @@ export function Omnibox({
   recentActions,
   onActionUsed,
   initialSearch,
-  initialSelectedId,
+  initialHitId,
   logSearch,
   onOpenHit,
 }: OmniboxProps) {
@@ -365,7 +367,9 @@ export function Omnibox({
   const [query, setQueryText] = useState(initialSearch ?? "");
   // The selected item's id, not its row: the list is rebuilt when buffers or unread
   // counts change, and a row number would then point at another item or past the end.
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialHitId === undefined ? null : hitItemId(initialHitId),
+  );
   /** A new query starts at the top of the list. */
   const setQuery = (text: string) => {
     setQueryText(text);
@@ -403,35 +407,38 @@ export function Omnibox({
 
   /**
    * The search results. Apart from the other lists, so the Log is read again only when
-   * the query changes, not on every IRC update.
+   * the query changes, not on every IRC update or resize.
    */
-  const searchList = useMemo<ListView | undefined>(() => {
+  const searchResult = useMemo(() => {
     if (mode !== "search") return undefined;
-    const noteOnly = (...note: string[]) => ({ items: [], more: 0, note });
-    if ("off" in logSearch) return noteOnly(`Search is off: ${logSearch.off}`);
-    if (!query.trim()) return noteOnly(...SEARCH_HELP);
+    if ("off" in logSearch) return { error: `Search is off: ${logSearch.off}` };
+    if (!query.trim()) return { note: SEARCH_HELP };
     const parsed = parseSearch(query);
-    if ("error" in parsed) return noteOnly(parsed.error);
-    const result = logSearch.search(parsed.query);
-    if ("error" in result) return noteOnly(result.error);
+    if ("error" in parsed) return parsed;
+    return logSearch.search(parsed.query);
+  }, [mode, query, logSearch]);
+
+  /** The search results as rows, cut to the omnibox's width. */
+  const searchList = useMemo<ListView | undefined>(() => {
+    if (!searchResult) return undefined;
+    if ("error" in searchResult) return { items: [], more: 0, note: [searchResult.error] };
+    if ("note" in searchResult) return { items: [], more: 0, note: searchResult.note };
     const now = new Date();
     return {
-      items: result.hits.map((hit): OmniboxItem => {
-        const id = `hit-${hit.id}`;
-        return {
-          id,
-          // One cell goes to the space before the label.
-          ...hitRow(hit, now, rowWidth - 1),
-          onSelect: () => onOpenHit(hit.id, query, id),
-        };
-      }),
+      items: searchResult.hits.map((hit): OmniboxItem => ({
+        id: hitItemId(hit.id),
+        // One cell goes to the space before the label.
+        ...hitRow(hit, now, rowWidth - 1),
+        onSelect: () => onOpenHit(hit.id, query),
+      })),
       more: 0,
       note: ["No lines match"],
-      moreHits: result.more,
+      moreHits: searchResult.more,
     };
-  }, [mode, query, logSearch, onOpenHit, rowWidth]);
+  }, [searchResult, query, onOpenHit, rowWidth]);
 
-  const { items, more, note, moreHits } = useMemo<ListView>(() => {
+  const mainList = useMemo<ListView | undefined>(() => {
+    if (mode === "search") return undefined;
     const trimmed = query.trimStart();
     const top = (list: OmniboxItem[]) => ({
       items: list.slice(0, MAX_RESULTS),
@@ -468,7 +475,6 @@ export function Omnibox({
           })),
       );
     }
-    if (mode === "search") return searchList!;
     const themeAction = (id: string): OmniboxItem => ({
       id,
       label: THEME_ACTION_LABEL,
@@ -805,8 +811,8 @@ export function Omnibox({
     onRunCommandOn,
     onToggleSidebar,
     onToggleNicklist,
-    searchList,
   ]);
+  const { items, more, note, moreHits } = searchList ?? mainList!;
 
   const foundIndex = items.findIndex((item) => item.id === selectedId);
   // The theme list opens on the theme in use.

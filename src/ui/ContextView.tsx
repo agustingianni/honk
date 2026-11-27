@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef } from "react";
 import type { LogContext } from "../log/search.ts";
 import { theme } from "../theme.ts";
 import { Divider, MessageRow } from "./ChatPane.tsx";
-import type { NameActions } from "./Clickable.tsx";
 import { dayLabelBefore } from "./dayDivider.ts";
 import { HEADER_HEIGHT, scrollboxStyle } from "./display.ts";
 import { contextMessages } from "./logSearch.ts";
@@ -18,8 +17,6 @@ interface ContextViewProps {
   onBack: () => void;
 }
 
-/** The view is read-only: no name in it opens anything. */
-const NO_NAMES: NameActions = { findNick: () => undefined, openNick: () => {}, openChannel: () => {} };
 
 /**
  * A Context view: the Lines around a search hit, read from the Log, with the hit
@@ -93,8 +90,6 @@ export function ContextView({
                   msg={msg}
                   grouped={false}
                   highlightMentions={context.bufferKind === "channel"}
-                  names={NO_NAMES}
-                  interactive={false}
                   highlighted={idx === context.match}
                 />
               </box>

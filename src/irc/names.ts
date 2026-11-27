@@ -40,7 +40,8 @@ export function bufferKindFor(name: string): BufferKind {
  * rfc8265 is PRECIS (Ergo sends it, or rfc7613 in older versions). It folds Unicode
  * names, so "Ärger" and "ärger" are one nick.
  */
-export type Casemapping = "ascii" | "rfc1459" | "rfc1459-strict" | "rfc8265";
+export const CASEMAPPINGS = ["ascii", "rfc1459", "rfc1459-strict", "rfc8265"] as const;
+export type Casemapping = (typeof CASEMAPPINGS)[number];
 
 /** The mapping of a server that sends no CASEMAPPING, as the spec says. */
 export const DEFAULT_CASEMAPPING: Casemapping = "rfc1459";

@@ -16,7 +16,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { type Casemapping, nameKey } from "../irc/names.ts";
+import { CASEMAPPINGS, nameKey } from "../irc/names.ts";
 import { CHAT_KINDS, sqlList } from "./schema.ts";
 
 export interface SearchWord {
@@ -153,7 +153,6 @@ export const SEARCH_LIMIT = 100;
 /** How many Lines a Context view shows before and after the hit. */
 export const CONTEXT_LINES = 50;
 
-const CASEMAPPINGS: readonly Casemapping[] = ["ascii", "rfc1459", "rfc1459-strict", "rfc8265"];
 /** Marks the matched words in FTS5's highlight(). Formatting codes are gone from `plain`. */
 const HIT_START = "\x01";
 const HIT_END = "\x02";
@@ -181,9 +180,38 @@ interface HitRow {
   network: string;
 }
 
+/**
+ * The row ids of the Buffers that `in:` and `on:` name, or undefined when neither is
+ * given. Looked up first, so the search can walk each Buffer's Lines by time.
+ */
+function bufferIds(db: Database, query: SearchQuery): number[] | undefined {
+  const where: string[] = [];
+  const params: string[] = [];
+  if (query.in !== undefined) {
+    // Each Buffer is kept folded with its Network's casemapping, so try each one.
+    const keys = [...new Set(CASEMAPPINGS.map((c) => nameKey(query.in!, c)))];
+    where.push(`name IN (${keys.map(() => "?").join(", ")})`);
+    params.push(...keys);
+  }
+  if (query.on !== undefined) {
+    where.push(
+      "network_id IN (SELECT id FROM network WHERE config_id = ? COLLATE NOCASE OR display = ? COLLATE NOCASE)",
+    );
+    params.push(query.on, query.on);
+  }
+  if (where.length === 0) return undefined;
+  const rows = db.query(`SELECT id FROM buffer WHERE ${where.join(" AND ")}`).all(...params);
+  return (rows as { id: number }[]).map((r) => r.id);
+}
+
 /** Runs a search: the newest `limit` Chat lines that match, and whether there are more. */
-export function searchLog(db: Database, query: SearchQuery, limit = SEARCH_LIMIT): SearchResult {
+export function searchLog(db: Database, query: SearchQuery, limit: number): SearchResult {
   const match = ftsMatch(query.words);
+  const buffers = bufferIds(db, query);
+  // Words or a filter, or nothing is found.
+  const filtered = [query.from, buffers, query.before, query.after].some((f) => f !== undefined);
+  if ((!match && !filtered) || buffers?.length === 0) return { hits: [], more: false };
+
   const where = [`m.kind IN (${sqlList(CHAT_KINDS)})`, "m.redacted_at IS NULL"];
   const params: (string | number)[] = [];
   if (match) {
@@ -194,16 +222,8 @@ export function searchLog(db: Database, query: SearchQuery, limit = SEARCH_LIMIT
     where.push("m.nick = ? COLLATE NOCASE");
     params.push(query.from);
   }
-  if (query.in !== undefined) {
-    // Each Buffer is kept folded with its Network's casemapping, so try each one.
-    const keys = [...new Set(CASEMAPPINGS.map((c) => nameKey(query.in!, c)))];
-    where.push(`b.name IN (${keys.map(() => "?").join(", ")})`);
-    params.push(...keys);
-  }
-  if (query.on !== undefined) {
-    where.push("(n.config_id = ? COLLATE NOCASE OR n.display = ? COLLATE NOCASE)");
-    params.push(query.on, query.on);
-  }
+  // Row ids from the file: numbers, safe in the SQL text.
+  if (buffers) where.push(`m.buffer_id IN (${buffers.join(", ")})`);
   if (query.before !== undefined) {
     where.push("m.ts < ?");
     params.push(query.before);
@@ -212,8 +232,6 @@ export function searchLog(db: Database, query: SearchQuery, limit = SEARCH_LIMIT
     where.push("m.ts >= ?");
     params.push(query.after);
   }
-  // Words or a filter, or nothing is found.
-  if (params.length === 0) return { hits: [], more: false };
 
   const marked = match ? `highlight(message_fts, 0, '${HIT_START}', '${HIT_END}')` : "m.plain";
   const from = match
@@ -263,7 +281,7 @@ function contextLine(r: ContextRow): ContextLine {
     time: r.ts,
     kind: r.kind,
     nick: r.nick,
-    ...(r.subject !== null && { subject: r.subject }),
+    subject: r.subject ?? undefined,
     text: r.text,
     self: r.self === 1,
     mention: r.mention === 1,
@@ -275,19 +293,19 @@ function contextLine(r: ContextRow): ContextLine {
  * Buffer, Events too. Redacted Lines are left out. Undefined if the Line is gone or
  * was redacted after the search.
  */
-export function logContext(db: Database, id: number, around = CONTEXT_LINES): LogContext | undefined {
+export function logContext(db: Database, id: number, around: number): LogContext | undefined {
+  const cols = "id, ts, kind, nick, subject, text, self, mention";
   const hit = db
     .query(
-      `SELECT m.buffer_id, m.ts, b.display AS buffer, b.kind AS bkind,
+      `SELECT ${cols.replace(/(\w+)/g, "m.$1")}, m.buffer_id, b.display AS buffer, b.kind AS bkind,
               n.config_id AS server, n.display AS network
        FROM message m JOIN buffer b ON b.id = m.buffer_id JOIN network n ON n.id = b.network_id
        WHERE m.id = ? AND m.redacted_at IS NULL`,
     )
     .get(id) as
-    | { buffer_id: number; ts: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string }
+    | (ContextRow & { buffer_id: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string })
     | null;
   if (!hit) return undefined;
-  const cols = "id, ts, kind, nick, subject, text, self, mention";
   const side = (cmp: "<" | ">", order: "DESC" | "ASC") =>
     db
       .query(
@@ -296,7 +314,6 @@ export function logContext(db: Database, id: number, around = CONTEXT_LINES): Lo
          ORDER BY ts ${order}, id ${order} LIMIT ?`,
       )
       .all(hit.buffer_id, hit.ts, hit.ts, id, around) as ContextRow[];
-  const self = db.query(`SELECT ${cols} FROM message WHERE id = ?`).get(id) as ContextRow;
   const before = side("<", "DESC").reverse();
   const after = side(">", "ASC");
   return {
@@ -304,7 +321,7 @@ export function logContext(db: Database, id: number, around = CONTEXT_LINES): Lo
     network: hit.network,
     buffer: hit.buffer,
     bufferKind: hit.bkind,
-    lines: [...before, self, ...after].map(contextLine),
+    lines: [...before, hit, ...after].map(contextLine),
     match: before.length,
   };
 }

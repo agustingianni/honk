@@ -2828,7 +2828,7 @@ export class IrcManager {
               ...server.buffers,
               [target]: { ...buf, users: demoUsers([]) },
             };
-            this.pushMessage(id, target, makeMessage("join", `${server.nick} joined ${target}`));
+            this.pushMessage(id, target, makeMessage("join", joinText(server.nick, target)));
           }
           this.setActive(id, target);
         }

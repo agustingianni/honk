@@ -200,7 +200,7 @@ export function openLog(
   path: string,
   settings: LogSettings,
   options: OpenOptions = {},
-): { log?: Log; notices: string[]; off?: string } {
+): { log: Log; notices: string[] } | { log?: undefined; notices: string[]; off: string } {
   if (!settings.enabled) return { notices: [], off: "logs.enabled is false in the config" };
   const created = !existsSync(path);
   let db: Database | undefined;

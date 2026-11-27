@@ -44,7 +44,7 @@ function open(
     isAlive,
   });
   if (result.log) opened.push(result.log);
-  return { ...result, log: result.log!, clock };
+  return { ...result, off: "off" in result ? result.off : undefined, log: result.log!, clock };
 }
 
 const line = (text: string, extra: Partial<LogLine> = {}): LogLine => ({

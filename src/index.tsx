@@ -70,11 +70,12 @@ if (!g.__ircHot) {
   const config = loadConfigOrExit();
   const demo = process.argv.includes("--demo");
   // The Log of your chats on disk. Not for the demo. See src/log/log.ts.
-  const { log, notices: logNotices, off: logOff } = demo
-    ? { log: undefined, notices: [], off: "the demo keeps no log" }
+  const opened: ReturnType<typeof openLog> = demo
+    ? { notices: [], off: "the demo keeps no log" }
     : openLog(defaultLogPath(), config.logs ?? DEFAULT_LOG_SETTINGS, {
         onError: (text) => manager.addAppNotice(text),
       });
+  const { log, notices: logNotices } = opened;
   // Writes the Lines still waiting, however honk exits. bun:sqlite is synchronous.
   if (log) process.on("exit", () => log.close());
   const manager = new IrcManager({ log });
@@ -181,7 +182,7 @@ if (!g.__ircHot) {
     saveTheme,
     recentActions: loadState(statePath).recentActions,
     saveRecentActions,
-    logSearch: log ?? { off: logOff ?? "honk keeps no log" },
+    logSearch: opened.log ?? { off: opened.off },
   };
   g.__ircHot = hot;
 }

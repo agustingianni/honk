@@ -3,6 +3,18 @@ function dayKey(date: Date): number {
   return date.getFullYear() * 10000 + date.getMonth() * 100 + date.getDate();
 }
 
+/** True if `a` and `b` fall on the same local day. */
+export function sameDay(a: Date, b: Date): boolean {
+  return dayKey(a) === dayKey(b);
+}
+
+/** The local time of day, "14:02". */
+export function clockTime(date: Date): string {
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 const DAY = { weekday: "long", month: "long", day: "numeric" } as const;
 const SAME_YEAR = new Intl.DateTimeFormat(undefined, DAY);
 const OTHER_YEAR = new Intl.DateTimeFormat(undefined, { ...DAY, year: "numeric" });

@@ -43,19 +43,19 @@ interface AppProps {
 
 /**
  * The open omnibox. `key` changes each time it opens, so it starts fresh. `search` opens
- * it in search mode with that text; `selectedId` selects a row.
+ * it in search mode with that text; `hitId` selects that hit.
  */
 interface OmniboxOpen {
   key: number;
   search?: string;
-  selectedId?: string;
+  hitId?: number;
 }
 
 /** A Context view on screen, and the search it came from, to go back to. */
 interface ContextOpen {
   view: LogContext;
   query: string;
-  selectedId: string;
+  hitId: number;
 }
 
 export function App({
@@ -182,9 +182,9 @@ export function App({
     [manager],
   );
   const openHit = useCallback(
-    (id: number, query: string, selectedId: string) => {
+    (id: number, query: string) => {
       const view = "off" in logSearch ? undefined : logSearch.context(id);
-      if (view) setContext({ view, query, selectedId });
+      if (view) setContext({ view, query, hitId: id });
     },
     [logSearch],
   );
@@ -192,7 +192,7 @@ export function App({
   const closeContext = useCallback(() => {
     if (!context) return;
     setContext(null);
-    openOmnibox({ search: context.query, selectedId: context.selectedId });
+    openOmnibox({ search: context.query, hitId: context.hitId });
   }, [context, openOmnibox]);
   const pasteLines = useCallback(
     (lines: string[]) => manager.sendLines(lines),
@@ -329,7 +329,7 @@ export function App({
           <Omnibox
             key={omnibox.key}
             initialSearch={omnibox.search}
-            initialSelectedId={omnibox.selectedId}
+            initialHitId={omnibox.hitId}
             logSearch={logSearch}
             onOpenHit={openHit}
             servers={snapshot.servers}
