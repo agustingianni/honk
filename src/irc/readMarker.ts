@@ -19,7 +19,9 @@
  */
 
 import type { ChatMessage } from "../types.ts";
+import type { Timers } from "./delivery.ts";
 import { parseTimestampParam } from "./ircLine.ts";
+import { nameKey } from "./names.ts";
 
 export const READ_MARKER_CAP = "draft/read-marker";
 
@@ -112,4 +114,211 @@ export function unreadAfter(
     hasMention ||= isForYou(m);
   }
   return { unread, hasMention, firstUnreadId };
+}
+
+/**
+ * How long honk waits before sending MARKREAD for the buffer on screen, so a burst of
+ * lines, or flipping through buffers, sends one. Tests pass a shorter one.
+ */
+export const MARK_READ_DELAY_MS = 1_000;
+/** In a terminal that doesn't report focus, how long after a key press you count as reading. */
+export const PRESENT_AFTER_KEY_MS = 2 * 60_000;
+
+/** Timers and the time now, so a test can run the tracker on a fake clock. */
+export interface Clock extends Timers {
+  now(): number;
+}
+
+const systemClock: Clock = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/** A buffer on one server, such as { serverId: "libera", buffer: "#honk" }. */
+export interface OnScreen {
+  serverId: string;
+  buffer: string;
+}
+
+export interface ReadMarkerCallbacks {
+  /** The buffer on screen, asked when the timer fires. */
+  onScreen(): OnScreen | null;
+  /**
+   * The time to send as the marker for `buffer`: newestServerTime of its lines.
+   * Undefined when honk can't send one now: no connection, a buffer that has no
+   * marker (*status), or a server without the draft/read-marker cap.
+   */
+  newestTime(serverId: string, buffer: string): number | undefined;
+  /** Sends `MARKREAD <buffer> timestamp=<time>`. */
+  send(serverId: string, buffer: string, time: number): void;
+}
+
+/**
+ * Decides when to move your read marker for the buffer on screen.
+ *
+ * - It sends only while you are reading: the window has focus, or, in a terminal that
+ *   never reports focus, you pressed a key in the last PRESENT_AFTER_KEY_MS.
+ * - It waits `delayMs` after a new line, and new lines don't push the time back, so a
+ *   busy channel is marked once per delay.
+ * - A buffer switch starts the wait over. The buffer you leave is marked at once if it
+ *   was on screen for at least `delayMs`, and not at all if you only flipped past it.
+ * - It never sends a marker at or before one the server said or honk already sent on
+ *   this connection.
+ *
+ *   tracker.setFocused(true);
+ *   tracker.onActiveChanged(null);   // #honk is on screen
+ *   // 1 s later: send("libera", "#honk", <time of its newest line>)
+ */
+export class ReadMarkerTracker {
+  /** What the terminal last said about focus. "unknown" until it says anything. See isReading. */
+  private focus: "unknown" | "focused" | "blurred" = "unknown";
+  /** When you last pressed a key (ms). See noteKeyPress. */
+  private lastKeyAt = 0;
+  /** Waits before sending MARKREAD for the buffer on screen. See schedule. */
+  private timer: unknown = null;
+  /** When the buffer on screen became active (ms). See onActiveChanged. */
+  private activeSince = 0;
+  /**
+   * Per server, how far you have read each buffer (ms), by buffer name (see nameKey),
+   * as the server last said in a MARKREAD. Kept across reconnects.
+   */
+  private serverMarkers = new Map<string, Map<string, number>>();
+  /**
+   * Per server, the markers honk sent on this connection, which the server may not have
+   * taken yet, so the same one isn't sent twice. Cleared at each new connection, so a
+   * marker that was lost with the old one is sent again.
+   */
+  private sentMarkers = new Map<string, Map<string, number>>();
+  private readonly delayMs: number;
+  private readonly clock: Clock;
+
+  constructor(
+    private readonly callbacks: ReadMarkerCallbacks,
+    options: { delayMs?: number; clock?: Clock } = {},
+  ) {
+    this.delayMs = options.delayMs ?? MARK_READ_DELAY_MS;
+    this.clock = options.clock ?? systemClock;
+  }
+
+  /**
+   * The terminal window got or lost focus. While it doesn't have focus, the buffer on
+   * screen is not being read, so its marker doesn't move.
+   */
+  setFocused(focused: boolean): void {
+    this.focus = focused ? "focused" : "blurred";
+    if (focused) this.schedule();
+  }
+
+  /**
+   * You pressed a key. A terminal that never reports focus (tmux without focus-events,
+   * for one) gives no other sign that you are there.
+   */
+  noteKeyPress(): void {
+    this.lastKeyAt = this.clock.now();
+    if (this.focus === "unknown") this.schedule();
+  }
+
+  /** A line went into the buffer on screen. */
+  onLine(): void {
+    this.schedule();
+  }
+
+  /**
+   * Call after the buffer on screen is set. `leaving` is the buffer that was on screen
+   * before, when the switch went to a different one, and null otherwise.
+   */
+  onActiveChanged(leaving: OnScreen | null): void {
+    if (leaving) {
+      // Its last lines were on screen long enough to read: mark them now. A buffer you
+      // only flipped past is not marked. The timer starts over for the new buffer.
+      const now = this.clock.now();
+      if (now - this.activeSince >= this.delayMs) this.send(leaving.serverId, leaving.buffer);
+      this.cancel();
+      this.activeSince = now;
+    }
+    this.schedule();
+  }
+
+  /** A new connection to the server registered: send again what the old one may have lost. */
+  onConnected(serverId: string): void {
+    this.sentMarkers.get(serverId)?.clear();
+  }
+
+  /**
+   * The server said how far you have read `target`. Returns true if that moved the
+   * marker forward; the server never moves it back, so an older time is a stale one.
+   */
+  onServerMarker(serverId: string, target: string, time: number): boolean {
+    const known = this.serverMarker(serverId, target);
+    if (known !== undefined && known >= time) return false;
+    markersOf(this.serverMarkers, serverId).set(nameKey(target), time);
+    return true;
+  }
+
+  /** How far you have read `buffer` (ms), as the server last said. */
+  serverMarker(serverId: string, buffer: string): number | undefined {
+    return this.serverMarkers.get(serverId)?.get(nameKey(buffer));
+  }
+
+  /** Cancels the timer, when honk shuts down. */
+  stop(): void {
+    this.cancel();
+  }
+
+  /**
+   * Whether you are reading the buffer on screen: the window has focus. If the terminal
+   * never said, a key pressed in the last few minutes stands in for focus, so a honk
+   * left open in a detached tmux doesn't mark everything read overnight.
+   */
+  private isReading(): boolean {
+    if (this.focus !== "unknown") return this.focus === "focused";
+    return this.clock.now() - this.lastKeyAt < PRESENT_AFTER_KEY_MS;
+  }
+
+  private cancel(): void {
+    if (this.timer !== null) this.clock.clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  /** Sends MARKREAD for the buffer on screen after the delay, unless a send is already waiting. */
+  private schedule(): void {
+    if (this.timer !== null) return;
+    this.timer = this.clock.setTimeout(() => {
+      this.timer = null;
+      const onScreen = this.callbacks.onScreen();
+      if (onScreen) this.send(onScreen.serverId, onScreen.buffer);
+    }, this.delayMs);
+  }
+
+  /**
+   * Moves your read marker for a buffer up to its newest line, if you are reading. The
+   * server tells your other clients, so they stop showing it as unread.
+   */
+  private send(serverId: string, buffer: string): void {
+    if (!this.isReading()) return;
+    const time = this.callbacks.newestTime(serverId, buffer);
+    if (time === undefined) return;
+    const key = nameKey(buffer);
+    const sent = markersOf(this.sentMarkers, serverId);
+    const known = Math.max(
+      this.serverMarker(serverId, buffer) ?? -Infinity,
+      sent.get(key) ?? -Infinity,
+    );
+    if (time <= known) return;
+    sent.set(key, time);
+    this.callbacks.send(serverId, buffer, time);
+  }
+}
+
+function markersOf(
+  byServer: Map<string, Map<string, number>>,
+  serverId: string,
+): Map<string, number> {
+  let markers = byServer.get(serverId);
+  if (!markers) {
+    markers = new Map();
+    byServer.set(serverId, markers);
+  }
+  return markers;
 }
