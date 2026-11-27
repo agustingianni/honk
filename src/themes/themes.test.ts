@@ -59,7 +59,8 @@ describe("bundled themes", () => {
       }
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);
-      // The selected omnibox row is the one Enter picks: it must be easy to see.
+      // The active channel, and the omnibox row that Enter picks, must be easy to see.
+      expect(contrast(t.bgActiveRow, t.bgSidebar)).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
       expect(contrast(t.bgOverlaySel, t.bgOverlay)).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
       // A row under the mouse shows, but looks weaker than the selected row.
       // Where the selection color is itself faint, the hover stays at the
@@ -145,22 +146,27 @@ describe("schemeToTheme", () => {
     expect(contrast(t.bgInput, t.bgFooter)).toBeGreaterThan(1.04);
   });
 
-  test("makes a faint or dark omnibox selection a visible step toward the text", () => {
+  test("makes a faint or dark selection a visible step toward the text", () => {
     const lighter = (a: string, b: string) => contrast(a, "#000000") > contrast(b, "#000000");
     for (const [variant, palette] of [
       // base02 is the same as the background.
       ["dark", { ...PALETTE16, base02: "#1e1e2e" }],
-      // base02 is darker than the omnibox: clear contrast, but a dark hole.
+      // base02 is darker than the panels: clear contrast, but a dark hole.
       ["dark", { ...PALETTE16, base02: "#0a0a14" }],
       ["light", { ...PALETTE16, base00: "#ffffff", base05: "#1f2328", base02: "#ffffff" }],
     ] as const) {
       const r = checkScheme({ ...scheme16(palette), variant });
       if (!r.ok) throw new Error(r.problems.join("; "));
       const t = schemeToTheme(r.scheme);
-      const shown = contrast(t.bgOverlaySel, t.bgOverlay);
-      expect(shown).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
-      expect(shown).toBeLessThan(MIN_SELECTION_CONTRAST + 0.03);
-      expect(lighter(t.bgOverlaySel, t.bgOverlay)).toBe(variant === "dark");
+      for (const [selected, background] of [
+        [t.bgActiveRow, t.bgSidebar],
+        [t.bgOverlaySel, t.bgOverlay],
+      ] as const) {
+        const shown = contrast(selected, background);
+        expect(shown).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
+        expect(shown).toBeLessThan(MIN_SELECTION_CONTRAST + 0.03);
+        expect(lighter(selected, background)).toBe(variant === "dark");
+      }
     }
   });
 

@@ -72,7 +72,7 @@ export const MIN_TEXT_CONTRAST = 4.5;
 export const MIN_ACCENT_CONTRAST = 3;
 /** A row under the mouse has at least this contrast with its normal background. */
 export const MIN_HOVER_CONTRAST = 1.04;
-/** The selected omnibox row has at least this contrast with the other rows, so it stays stronger than hover. */
+/** A selected row (active channel, omnibox) has at least this contrast with the other rows, so it stays stronger than hover. */
 export const MIN_SELECTION_CONTRAST = 1.08;
 /** Side panels closer than this to the chat background cannot be seen apart from it... */
 export const MIN_PANEL_CONTRAST = 1.03;
@@ -157,6 +157,7 @@ export function schemeToTheme(scheme: Scheme): Theme {
   // puts a strong gray there).
   const selection = nearBg(p.base02) ?? mix(bg, p.base02!, 0.4);
   const overlay = mix(bg, fg, 0.05);
+  const activeRow = selectedColor(darker, selection, fg);
   const overlaySel = selectedColor(overlay, selection, fg);
 
   // Use a text slot only when it is readable and gray; otherwise fade the
@@ -195,12 +196,12 @@ export function schemeToTheme(scheme: Scheme): Theme {
     bgHeader: darker,
     bgFooter: darkest,
     bgInput: input,
-    bgActiveRow: selection,
+    bgActiveRow: activeRow,
     bgMention: mix(bg, p.base08!, 0.15),
     bgOverlay: overlay,
     bgOverlaySel: overlaySel,
-    bgRowHover: hoverColor(darker, selection, fg),
-    bgActiveRowHover: hoverColor(selection, selection, fg),
+    bgRowHover: hoverColor(darker, activeRow, fg),
+    bgActiveRowHover: hoverColor(activeRow, activeRow, fg),
     bgOverlayHover: hoverColor(overlay, overlaySel, fg),
     borderOverlay: mix(bg, fgMuted, 0.6),
     gutter: mix(bg, fgMuted, 0.6),
@@ -283,8 +284,8 @@ export function hoverColor(background: string, selection: string, text: string):
 /**
  * The background of the selected row: the selection color when it is a clear
  * step from the other rows toward the text color. Otherwise (broadcast's is
- * 1.015:1 on the omnibox, and in a dark theme a darker row looks like a hole)
- * the smallest clear step toward the text color.
+ * 1.015:1 on the omnibox, and batman's active channel is a darker row, which
+ * looks like a hole) the smallest clear step toward the text color.
  */
 function selectedColor(background: string, selection: string, text: string): string {
   const lb = luminance(background);
