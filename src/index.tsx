@@ -10,6 +10,7 @@ import { applyTheme } from "./theme.ts";
 import { applyGlyphs, wantsAscii } from "./ui/glyphs.ts";
 import { allThemes, loadUserThemes, selectTheme, type ThemeEntry } from "./themes/index.ts";
 import { defaultStatePath, loadState, saveState } from "./state.ts";
+import { isMouseInput } from "./terminalInput.ts";
 import { startUpdateCheck } from "./updateCheck.ts";
 import { runUpgrade } from "./upgrade.ts";
 import { versionLine } from "./version.ts";
@@ -105,13 +106,17 @@ if (!g.__ircHot) {
   });
   const root = createRoot(renderer);
 
-  // You count as reading the buffer on screen shortly after any input, unless the
-  // window lost focus. See ReadMarkerTracker.isReading. Any input is every byte from
-  // the terminal: keys, clicks and the wheel, also those a scrollbar keeps to itself.
-  // Prepended, so it runs before honk handles the key or click.
+  // You count as reading the buffer on screen shortly after your last input, unless
+  // the window lost focus. See ReadMarkerTracker.isReading. Input is a key, a paste,
+  // or a mouse report (see terminalInput.ts), also one a scrollbar keeps to itself.
+  // These listeners run before honk handles the key or click.
   renderer.on("focus", () => manager.setFocused(true));
   renderer.on("blur", () => manager.setFocused(false));
-  renderer.stdin.prependListener("data", () => manager.noteActivity());
+  renderer.keyInput.on("keypress", () => manager.noteInput());
+  renderer.keyInput.on("paste", () => manager.noteInput());
+  renderer.stdin.prependListener("data", (data: Buffer) => {
+    if (isMouseInput(data)) manager.noteInput();
+  });
 
   // Mentions and DMs become desktop notifications, shown by the terminal. See src/notify.ts.
   if (notifications.enabled) {

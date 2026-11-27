@@ -208,23 +208,23 @@ describe("ReadMarkerTracker", () => {
 
   test("with focus unknown, input after a time away and a switch at once marks nothing", () => {
     const { markers, advance, show, line, sent } = setup();
-    markers.noteActivity();
+    markers.noteInput();
     show("#bun");
     advance(DELAY * 2);
     advance(PRESENT_AFTER_INPUT_MS);
     line("#bun", 300);
-    markers.noteActivity();
+    markers.noteInput();
     show("#honk");
     expect(sent).toEqual([["libera", "#bun", 200]]);
   });
 
   test("with focus unknown, input while reading does not restart the time", () => {
     const { markers, advance, show, line, sent } = setup();
-    markers.noteActivity();
+    markers.noteInput();
     show("#bun");
     advance(DELAY * 2);
     line("#bun", 300);
-    markers.noteActivity();
+    markers.noteInput();
     show("#honk");
     expect(sent).toEqual([
       ["libera", "#bun", 200],
@@ -245,7 +245,7 @@ describe("ReadMarkerTracker", () => {
     expect(sent.length).toBe(1);
 
     // Input brings you back; the wait starts over.
-    markers.noteActivity();
+    markers.noteInput();
     advance(DELAY - 1);
     expect(sent.length).toBe(1);
     advance(1);
@@ -271,7 +271,7 @@ describe("ReadMarkerTracker", () => {
     advance(DELAY * 3);
     expect(sent).toEqual([]);
 
-    markers.noteActivity();
+    markers.noteInput();
     advance(DELAY);
     expect(sent).toEqual([["libera", "#honk", 100]]);
 

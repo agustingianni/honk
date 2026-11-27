@@ -2310,27 +2310,20 @@ export class IrcManager {
     this.emit();
     if (isActive) this.readMarkerTracker.onNewLine();
 
-    if (message.isMention && !message.isHistory && !message.isSelf) {
-      const event: MentionEvent = {
-        serverId,
-        bufferName,
-        bufferKind: buf.kind,
-        kind: message.kind,
-        from: message.from ?? "",
-        text: message.text,
-        seen: watching,
-      };
+    if (!message.isMention) return;
+    const event: MentionEvent = {
+      serverId,
+      bufferName,
+      bufferKind: buf.kind,
+      kind: message.kind,
+      from: message.from ?? "",
+      text: message.text,
+      seen: watching,
+    };
+    if (!message.isHistory && !message.isSelf) {
       for (const listener of this.mentionListeners) listener(event);
-    } else if (missed && message.isMention) {
-      this.queueMissedMention(serverId, {
-        serverId,
-        bufferName,
-        bufferKind: buf.kind,
-        kind: message.kind,
-        from: message.from ?? "",
-        text: message.text,
-        seen: watching,
-      });
+    } else if (missed) {
+      this.queueMissedMention(serverId, event);
     }
   }
 
@@ -2381,8 +2374,8 @@ export class IrcManager {
   }
 
   /** Tells honk you used the terminal: a key, a click, or the scroll wheel. */
-  noteActivity(): void {
-    this.readMarkerTracker.noteActivity();
+  noteInput(): void {
+    this.readMarkerTracker.noteInput();
   }
 
   /**

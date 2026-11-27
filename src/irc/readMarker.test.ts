@@ -245,7 +245,7 @@ test("a terminal that never reports focus marks read only after some input", asy
   irc.say("alice", "#honk", "anyone?");
   expect(await sendsMarkRead("#honk", DELAY * 3)).toBe(false);
 
-  m.noteActivity();
+  m.noteInput();
   expect(await sendsMarkRead("#honk", 2000)).toBe(true);
 });
 
@@ -512,7 +512,7 @@ describe("a mention in the channel on screen", () => {
     await until(() => seen.length === 1);
     expect(seen).toEqual([false]);
 
-    m.noteActivity();
+    m.noteInput();
     irc.say("alice", "#honk", "goose: now?");
     await until(() => seen.length === 2);
     expect(seen).toEqual([false, true]);

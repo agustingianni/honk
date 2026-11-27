@@ -167,7 +167,7 @@ export interface ReadMarkerCallbacks {
 export class ReadMarkerTracker {
   /** What the terminal last said about focus. "unknown" until it says anything. See isReading. */
   private focus: "unknown" | "focused" | "blurred" = "unknown";
-  /** When you last used the terminal (ms). See noteActivity. */
+  /** When you last used the terminal (ms). See noteInput. */
   private lastInputAt = 0;
   /** Waits before sending MARKREAD for the buffer on screen. See schedule. */
   private timer: unknown = null;
@@ -211,7 +211,7 @@ export class ReadMarkerTracker {
   }
 
   /** You used the terminal: a key, a click, or the scroll wheel. */
-  noteActivity(): void {
+  noteInput(): void {
     const wasReading = this.isReading();
     this.lastInputAt = this.clock.now();
     if (!wasReading && this.isReading()) this.startReading();
