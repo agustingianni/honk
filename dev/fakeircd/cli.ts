@@ -113,6 +113,9 @@ const routes: Record<string, (b: Body) => unknown> = {
   failhistory: (b) => {
     irc.failHistory = b.fail === true;
   },
+  failmarkread: (b) => {
+    irc.failMarkRead = b.fail === true;
+  },
   sasl: (b) => {
     irc.rejectSasl = b.reject === true;
   },

@@ -138,6 +138,11 @@ interface ServerControl {
    * was lost with the old one is sent again.
    */
   sentReadMarkers: Map<string, number>;
+  /**
+   * True once a FAIL MARKREAD was shown on this connection. honk sends MARKREAD on its
+   * own about once a second, so a server that keeps refusing it would flood *status.
+   */
+  markReadFailShown: boolean;
 }
 
 function createControl(): ServerControl {
@@ -158,6 +163,7 @@ function createControl(): ServerControl {
     awayShown: new Map(),
     readMarkers: new Map(),
     sentReadMarkers: new Map(),
+    markReadFailShown: false,
   };
 }
 
@@ -1144,6 +1150,7 @@ export class IrcManager {
       const isReconnect = ctrl.hasEverConnected;
       ctrl.hasEverConnected = true;
       ctrl.sentReadMarkers.clear();
+      ctrl.markReadFailShown = false;
       ctrl.nickCollisionTries = 0;
 
       // Only reset backoff after staying registered stably for STABLE_RESET_MS
@@ -1637,15 +1644,20 @@ export class IrcManager {
     // so the error goes to the buffer where /history was typed, not the one you switched
     // to since. The history honk fetches on join has no request, so its error goes to the
     // target's buffer. When that buffer is closed, the error goes to the reply target like
-    // other errors.
+    // other errors. honk sends MARKREAD on its own, not because of something you typed,
+    // so its FAIL goes to *status, once per connection.
     //   FAIL <command> <code> [<context>...] :<description>
     client.on("raw:fail", (msg) => {
       if (isStale()) return;
       const command = msg.params[0] ?? "";
       const description = msg.params.length > 2 ? (msg.params.at(-1) ?? "") : "";
+      const ctrl = this.getControl(serverId);
       let where = this.replyTarget(serverId);
-      if (command.toUpperCase() === "CHATHISTORY") {
-        const ctrl = this.getControl(serverId);
+      if (command.toUpperCase() === "MARKREAD") {
+        if (ctrl.markReadFailShown) return;
+        ctrl.markReadFailShown = true;
+        where = STATUS_BUFFER;
+      } else if (command.toUpperCase() === "CHATHISTORY") {
         const label = msg.tags?.label;
         const target = historyFailTarget(
           msg.params.slice(2, -1),

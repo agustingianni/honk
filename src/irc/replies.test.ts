@@ -184,5 +184,8 @@ test("describeStandardReply", () => {
   expect(describeStandardReply("CHATHISTORY", "Messages could not be retrieved")).toBe(
     "Could not load history: Messages could not be retrieved.",
   );
+  expect(describeStandardReply("MARKREAD", "Internal error")).toBe(
+    "Could not save your read position: Internal error.",
+  );
   expect(describeStandardReply("SOMETHING", "It went wrong.")).toBe("It went wrong.");
 });
