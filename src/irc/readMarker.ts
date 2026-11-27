@@ -18,8 +18,8 @@
  * read: they get the "new messages" divider and the unread count.
  */
 
-import type { ChatMessage } from "../types.ts";
-import type { Timers } from "./delivery.ts";
+import type { ActiveBuffer, ChatMessage } from "../types.ts";
+import { systemTimers, type Timers } from "./delivery.ts";
 import { parseTimestampParam } from "./ircLine.ts";
 import { nameKey } from "./names.ts";
 
@@ -129,21 +129,11 @@ export interface Clock extends Timers {
   now(): number;
 }
 
-const systemClock: Clock = {
-  now: () => Date.now(),
-  setTimeout: (fn, ms) => setTimeout(fn, ms),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
-
-/** A buffer on one server, such as { serverId: "libera", buffer: "#honk" }. */
-export interface OnScreen {
-  serverId: string;
-  buffer: string;
-}
+const systemClock: Clock = { ...systemTimers, now: () => Date.now() };
 
 export interface ReadMarkerCallbacks {
   /** The buffer on screen, asked when the timer fires. */
-  onScreen(): OnScreen | null;
+  onScreen(): ActiveBuffer | null;
   /**
    * The time to send as the marker for `buffer`: newestServerTime of its lines.
    * Undefined when honk can't send one now: no connection, a buffer that has no
@@ -220,7 +210,7 @@ export class ReadMarkerTracker {
   }
 
   /** A line went into the buffer on screen. */
-  onLine(): void {
+  onNewLine(): void {
     this.schedule();
   }
 
@@ -228,7 +218,7 @@ export class ReadMarkerTracker {
    * Call after the buffer on screen is set. `leaving` is the buffer that was on screen
    * before, when the switch went to a different one, and null otherwise.
    */
-  onActiveChanged(leaving: OnScreen | null): void {
+  onActiveChanged(leaving: ActiveBuffer | null): void {
     if (leaving) {
       // Its last lines were on screen long enough to read: mark them now. A buffer you
       // only flipped past is not marked. The timer starts over for the new buffer.

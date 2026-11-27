@@ -473,7 +473,7 @@ export class IrcManager {
   private mentionListeners = new Set<(event: MentionEvent) => void>();
   private missedListeners = new Set<(events: MentionEvent[]) => void>();
   /** Moves your read marker for the buffer on screen. See readMarker.ts. */
-  private readonly readMarkers: ReadMarkerTracker;
+  private readonly readMarkerTracker: ReadMarkerTracker;
   /** Matches the echo of each line you send to the line already shown. See echo.ts. */
   private echoes = new EchoTracker();
   /** While pushSent sends one of your lines: each PRIVMSG that went out. See beforeSend. */
@@ -494,9 +494,9 @@ export class IrcManager {
   private requestedJoins = new Map<string, number>();
   private lastWakeTick = Date.now();
 
-  /** `markReadDelayMs`: see MARK_READ_DELAY_MS. Tests pass a shorter one. */
+  /** `markReadDelayMs`: see MARK_READ_DELAY_MS in readMarker.ts. Tests pass a shorter one. */
   constructor(options: { markReadDelayMs?: number } = {}) {
-    this.readMarkers = new ReadMarkerTracker(
+    this.readMarkerTracker = new ReadMarkerTracker(
       {
         onScreen: () => this.active,
         newestTime: (serverId, bufferName) => this.markReadTime(serverId, bufferName),
@@ -997,7 +997,7 @@ export class IrcManager {
   }
 
   disconnectAll(): void {
-    this.readMarkers.stop();
+    this.readMarkerTracker.stop();
     if (this.wakeInterval) {
       clearInterval(this.wakeInterval);
       this.wakeInterval = null;
@@ -1129,7 +1129,7 @@ export class IrcManager {
       ctrl.registered = true;
       const isReconnect = ctrl.hasEverConnected;
       ctrl.hasEverConnected = true;
-      this.readMarkers.onConnected(serverId);
+      this.readMarkerTracker.onConnected(serverId);
       ctrl.markReadFailShown = false;
       ctrl.nickCollisionTries = 0;
 
@@ -2073,7 +2073,7 @@ export class IrcManager {
     // as a mention if it is for you. See missed.ts. Not if your read marker is past it:
     // you read it on another client. See readMarker.ts.
     const ctrl = this.controls.get(serverId);
-    const marker = this.readMarkers.serverMarker(serverId, bufferName);
+    const marker = this.readMarkerTracker.serverMarker(serverId, bufferName);
     const missed =
       isMissedLine(ctrl?.missed, bufferName, message) && !isMarkedRead(marker, message);
     if (missed && isMissedMention(ctrl!.missed!, buf.kind, message, server.nick, mentionsNick)) {
@@ -2130,7 +2130,7 @@ export class IrcManager {
       },
     };
     this.emit();
-    if (isActive) this.readMarkers.onLine();
+    if (isActive) this.readMarkerTracker.onNewLine();
 
     if (message.isMention && !message.isHistory && !message.isSelf) {
       const event: MentionEvent = {
@@ -2162,7 +2162,7 @@ export class IrcManager {
    * and divider from the lines after the marker. See readMarker.ts.
    */
   private onReadMarker(serverId: string, target: string, time: number): void {
-    if (!this.readMarkers.onServerMarker(serverId, target, time)) return;
+    if (!this.readMarkerTracker.onServerMarker(serverId, target, time)) return;
 
     const server = this.servers.get(serverId);
     const bufferName = this.bufferKey(serverId, target);
@@ -2197,7 +2197,7 @@ export class IrcManager {
    * screen is not being read, so honk does not move its read marker.
    */
   setFocused(focused: boolean): void {
-    this.readMarkers.setFocused(focused);
+    this.readMarkerTracker.setFocused(focused);
   }
 
   /**
@@ -2205,7 +2205,7 @@ export class IrcManager {
    * focus-events, for one) gives no other sign that you are there.
    */
   noteKeyPress(): void {
-    this.readMarkers.noteKeyPress();
+    this.readMarkerTracker.noteKeyPress();
   }
 
   /**
@@ -2271,7 +2271,7 @@ export class IrcManager {
     if (leaving) this.clearUnreadDivider(leaving.serverId, leaving.buffer);
 
     this.active = { serverId, buffer: bufferName };
-    this.readMarkers.onActiveChanged(leaving);
+    this.readMarkerTracker.onActiveChanged(leaving);
     if (buf.unread > 0 || buf.hasMention) {
       server.buffers = {
         ...server.buffers,

@@ -3,8 +3,8 @@ import {
   PRESENT_AFTER_KEY_MS,
   ReadMarkerTracker,
   type Clock,
-  type OnScreen,
 } from "./readMarker.ts";
+import type { ActiveBuffer } from "../types.ts";
 
 const DELAY = 1000;
 
@@ -42,7 +42,7 @@ function fakeClock() {
  */
 function setup() {
   const { clock, advance, active } = fakeClock();
-  let onScreen: OnScreen | null = null;
+  let onScreen: ActiveBuffer | null = null;
   const newest = new Map<string, number>([
     ["#honk", 100],
     ["#bun", 200],
@@ -65,7 +65,7 @@ function setup() {
   /** A new line in `buffer` while it is on screen. */
   const line = (buffer: string, time: number) => {
     newest.set(buffer, time);
-    markers.onLine();
+    markers.onNewLine();
   };
   return { markers, advance, active, show, line, sent, newest };
 }
