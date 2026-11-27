@@ -260,6 +260,22 @@ describe("through the manager", () => {
     expect(lols()).toHaveLength(2);
   });
 
+  test("your own line, confirmed by an Echo without msgid, is not shown again by History", async () => {
+    await inHonk();
+    m.setActive("alpha", "#honk");
+    // The server's clock is 2.5 seconds ahead of honk's, so the second differs.
+    const serverTime = new Date(Date.now() + 2500);
+    irc.holdEchoes = true;
+    m.handleInput("hi");
+    await until(() => irc.heldEchoCount === 1);
+    irc.sendRaw(`@time=${serverTime.toISOString()} :goose!goose@fake PRIVMSG #honk :hi`);
+    await until(() => lines().some((l) => l.text === "hi" && !l.delivery));
+    // ZNC replays it with the server's time and without msgid.
+    const whole = new Date(Math.floor(serverTime.getTime() / 1000) * 1000).toISOString();
+    await replay("r1", [`time=${whole} :goose!goose@fake PRIVMSG #honk :hi`]);
+    expect(lines().filter((l) => l.text === "hi")).toHaveLength(1);
+  });
+
   test("History gives its msgid to a line shown without one", async () => {
     await inHonk();
     irc.sendRaw("@time=2026-11-27T21:35:07.412Z :alice!a@host PRIVMSG #honk :lol");

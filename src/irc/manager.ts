@@ -1508,7 +1508,8 @@ export class IrcManager {
         const echo = { kind, text: msg.params.text };
         const shownId = this.echoes.take(serverId, this.bufferKey(serverId, target), echo);
         if (shownId) {
-          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid);
+          const time = tags?.time ? tagTime(tags) : undefined;
+          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid, time);
           return;
         }
       }
@@ -1726,7 +1727,10 @@ export class IrcManager {
 
   /**
    * The echo of a line you sent: the line shows the text the server has (trimmed, or
-   * the first part of a split line) and gets its msgid, so history doesn't add it again.
+   * the first part of a split line) and gets its msgid and time, so history doesn't add
+   * it again. History is matched by the server's time (see replay.ts), and honk's clock
+   * can be off by a second or more. The line stays where it was shown, even if the new
+   * time is a little before or after its neighbors.
    */
   private applyEcho(
     serverId: string,
@@ -1734,11 +1738,13 @@ export class IrcManager {
     messageId: string,
     text: string,
     msgid: string | undefined,
+    time: Date | undefined,
   ): void {
     this.updateMessages(serverId, this.bufferKey(serverId, target), new Set([messageId]), (m) => ({
       ...m,
       text,
       ...(msgid ? { msgid } : {}),
+      ...(time ? { timestamp: time } : {}),
     }));
     this.emit();
   }
