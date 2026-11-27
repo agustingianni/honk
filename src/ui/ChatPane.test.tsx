@@ -208,3 +208,22 @@ test("after the topic changes, a click opens the link it shows now", async () =>
     act(() => renderer.destroy());
   }
 });
+
+test("bidi and control characters from the server never reach the screen", async () => {
+  // OpenTUI draws cells, and these characters take no cell, so the terminal
+  // never sees them. If that ever changes, a nick or a topic could turn the text
+  // after it around in a terminal with bidi support (U+202E, "Trojan Source").
+  const bad = "\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069\u200E\u200F\u061C\u009B\u007F";
+  const screen = await renderLines({
+    name: `#ho${bad}nk`,
+    topic: `the ${bad}topic`,
+    messages: [{ ...message(0), from: `ev${bad}e`, text: `see ${bad}gpj.exe \u05E9\u05DC\u05D5\u05DD` }],
+  });
+  const text = screen.join("\n");
+  expect([...text].filter((c) => bad.includes(c))).toEqual([]);
+  expect(text).toContain("#honk");
+  expect(text).toContain("the topic");
+  expect(text).toContain("eve");
+  // Right-to-left letters are kept, in the order they were sent.
+  expect(text).toContain("see gpj.exe \u05E9\u05DC\u05D5\u05DD");
+});

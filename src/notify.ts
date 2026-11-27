@@ -44,12 +44,26 @@ export function stripIrcFormatting(text: string): string {
     .replace(/[\x00-\x08\x0a-\x1f\x7f]/g, "");
 }
 
+/**
+ * Text from the server, ready for a notification: without formatting codes,
+ * C1 controls or Unicode bidi controls. The system shows notifications with
+ * bidi, so U+202E (RIGHT-TO-LEFT OVERRIDE) in a nick or a message could turn
+ * the text after it around.
+ */
+function notificationText(text: string): string {
+  return stripIrcFormatting(text).replace(
+    /[\x80-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    "",
+  );
+}
+
 /** The title and body for one event. */
 export function formatNotification(event: MentionEvent): { title: string; body: string } {
+  const from = notificationText(event.from);
   const title =
-    event.bufferKind === "dm" ? event.from : `${event.from} in ${event.bufferName}`;
-  let body = stripIrcFormatting(event.text).trim();
-  if (event.kind === "action") body = `* ${event.from} ${body}`;
+    event.bufferKind === "dm" ? from : `${from} in ${notificationText(event.bufferName)}`;
+  let body = notificationText(event.text).trim();
+  if (event.kind === "action") body = `* ${from} ${body}`;
   if (body.length > MAX_BODY_LENGTH) body = `${body.slice(0, MAX_BODY_LENGTH - 3)}...`;
   return { title, body };
 }
@@ -102,7 +116,11 @@ export class Notifier {
 
 /** "3 mentions while you were away, in #honk and alice". */
 export function formatMissedSummary(events: MentionEvent[]): string {
-  const places = [...new Set(events.map((e) => (e.bufferKind === "dm" ? e.from : e.bufferName)))];
+  const places = [
+    ...new Set(
+      events.map((e) => notificationText(e.bufferKind === "dm" ? e.from : e.bufferName)),
+    ),
+  ];
   const where =
     places.length === 1
       ? places[0]
