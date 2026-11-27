@@ -92,3 +92,20 @@ test("with nothing typed, only buffers show, the one you are in last", () => {
 test("you are never offered as a person", () => {
   expect(rows("goose", [alpha])).toEqual([]);
 });
+
+test("a buffer that mentions you shows ! before its unread count", () => {
+  const s = server("alpha", [
+    buffer("#honk"),
+    buffer("#rust", [], { unread: 2, hasMention: true }),
+    buffer("#birds", [], { unread: 3 }),
+  ]);
+  const badges = quickOpenRows("", {
+    servers: [s],
+    active: { serverId: "alpha", buffer: "#honk" },
+    recentKeys: [],
+    onSelectBuffer: noop,
+    onOpenDm: noop,
+  }).map((item) => [item.label, item.badge]);
+  expect(badges).toContainEqual(["#rust", "!2"]);
+  expect(badges).toContainEqual(["#birds", "3"]);
+});

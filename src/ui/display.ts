@@ -108,8 +108,22 @@ export function bufferDisplayName(buf: BufferState): string {
   return buf.kind === "dm" ? `@${buf.name}` : buf.name;
 }
 
-export function unreadBadge(unread: number): string {
-  return unread > 99 ? "99+" : String(unread);
+/**
+ * The unread count shown beside a buffer: "3", or "99+" past 99. A `!` in front marks a
+ * buffer where someone mentioned you ("!3"), so it shows without relying on color.
+ * Not `@`: DMs already show as "@nick".
+ */
+export function unreadBadge(unread: number, mention = false): string {
+  const count = unread > 99 ? "99+" : String(unread);
+  return mention ? `!${count}` : count;
+}
+
+/**
+ * The cells a buffer's name may take in the sidebar: 18, less the badge and a gap
+ * when there is one, so a "!99+" badge does not push the name off the row.
+ */
+export function sidebarNameRoom(badge: string): number {
+  return 18 - (badge ? cellWidth(badge) + 1 : 0);
 }
 
 export function scrollboxStyle(bg: string) {

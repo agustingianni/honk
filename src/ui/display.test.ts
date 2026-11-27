@@ -1,5 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { cellWidth, indexAtCell, setWidthMethod, truncate } from "./display.ts";
+import {
+  cellWidth,
+  indexAtCell,
+  setWidthMethod,
+  sidebarNameRoom,
+  truncate,
+  unreadBadge,
+} from "./display.ts";
 
 const FAMILY = "👨‍👩‍👧‍👦";
 
@@ -68,4 +75,24 @@ test("indexAtCell finds the character that covers a cell", () => {
   expect([0, 1, 2, 3, 4].map((col) => indexAtCell("日本a", col))).toEqual([0, 0, 1, 1, 2]);
   // The family emoji is 11 code units and 2 cells.
   expect(indexAtCell(`${FAMILY}x`, 2)).toBe(FAMILY.length);
+});
+
+test("the unread badge shows the count, capped at 99+", () => {
+  expect(unreadBadge(3)).toBe("3");
+  expect(unreadBadge(99)).toBe("99");
+  expect(unreadBadge(100)).toBe("99+");
+});
+
+test("a buffer that mentions you gets a ! before the count, not only a color", () => {
+  expect(unreadBadge(3, true)).toBe("!3");
+  expect(unreadBadge(99, true)).toBe("!99");
+  expect(unreadBadge(250, true)).toBe("!99+");
+  expect(unreadBadge(3, false)).toBe("3");
+});
+
+test("the sidebar name gives up the badge's cells and a gap", () => {
+  expect(sidebarNameRoom("")).toBe(18);
+  expect(sidebarNameRoom("3")).toBe(16);
+  expect(sidebarNameRoom("99+")).toBe(14);
+  expect(sidebarNameRoom("!99+")).toBe(13);
 });

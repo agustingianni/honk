@@ -205,7 +205,7 @@ export function quickOpenRows(q: string, ctx: QuickOpenContext): OmniboxItem[] {
                 ? theme.accentAlt
                 : theme.fgMuted,
           detail: s.name,
-          badge: buf.unread > 0 ? unreadBadge(buf.unread) : undefined,
+          badge: buf.unread > 0 ? unreadBadge(buf.unread, buf.hasMention) : undefined,
           badgeColor: buf.hasMention ? theme.red : theme.accent,
           onSelect: () => ctx.onSelectBuffer(s.id, bufName),
         },

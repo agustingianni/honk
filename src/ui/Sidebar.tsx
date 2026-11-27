@@ -5,6 +5,7 @@ import type { ActiveBuffer, ServerState } from "../types.ts";
 import {
   bufferDisplayName,
   scrollboxStyle,
+  sidebarNameRoom,
   statusIndicator,
   truncate,
   unreadBadge,
@@ -83,7 +84,9 @@ export function Sidebar({
                 const isActive =
                   active?.serverId === server.id && active?.buffer === bufName;
                 const displayName = bufferDisplayName(buf);
-                const maxNameLen = buf.unread > 0 ? 13 : 18;
+                const badge =
+                  buf.unread > 0 ? unreadBadge(buf.unread, buf.hasMention) : "";
+                const maxNameLen = sidebarNameRoom(badge);
 
                 return (
                   <Clickable
@@ -124,11 +127,11 @@ export function Sidebar({
                       </span>
                     </text>
 
-                    {buf.unread > 0 && (
+                    {badge ? (
                       <text fg={buf.hasMention ? theme.red : theme.accent}>
-                        <strong>{unreadBadge(buf.unread)}</strong>
+                        <strong>{badge}</strong>
                       </text>
-                    )}
+                    ) : null}
                   </Clickable>
                 );
               })}
