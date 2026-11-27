@@ -32,18 +32,17 @@ const PALETTE16 = {
   base0C: "#94e2d5", base0D: "#89b4fa", base0E: "#cba6f7", base0F: "#f2cdcd",
 };
 
-// Every background that text is drawn on.
-const SURFACES = [
-  "bgBase", "bgSidebar", "bgNicklist", "bgHeader", "bgFooter", "bgInput", "bgActiveRow",
-  "bgMention", "bgOverlay", "bgOverlaySel", "bgRowHover", "bgActiveRowHover", "bgOverlayHover",
-] as const;
 const ACCENTS = ["accent", "accentAlt", "red", "green", "yellow", "cyan", "orange"] as const;
 
-/** The lowest contrast of `color` on any surface of `t`, and that surface. */
+/**
+ * The lowest contrast of `color` on any background of `t` (every bg* color:
+ * text is drawn on all of them), and that background.
+ */
 function worstContrast(t: Theme, color: string): [number, string] {
-  return SURFACES.map((s): [number, string] => [contrast(color, t[s]), s]).reduce((a, b) =>
-    b[0] < a[0] ? b : a,
-  );
+  return Object.entries(t)
+    .filter(([key]) => key.startsWith("bg"))
+    .map(([key, bg]): [number, string] => [contrast(color, bg as string), key])
+    .reduce((a, b) => (b[0] < a[0] ? b : a));
 }
 
 function scheme16(palette: Record<string, string> = PALETTE16) {
@@ -67,16 +66,14 @@ describe("bundled themes", () => {
     test(`${entry.id} has readable text, visible panels and only hex colors`, () => {
       const t = entry.theme;
       expect(contrast(t.fgPrimary, t.bgBase)).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST);
-      // Accents and muted text are drawn on every surface, selected rows included.
-      for (const key of ACCENTS) {
-        const [worst, surface] = worstContrast(t, t[key]);
-        expect(worst, `${key} on ${surface}`).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
-      }
-      const [muted, surface] = worstContrast(t, t.fgMuted);
-      expect(muted, `fgMuted on ${surface}`).toBeGreaterThanOrEqual(MIN_MUTED_CONTRAST);
-      for (const c of t.nickPalette) {
-        const [worst, surface] = worstContrast(t, c);
-        expect(worst, `nick color ${c} on ${surface}`).toBeGreaterThanOrEqual(MIN_ACCENT_CONTRAST);
+      // Accents, nicks and muted text are drawn on every background, selected rows included.
+      for (const [label, color, min] of [
+        ...ACCENTS.map((key) => [key, t[key], MIN_ACCENT_CONTRAST] as const),
+        ...t.nickPalette.map((c) => [`nick color ${c}`, c, MIN_ACCENT_CONTRAST] as const),
+        ["fgMuted", t.fgMuted, MIN_MUTED_CONTRAST] as const,
+      ]) {
+        const [worst, surface] = worstContrast(t, color);
+        expect(worst, `${label} on ${surface}`).toBeGreaterThanOrEqual(min);
       }
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);

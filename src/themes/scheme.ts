@@ -151,11 +151,11 @@ export function schemeToTheme(scheme: Scheme): Theme {
   // theme. The footer gets the same color, so it does not blend with the
   // input bar above it, which is lighter still.
   if (contrast(darker, bg) < MIN_PANEL_CONTRAST) {
-    darker = stepUntil(bg, fg, bg, RAISED_PANEL_CONTRAST);
+    darker = stepUntil(bg, fg, [bg], RAISED_PANEL_CONTRAST);
     darkest = darker;
     // The input bar sits right above the footer: keep it a visible step
     // lighter (Tokyo Night's input bar is 1.12:1 on the chat).
-    input = stepUntil(bg, fg, bg, 1.12);
+    input = stepUntil(bg, fg, [bg], 1.12);
   }
   // The selection background, softened when it is far from base00 (solarized
   // puts a strong gray there).
@@ -184,17 +184,24 @@ export function schemeToTheme(scheme: Scheme): Theme {
     fg,
   );
 
-  const mention = mix(bg, p.base08!, 0.15);
-  const rowHover = hoverColor(darker, activeRow, fg);
-  const activeRowHover = hoverColor(activeRow, activeRow, fg);
-  const overlayHover = hoverColor(overlay, overlaySel, fg);
-  // Every background that text is drawn on. Accents are at 3:1 on the chat
-  // and only a little more on a selected row, so each text color is checked
-  // against all of them (breeze's accentAlt was 1.79:1 on the selected row).
-  const surfaces = [
-    bg, darker, darkest, input, activeRow, mention, overlay, overlaySel,
-    rowHover, activeRowHover, overlayHover,
-  ];
+  // Every background that text is drawn on. The text colors below are
+  // checked against all of them.
+  const backgrounds = {
+    bgBase: bg,
+    bgSidebar: darker,
+    bgNicklist: darker,
+    bgHeader: darker,
+    bgFooter: darkest,
+    bgInput: input,
+    bgActiveRow: activeRow,
+    bgMention: mix(bg, p.base08!, 0.15),
+    bgOverlay: overlay,
+    bgOverlaySel: overlaySel,
+    bgRowHover: hoverColor(darker, activeRow, fg),
+    bgActiveRowHover: hoverColor(activeRow, activeRow, fg),
+    bgOverlayHover: hoverColor(overlay, overlaySel, fg),
+  };
+  const surfaces = Object.values(backgrounds);
 
   // Accents are used as text (channel names, notices, links), so they must
   // be readable.
@@ -214,19 +221,7 @@ export function schemeToTheme(scheme: Scheme): Theme {
   ];
 
   return {
-    bgBase: bg,
-    bgSidebar: darker,
-    bgNicklist: darker,
-    bgHeader: darker,
-    bgFooter: darkest,
-    bgInput: input,
-    bgActiveRow: activeRow,
-    bgMention: mention,
-    bgOverlay: overlay,
-    bgOverlaySel: overlaySel,
-    bgRowHover: rowHover,
-    bgActiveRowHover: activeRowHover,
-    bgOverlayHover: overlayHover,
+    ...backgrounds,
     borderOverlay: mix(bg, muted, 0.6),
     gutter: mix(bg, muted, 0.6),
 
@@ -281,16 +276,15 @@ function luminance(hex: string): number {
 
 /**
  * Mixes `from` toward `to` in small steps, and returns the first color whose
- * contrast with `bg` (with each of them, for a list) is at least `target`.
+ * contrast with each of `backgrounds` is at least `target`.
  * Returns `from` if it is already there, and `to` if no step reaches it.
  */
 export function stepUntil(
   from: string,
   to: string,
-  bg: string | readonly string[],
+  backgrounds: readonly string[],
   target: number,
 ): string {
-  const backgrounds = typeof bg === "string" ? [bg] : bg;
   for (let i = 0; i <= 100; i++) {
     const color = mix(from, to, i / 100);
     if (backgrounds.every((b) => contrast(color, b) >= target)) return color;
