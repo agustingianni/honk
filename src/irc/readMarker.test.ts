@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { FakeIrcd } from "../../dev/fakeircd/server.ts";
 import { until } from "../../dev/fakeircd/testing.ts";
 import type { ChatMessage } from "../types.ts";
+import { timestampParam } from "./ircLine.ts";
 import { IrcManager } from "./manager.ts";
 import {
-  markReadParam,
   newestServerTime,
   parseMarkRead,
   unreadAfter,
@@ -27,18 +27,14 @@ function line(id: string, minutes: number, overrides: Partial<ChatMessage> = {})
 describe("parseMarkRead", () => {
   test.each([
     [["#honk", "timestamp=2026-11-26T22:00:00.000Z"], { target: "#honk", time: T }],
-    [["#honk", "*"], { target: "#honk", time: null }],
-    [["#honk"], { target: "#honk", time: null }],
+    [["#honk", "*"], undefined],
+    [["#honk"], undefined],
     [["#honk", "timestamp=soon"], undefined],
     [["#honk", "2026-11-26T22:00:00.000Z"], undefined],
     [[], undefined],
   ])("%j", (params, expected) => {
     expect(parseMarkRead(params)).toEqual(expected);
   });
-});
-
-test("markReadParam writes the time as the spec wants it", () => {
-  expect(markReadParam(T)).toBe("timestamp=2026-11-26T22:00:00.000Z");
 });
 
 describe("unreadAfter", () => {
@@ -51,6 +47,7 @@ describe("unreadAfter", () => {
       line("bob", 1, { from: "bob" }),
       line("mine", 2, { from: "goose", isSelf: true }),
       line("join", 3, { kind: "join" }),
+      line("histserv", 3, { from: "HistServ", text: "goose joined the channel" }),
       line("notice", 4, { kind: "notice" }),
       line("carol", 5, { from: "carol", kind: "action" }),
     ];
@@ -134,9 +131,19 @@ async function connect(): Promise<void> {
   await until(() => Boolean(buffer("#honk") && buffer("#bun")));
 }
 
+/** honk's wait before MARKREAD, shorter than the real 1 s so the tests run fast. */
+const DELAY = 200;
+
+/** True if honk sends MARKREAD for `target` within `ms`. */
+const sendsMarkRead = (target: string, ms: number) =>
+  irc.waitFor(isMarkRead(target), ms).then(
+    () => true,
+    () => false,
+  );
+
 beforeEach(async () => {
   irc = await FakeIrcd.start({ network: "alpha" });
-  m = new IrcManager();
+  m = new IrcManager({ markReadDelayMs: DELAY });
 });
 
 afterEach(async () => {
@@ -164,7 +171,7 @@ test("the channel on screen gets the divider and moves the marker", async () => 
 
   const sent = await irc.waitFor(isMarkRead("#honk"), 3000);
   const newest = buffer("#honk")!.messages.findLast((x) => x.text === "not read either")!;
-  expect(sent.params[1]).toBe(markReadParam(newest.timestamp.getTime()));
+  expect(sent.params[1]).toBe(timestampParam(newest.timestamp.getTime()));
   expect(irc.readMarker("#honk")).toBe(newest.timestamp.getTime());
 });
 
@@ -186,15 +193,11 @@ test("without focus, the channel on screen is not marked read", async () => {
   m.setFocused(true);
   m.setActive("alpha", "#honk");
   // Let the marker for the join settle first.
-  await Bun.sleep(1200);
+  await Bun.sleep(DELAY * 1.5);
   m.setFocused(false);
   irc.say("alice", "#honk", "while you were away");
   await until(() => buffer("#honk")!.messages.some((x) => x.text === "while you were away"));
-  const sentWhileAway = await irc.waitFor(isMarkRead("#honk"), 1500).then(
-    () => true,
-    () => false,
-  );
-  expect(sentWhileAway).toBe(false);
+  expect(await sendsMarkRead("#honk", DELAY * 3)).toBe(false);
 
   m.setFocused(true);
   await irc.waitFor(isMarkRead("#honk"), 2000);
@@ -209,18 +212,11 @@ test("a live line in the channel on screen gets no divider", async () => {
   expect(buffer("#honk")!.unread).toBe(0);
 });
 
-/** True if honk sends MARKREAD for `target` within `ms`. */
-const sendsMarkRead = (target: string, ms: number) =>
-  irc.waitFor(isMarkRead(target), ms).then(
-    () => true,
-    () => false,
-  );
-
 test("a terminal that never reports focus marks read only after a key press", async () => {
   await connect();
   m.setActive("alpha", "#honk");
   irc.say("alice", "#honk", "anyone?");
-  expect(await sendsMarkRead("#honk", 1500)).toBe(false);
+  expect(await sendsMarkRead("#honk", DELAY * 3)).toBe(false);
 
   m.noteKeyPress();
   expect(await sendsMarkRead("#honk", 2000)).toBe(true);
@@ -232,15 +228,15 @@ test("flipping past a channel does not mark it read", async () => {
   m.setActive("alpha", "#honk");
   irc.say("alice", "#bun", "you skipped me");
   await until(() => buffer("#bun")!.unread === 1);
-  await Bun.sleep(1100);
+  await Bun.sleep(DELAY * 1.5);
   // A line in #honk starts the timer; you switch to #bun just before it fires.
   irc.say("alice", "#honk", "starts the timer");
   await until(() => buffer("#honk")!.messages.some((x) => x.text === "starts the timer"));
-  await Bun.sleep(800);
+  await Bun.sleep(DELAY * 0.8);
   m.setActive("alpha", "#bun");
-  expect(await sendsMarkRead("#bun", 500)).toBe(false);
+  expect(await sendsMarkRead("#bun", DELAY * 0.5)).toBe(false);
   m.setActive("alpha", "#honk");
-  expect(await sendsMarkRead("#bun", 1200)).toBe(false);
+  expect(await sendsMarkRead("#bun", DELAY * 1.5)).toBe(false);
 });
 
 test("leaving a channel you stayed on marks its newest line at once", async () => {

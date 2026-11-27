@@ -13,6 +13,7 @@
 
 import type { BufferKind, ChatMessage } from "../types.ts";
 import { isChannelName, sameNick } from "./names.ts";
+import { isReadableLine } from "./readMarker.ts";
 
 /** What honk knew when the connection was lost. */
 export interface MissedWindow {
@@ -31,13 +32,6 @@ export interface MissedWindow {
  */
 export const MISSED_MARGIN_MS = 5_000;
 
-/**
- * Ergo replays joins, parts and quits in its history as ordinary messages from this
- * service ("goose_ joined the channel") when the client doesn't ask for
- * draft/event-playback. They are not chat, and one that names you is not a mention.
- */
-const HISTORY_SERVICE = "histserv";
-
 /** True if `message`, going into `bufferName`, arrived while the connection was down. */
 export function isMissedLine(
   window: MissedWindow | undefined,
@@ -47,9 +41,7 @@ export function isMissedLine(
   return (
     window !== undefined &&
     Boolean(message.isHistory) &&
-    !message.isSelf &&
-    (message.kind === "message" || message.kind === "action") &&
-    message.from?.toLowerCase() !== HISTORY_SERVICE &&
+    isReadableLine(message) &&
     window.buffers.has(bufferName) &&
     message.timestamp.getTime() >= window.since - MISSED_MARGIN_MS
   );
@@ -65,11 +57,6 @@ export function isMissedMention(
 ): boolean {
   if (bufferKind === "dm") return true;
   return mentionsNick(message.text, window.nick) || mentionsNick(message.text, currentNick);
-}
-
-/** A CHATHISTORY timestamp parameter: "timestamp=2026-11-26T22:00:00.000Z". */
-export function historyTimestamp(ms: number): string {
-  return `timestamp=${new Date(ms).toISOString()}`;
 }
 
 /** The batch types a server uses for a CHATHISTORY TARGETS reply. */

@@ -84,3 +84,20 @@ export function parseLine(raw: string): IrcLine {
   if (trailAt !== -1) params.push(rest.slice(trailAt + 2));
   return { tags, source, command: (words[0] ?? "").toUpperCase(), params };
 }
+
+/**
+ * The IRCv3 timestamp parameter that CHATHISTORY and MARKREAD use, for a time in ms:
+ *
+ *   timestampParam(Date.parse("2026-11-26T22:00:00Z"))
+ *   -> "timestamp=2026-11-26T22:00:00.000Z"
+ */
+export function timestampParam(ms: number): string {
+  return `timestamp=${new Date(ms).toISOString()}`;
+}
+
+/** The time in ms of a "timestamp=..." parameter. Undefined for "*" or anything else. */
+export function parseTimestampParam(value: string | undefined): number | undefined {
+  if (!value?.startsWith("timestamp=")) return undefined;
+  const ms = Date.parse(value.slice("timestamp=".length));
+  return Number.isNaN(ms) ? undefined : ms;
+}

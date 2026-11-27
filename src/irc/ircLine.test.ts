@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { commandOf, LineSplitter, parseLine } from "./ircLine.ts";
+import {
+  commandOf,
+  LineSplitter,
+  parseLine,
+  parseTimestampParam,
+  timestampParam,
+} from "./ircLine.ts";
 
 test("parseLine splits tags, source, command and the trailing param", () => {
   expect(parseLine("@time=x;msgid=1 :a!b@c PRIVMSG #honk :hi there")).toEqual({
@@ -31,4 +37,14 @@ test("commandOf finds the same command as parseLine", () => {
     "",
   ];
   for (const line of lines) expect(commandOf(line)).toBe(parseLine(line).command);
+});
+
+test("timestampParam and parseTimestampParam write and read the IRCv3 timestamp", () => {
+  const ms = Date.parse("2026-11-26T22:00:00Z");
+  expect(timestampParam(ms)).toBe("timestamp=2026-11-26T22:00:00.000Z");
+  expect(parseTimestampParam(timestampParam(ms))).toBe(ms);
+  expect(parseTimestampParam("*")).toBeUndefined();
+  expect(parseTimestampParam("timestamp=soon")).toBeUndefined();
+  expect(parseTimestampParam("msgid=abc")).toBeUndefined();
+  expect(parseTimestampParam(undefined)).toBeUndefined();
 });

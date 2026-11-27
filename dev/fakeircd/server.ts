@@ -16,7 +16,12 @@ import { connect as netConnect, createServer, type Server, type Socket } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
-import { LineSplitter, parseLine } from "../../src/irc/ircLine.ts";
+import {
+  LineSplitter,
+  parseLine,
+  parseTimestampParam,
+  timestampParam,
+} from "../../src/irc/ircLine.ts";
 
 export interface FakeIrcdOptions {
   /** 0 picks a free port. Default 0. */
@@ -890,8 +895,8 @@ export class FakeIrcd {
     const [target, value] = params;
     if (!target) return this.send(c, `:${SERVER_NAME} FAIL MARKREAD NEED_MORE_PARAMS :Missing target`);
     if (value === undefined) return this.sendMarkRead(c, target);
-    const ms = value.startsWith("timestamp=") ? Date.parse(value.slice(10)) : NaN;
-    if (Number.isNaN(ms)) {
+    const ms = parseTimestampParam(value);
+    if (ms === undefined) {
       return this.send(c, `:${SERVER_NAME} FAIL MARKREAD INVALID_PARAMS ${target} :Bad timestamp`);
     }
     const known = this.readMarkers.get(lower(target));
@@ -903,7 +908,7 @@ export class FakeIrcd {
   private sendMarkRead(c: Client, target: string): void {
     if (!c.registered || !c.nick || !c.caps.has("draft/read-marker")) return;
     const ms = this.readMarkers.get(lower(target));
-    const value = ms === undefined ? "*" : `timestamp=${new Date(ms).toISOString()}`;
+    const value = ms === undefined ? "*" : timestampParam(ms);
     this.send(c, `:${hostmask(c.nick)} MARKREAD ${target} ${value}`);
   }
 
@@ -1029,7 +1034,7 @@ export class FakeIrcd {
       const ref = `t${this.nextBatch++}`;
       this.send(c, `:${SERVER_NAME} BATCH +${ref} draft/chathistory-targets`, labelTag);
       for (const [nick, time] of latest) {
-        this.send(c, `CHATHISTORY TARGETS ${nick} timestamp=${new Date(time).toISOString()}`, {
+        this.send(c, `CHATHISTORY TARGETS ${nick} ${timestampParam(time)}`, {
           batch: ref,
         });
       }
@@ -1087,10 +1092,7 @@ export class FakeIrcd {
     lines: StoredMessage[] = this.history,
   ): number | undefined {
     if (!anchor || anchor === "*") return undefined;
-    if (anchor.startsWith("timestamp=")) {
-      const t = Date.parse(anchor.slice("timestamp=".length));
-      return Number.isNaN(t) ? undefined : t;
-    }
+    if (anchor.startsWith("timestamp=")) return parseTimestampParam(anchor);
     if (anchor.startsWith("msgid=")) {
       return lines.find((m) => m.msgid === anchor.slice("msgid=".length))?.time;
     }

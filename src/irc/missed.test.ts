@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { ChatMessage } from "../types.ts";
 import {
   dmTargets,
-  historyTimestamp,
   isMissedLine,
   isMissedMention,
   MISSED_MARGIN_MS,
@@ -79,12 +78,6 @@ describe("isMissedMention", () => {
   test("every DM line is a mention", () => {
     const msg = line({ text: "anyone around?" });
     expect(isMissedMention(window, "dm", msg, "goose", mentions)).toBe(true);
-  });
-});
-
-describe("historyTimestamp", () => {
-  test("formats a CHATHISTORY timestamp parameter", () => {
-    expect(historyTimestamp(SINCE)).toBe("timestamp=2026-11-26T22:00:00.000Z");
   });
 });
 

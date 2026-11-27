@@ -19,43 +19,50 @@
  */
 
 import type { ChatMessage } from "../types.ts";
+import { parseTimestampParam } from "./ircLine.ts";
 
 export const READ_MARKER_CAP = "draft/read-marker";
 
-/** A MARKREAD from the server: the target, and the marker in ms (null for "*"). */
-export interface MarkRead {
-  target: string;
-  time: number | null;
+/**
+ * Reads the params of a server MARKREAD, such as ["#honk", "timestamp=2026-..."], into
+ * the target and the marker in ms. Undefined for "*" (never read), and for a line with
+ * no target or a time that does not parse.
+ */
+export function parseMarkRead(
+  params: readonly string[],
+): { target: string; time: number } | undefined {
+  const [target, value] = params;
+  const time = parseTimestampParam(value);
+  return target && time !== undefined ? { target, time } : undefined;
 }
 
 /**
- * Reads the params of a server MARKREAD, such as ["#honk", "timestamp=2026-..."].
- * Returns undefined when the line has no target or a time that does not parse.
+ * Ergo replays joins, parts and quits in its history as ordinary messages from this
+ * service ("goose_ joined the channel") when the client doesn't ask for
+ * draft/event-playback. They are not chat, and one that names you is not a mention.
  */
-export function parseMarkRead(params: readonly string[]): MarkRead | undefined {
-  const [target, value] = params;
-  if (!target) return undefined;
-  if (value === undefined || value === "*") return { target, time: null };
-  if (!value.startsWith("timestamp=")) return undefined;
-  const time = Date.parse(value.slice("timestamp=".length));
-  return Number.isNaN(time) ? undefined : { target, time };
-}
+const HISTORY_SERVICE = "histserv";
 
-/** The MARKREAD param for a time in ms: "timestamp=2026-11-27T09:02:41.008Z". */
-export function markReadParam(ms: number): string {
-  return `timestamp=${new Date(ms).toISOString()}`;
-}
-
-/** Lines that can be unread: chat from someone else. Joins, notices and your own lines are not. */
+/**
+ * Lines that can be unread: chat from someone else. Joins, notices, your own lines and
+ * Ergo's HistServ replays are not. missed.ts uses the same rule.
+ */
 export function isReadableLine(message: ChatMessage): boolean {
-  return !message.isSelf && (message.kind === "message" || message.kind === "action");
+  return (
+    !message.isSelf &&
+    (message.kind === "message" || message.kind === "action") &&
+    message.from?.toLowerCase() !== HISTORY_SERVICE
+  );
+}
+
+/** True if the marker is at or past `message`: you read it, maybe on another client. */
+export function isMarkedRead(marker: number | undefined, message: ChatMessage): boolean {
+  return marker !== undefined && message.timestamp.getTime() <= marker;
 }
 
 /** True if `message` is chat from someone else that is newer than the marker. */
 export function isAfterMarker(marker: number | undefined, message: ChatMessage): boolean {
-  return (
-    marker !== undefined && isReadableLine(message) && message.timestamp.getTime() > marker
-  );
+  return marker !== undefined && isReadableLine(message) && !isMarkedRead(marker, message);
 }
 
 /**
@@ -85,7 +92,7 @@ export interface UnreadState {
 
 /**
  * Counts the lines newer than `marker`. `isForYou` says whether one of them is a
- * mention, for the badge.
+ * mention, for the badge; it stops being asked once one is.
  *
  *   marker 10:00, lines [alice 09:59, bob 10:01, you 10:02, carol 10:03]
  *   -> { unread: 2, firstUnreadId: <bob's line> }
@@ -102,7 +109,7 @@ export function unreadAfter(
     if (!isAfterMarker(marker, m)) continue;
     unread++;
     firstUnreadId ??= m.id;
-    if (isForYou(m)) hasMention = true;
+    hasMention ||= isForYou(m);
   }
   return { unread, hasMention, firstUnreadId };
 }
