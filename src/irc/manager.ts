@@ -35,6 +35,7 @@ import {
   TARGETS_BATCH_TYPES,
 } from "./missed.ts";
 import { NetworkWatcher } from "./netwatch.ts";
+import { checkReplay, HistoryBatch } from "./replay.ts";
 import {
   DEMO_AMBIENT,
   DEMO_HISTORY,
@@ -1432,6 +1433,8 @@ export class IrcManager {
           );
         }
       }
+      // The Replay counts of this batch, per buffer. See replay.ts.
+      const batchReplays = new Map<string, HistoryBatch>();
       for (const raw of batch.params.messages) {
         const cmd = raw.command;
         if (cmd !== "privmsg" && cmd !== "notice") continue;
@@ -1448,6 +1451,9 @@ export class IrcManager {
         const msgKind: MessageKind =
           cmd === "notice" ? "notice" : actionMatch ? "action" : "message";
         const text = actionMatch ? actionMatch[1]! : rawText;
+        const bufferKey = this.bufferKey(serverId, target);
+        let replays = batchReplays.get(bufferKey);
+        if (!replays) batchReplays.set(bufferKey, (replays = new HistoryBatch()));
 
         this.pushMessage(
           serverId,
@@ -1459,6 +1465,7 @@ export class IrcManager {
             isSelf,
             isHistory: true,
           }),
+          replays,
         );
       }
     });
@@ -2046,28 +2053,26 @@ export class IrcManager {
     this.emit();
   }
 
+  /** `batch` is the History batch `message` came in, if any. See replay.ts. */
   private pushMessage(
     serverId: string,
     targetName: string,
     message: ChatMessage,
+    batch?: HistoryBatch,
   ): void {
     const server = this.servers.get(serverId);
     const bufferName = this.bufferKey(serverId, targetName);
     const buf = this.ensureBuffer(serverId, bufferName);
     if (!server || !buf) return;
 
-    // A line the buffer already has: same msgid (a replay, or a line to yourself that
-    // came as the echo and as a message), or for history, same sender, text and time.
-    if (message.msgid && buf.messages.some((m) => m.msgid === message.msgid)) return;
-    if (message.isHistory) {
-      const msgTime = message.timestamp.getTime();
-      const isDup = buf.messages.some(
-        (m) =>
-          m.from === message.from &&
-          m.text === message.text &&
-          Math.abs(m.timestamp.getTime() - msgTime) < 2000,
-      );
-      if (isDup) return;
+    // A Replay of a line the buffer already has is dropped. See replay.ts.
+    const verdict = checkReplay(buf.messages, message, batch);
+    if (verdict.type === "replay") return;
+    if (verdict.type === "give-msgid") {
+      const { msgid } = verdict;
+      this.updateMessages(serverId, bufferName, new Set([verdict.line.id]), (m) => ({ ...m, msgid }));
+      this.emit();
+      return;
     }
 
     // A history line that arrived while the connection was down counts as unread, and

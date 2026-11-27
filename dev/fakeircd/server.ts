@@ -470,12 +470,18 @@ export class FakeIrcd {
     this.history = [...lines, ...this.history];
   }
 
-  /** Sends a raw line to every registered client, or one. "$NICK" becomes the client's nick. */
+  /**
+   * Sends a raw line to every registered client, or one. "$NICK" becomes the client's
+   * nick. Tags the line starts with are sent as they are, in place of the server's own:
+   * "@time=2026-11-27T21:35:07.000Z :alice!a@h PRIVMSG #honk :lol".
+   */
   sendRaw(line: string, clientId?: number): number {
     let n = 0;
     for (const c of this.clients) {
       if (!c.registered || (clientId !== undefined && c.id !== clientId)) continue;
-      this.send(c, line.replaceAll("$NICK", c.nick ?? "*"));
+      const out = line.replaceAll("$NICK", c.nick ?? "*");
+      if (out.startsWith("@")) this.write(c, out);
+      else this.send(c, out);
       n++;
     }
     return n;
@@ -583,9 +589,12 @@ export class FakeIrcd {
     const tagStr = Object.entries(all)
       .map(([k, v]) => (v ? `${k}=${v}` : k))
       .join(";");
-    const out = tagStr ? `@${tagStr} ${line}` : line;
-    this.log(`[${c.id}] >> ${out}`);
-    if (!c.sock.destroyed) c.sock.write(out + "\r\n");
+    this.write(c, tagStr ? `@${tagStr} ${line}` : line);
+  }
+
+  private write(c: Client, line: string): void {
+    this.log(`[${c.id}] >> ${line}`);
+    if (!c.sock.destroyed) c.sock.write(line + "\r\n");
   }
 
   private reply(c: Client, numeric: string, rest: string): void {
