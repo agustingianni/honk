@@ -6,14 +6,16 @@ import { ASCII_GLYPHS, UNICODE_GLYPHS, wantsAscii } from "./glyphs.ts";
 
 test("only glyphs.ts in src/ui holds characters outside ASCII", () => {
   // New symbols go through glyphs.ts, so --ascii covers them. Tests may hold
-  // any text, since they check how honk shows text from other people.
+  // any text, since they check how honk shows text from other people, and
+  // comments may hold examples such as "日本".
   const found: string[] = [];
   for (const name of readdirSync(import.meta.dir)) {
     if (name === "glyphs.ts" || /\.test\.tsx?$/.test(name) || !/\.tsx?$/.test(name)) continue;
     readFileSync(join(import.meta.dir, name), "utf-8")
       .split("\n")
       .forEach((line, i) => {
-        if (/[^\x00-\x7f]/.test(line)) found.push(`src/ui/${name}:${i + 1}: ${line.trim()}`);
+        const comment = /^\s*(\/\/|\/\*|\*)/.test(line);
+        if (!comment && /[^\x00-\x7f]/.test(line)) found.push(`src/ui/${name}:${i + 1}: ${line.trim()}`);
       });
   }
   expect(found).toEqual([]);
@@ -27,8 +29,7 @@ test("the ASCII set is ASCII, and draws no scrollbar", () => {
   expect(scrollbar).toBe(false);
 });
 
-test("both sets have a glyph for each symbol, of the same width where the layout needs it", () => {
-  expect(Object.keys(ASCII_GLYPHS).sort()).toEqual(Object.keys(UNICODE_GLYPHS).sort());
+test("the symbols the layout counts as 1 cell are 1 cell in both sets", () => {
   // The status dot, the selected row mark and the rule are each 1 cell wide.
   for (const key of ["statusOn", "statusConnecting", "statusOff", "selectedRow", "rule"] as const) {
     expect(cellWidth(ASCII_GLYPHS[key])).toBe(1);

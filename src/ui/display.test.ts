@@ -51,12 +51,6 @@ test("truncate gives the part of the marker that fits when the whole one does no
   expect(truncate("田中さん", 2)).toBe("..");
 });
 
-test("truncate takes the marker as an argument", () => {
-  expect(truncate("abcdefgh", 6, " [+]")).toBe("ab [+]");
-  expect(truncate("abcdefgh", 6, "")).toBe("abcdef");
-  expect(truncate("田中さん", 5, "")).toBe("田中");
-});
-
 test("a ZWJ emoji takes 2 cells with the unicode method", () => {
   expect(cellWidth(FAMILY)).toBe(2);
   expect(truncate(`ab${FAMILY}cd`, 6)).toBe(`ab${FAMILY}cd`);

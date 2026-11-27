@@ -263,14 +263,15 @@ function fitRow(item: OmniboxItem, width: number): { label: string; detail?: str
 
 /**
  * Splits a fitted label into runs of matched and unmatched characters, for the
- * highlight. A label cut short ("Server: Reconn...") drops the matches past the cut.
+ * highlight. A label cut short (`cut`, as in "Server: Reconn...") drops the
+ * matches past the cut.
  */
 export function highlightRuns(
   label: string,
-  fullLength: number,
+  cut: boolean,
   highlights: readonly number[] = [],
 ): { text: string; hit: boolean }[] {
-  const shown = label.length < fullLength ? label.length - glyphs.ellipsis.length : label.length;
+  const shown = cut ? label.length - glyphs.ellipsis.length : label.length;
   const hits = new Set(highlights.filter((p) => p < shown));
   const runs: { text: string; hit: boolean }[] = [];
   for (let i = 0; i < label.length; i++) {
@@ -828,7 +829,7 @@ export function Omnibox({
                   </span>
                   <span fg={item.labelColor ?? theme.fgPrimary}> </span>
                   {/* The characters the query matched stand out, as in VS Code and fzf. */}
-                  {highlightRuns(label, item.label.length, item.highlights).map((run, i) => (
+                  {highlightRuns(label, label !== item.label, item.highlights).map((run, i) => (
                     <span key={i} fg={run.hit ? theme.orange : (item.labelColor ?? theme.fgPrimary)}>
                       {isSel || run.hit ? <strong>{run.text}</strong> : run.text}
                     </span>

@@ -85,22 +85,27 @@ test("an empty query keeps every action, in list order", () => {
 });
 
 test("highlight runs split the label into matched and plain parts", () => {
-  expect(highlightRuns("Chat: Clear", 11, [6, 7])).toEqual([
+  expect(highlightRuns("Chat: Clear", false, [6, 7])).toEqual([
     { text: "Chat: ", hit: false },
     { text: "Cl", hit: true },
     { text: "ear", hit: false },
   ]);
   // Cut short: the "…" and what it hides are not highlighted.
-  expect(highlightRuns("Server: Re…", 23, [8, 9, 10, 15])).toEqual([
+  expect(highlightRuns("Server: Re…", true, [8, 9, 10, 15])).toEqual([
     { text: "Server: ", hit: false },
     { text: "Re", hit: true },
     { text: "…", hit: false },
   ]);
   applyGlyphs(true);
   try {
-    expect(highlightRuns("Server: Re...", 23, [8, 9, 10, 11, 15])).toEqual([
+    expect(highlightRuns("Server: Re...", true, [8, 9, 10, 11, 15])).toEqual([
       { text: "Server: ", hit: false },
       { text: "Re", hit: true },
+      { text: "...", hit: false },
+    ]);
+    // As long as the full label "田中さん", but still cut.
+    expect(highlightRuns("田...", true, [0, 1, 2])).toEqual([
+      { text: "田", hit: true },
       { text: "...", hit: false },
     ]);
   } finally {

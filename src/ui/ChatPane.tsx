@@ -443,13 +443,9 @@ export function ChatPane({
   // FormattedText cuts it after it parses it, so a cut link still opens the
   // whole URL.
   const usersText = buffer?.kind === "channel" ? `${buffer.users.length} users` : "";
+  const separator = ` ${glyphs.topicSeparator} `;
   const topicRoom =
-    paneWidth -
-    4 -
-    cellWidth(title) -
-    cellWidth(glyphs.topicSeparator) -
-    2 -
-    (usersText ? cellWidth(usersText) + 2 : 0);
+    paneWidth - 4 - cellWidth(title) - cellWidth(separator) - (usersText ? cellWidth(usersText) + 2 : 0);
   const topic = topicRoom >= 4 ? (buffer?.topic ?? "") : "";
   const promptLabel = server
     ? `${server.name}/${title}`
@@ -506,7 +502,7 @@ export function ChatPane({
           </span>
           {topic ? (
             <>
-              <span fg={theme.fgMuted}> {glyphs.topicSeparator} </span>
+              <span fg={theme.fgMuted}>{separator}</span>
               <FormattedText text={topic} defaultFg={theme.fgMuted} maxWidth={topicRoom} />
             </>
           ) : null}

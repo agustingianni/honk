@@ -249,13 +249,10 @@ export function truncateSegments(segments: FormattedSegment[], max: number): For
       room -= width;
       continue;
     }
-    // More text follows, so this segment must end in the ellipsis, even when
-    // the segment alone fits in the room.
-    const text =
-      room < markerWidth
-        ? truncate(glyphs.ellipsis, room, "")
-        : `${truncate(seg.text, room - markerWidth, "")}${glyphs.ellipsis}`;
-    const cut = { ...seg, text };
+    // More text follows, so this segment must end in the ellipsis. Padding it
+    // by the ellipsis width makes truncate() cut even when the segment alone
+    // fits in the room, and the cut still lands inside the segment's text.
+    const cut = { ...seg, text: truncate(seg.text + " ".repeat(markerWidth), room) };
     // A cut link is not a link: "https://github.com..." could hide the real host,
     // as in "https://github.com.evil.example/".
     if (cut.href) {

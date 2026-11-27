@@ -57,9 +57,8 @@ export function cellWidth(str: string): number {
 
 /**
  * The index in `str` of the grapheme that covers cell `col` (counted from 0),
- * or -1 when `str` ends before that cell. In "\u65e5\u672c" (two wide
- * characters) cells 0 and 1 are the first character (index 0), and cells 2 and
- * 3 are the second (index 1).
+ * or -1 when `str` ends before that cell. In "日本" cells 0 and 1 are "日"
+ * (index 0), and cells 2 and 3 are "本" (index 1).
  */
 export function indexAtCell(str: string, col: number): number {
   if (col < 0) return -1;
@@ -73,22 +72,24 @@ export function indexAtCell(str: string, col: number): number {
 }
 
 /**
- * Cuts `str` to at most `max` terminal cells, with `marker` at the end when it
- * cuts. The marker is the ellipsis glyph, so truncate("abcdefgh", 6) is "abcde"
- * and a 1-cell ellipsis, or "abc..." with --ascii.
- * It measures cells, not UTF-16 code units: 4 Japanese characters are 4 code
- * units and 8 cells. It cuts between graphemes, so an emoji with a skin tone or
- * a ZWJ stays whole. When a wide character does not fit, the result can be one
- * cell short of `max`. When `max` has no room for the whole marker, the result
- * is the part of the marker that fits.
+ * Cuts `str` to at most `max` terminal cells, with `glyphs.ellipsis` at the end
+ * when it cuts: "abcde…", or "abc..." with --ascii for `max` 6.
+ * It measures cells, not UTF-16 code units: "田中さん" is 4 code units and 8 cells.
+ * It cuts between graphemes, so an emoji with a skin tone or a ZWJ stays whole.
+ * When a wide character does not fit, the result can be one cell short of `max`.
+ * When `max` has no room for the whole ellipsis, the result is the part of it
+ * that fits: ".." for `max` 2 with --ascii.
  */
-export function truncate(str: string, max: number, marker = glyphs.ellipsis): string {
+export function truncate(str: string, max: number): string {
   if (max <= 0) return "";
+  if (PRINTABLE_ASCII.test(str) && str.length <= max) return str;
+  const marker = glyphs.ellipsis;
   const markerWidth = cellWidth(marker);
+  // Both ellipsis glyphs are 1 cell or plain ASCII, so slicing cuts by cells.
   const cut = (end: number) =>
-    markerWidth > max ? truncate(marker, max, "") : `${str.slice(0, end)}${marker}`;
-  if (PRINTABLE_ASCII.test(str)) return str.length <= max ? str : cut(max - markerWidth);
-  // Where the text ends if it gets cut: the most that fits before the marker.
+    markerWidth > max ? marker.slice(0, max) : `${str.slice(0, end)}${marker}`;
+  if (PRINTABLE_ASCII.test(str)) return cut(max - markerWidth);
+  // Where the text ends if it gets cut: the most that fits before the ellipsis.
   let cutAt = -1;
   let width = 0;
   for (const { segment, index } of graphemes.segment(str)) {
