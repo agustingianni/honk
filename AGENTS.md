@@ -52,8 +52,11 @@ message, even inside a paragraph. Wrap body text so that only the extra
 messages start that way: "A second word picks the server: #rust beta" must
 not wrap right before "server:".
 
-A pull request title follows the same rules: pull requests are squash merged,
-and the title becomes the commit message.
+A pull request is squash merged: its title becomes the commit subject, and its
+description becomes the commit body. So the title follows the rules above, the
+extra messages go at the bottom of the description, and the description is
+wrapped the same way. Any description line that starts with `feat: `, `fix: `
+or `perf: ` is a changelog line.
 
 CI checks the subjects, and so does the pre-push hook (see below).
 
@@ -61,15 +64,18 @@ CI checks the subjects, and so does the pre-push hook (see below).
 
 Each change that gets a changelog line (`feat`, `fix`, `perf`) goes on its
 own short-lived branch and lands through a pull request. The squash merge
-turns the branch into one commit, so commits on the branch can say anything,
-such as `wip`. Only the pull request title has to follow the rules above.
+turns the branch into one commit made of the pull request's title and
+description, so commits on the branch can say anything, such as `wip`.
 
 ```
 git switch -c join-key
 # work and commit
 git push -u origin join-key
-gh pr create --title "fix: /join now accepts a channel key" --fill
+gh pr create --title "fix: /join now accepts a channel key" --body-file pr.md
 ```
+
+Pass the description with `--body` or `--body-file`. `--fill` copies the
+branch's commit messages into it, and from there into the commit on main.
 
 A pull request merges only after `Typecheck and build` and
 `Check commit messages` pass. The user reviews it and then merges it, or runs
