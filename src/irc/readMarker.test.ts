@@ -189,6 +189,27 @@ test("reading a channel on another client clears its badge here", async () => {
   expect(buffer("#bun")!.firstUnreadId).toBeUndefined();
 });
 
+test("a line read on another client stays read when its MARKREAD comes in the same read", async () => {
+  await connect();
+  m.setActive("alpha", "#honk");
+  // One socket write, so honk gets both lines in one network read. fakeircd puts the
+  // time tag (now) on the first line; the marker is a little later, so it covers it.
+  const marker = Date.now() + 100;
+  irc.sendRaw(
+    `:alice!a@h PRIVMSG #bun :goose: hi\r\n:$NICK!g@h MARKREAD #bun ${timestampParam(marker)}`,
+  );
+  await until(() => buffer("#bun")!.messages.some((x) => x.text === "goose: hi"));
+  await Bun.sleep(50);
+  expect(buffer("#bun")!.unread).toBe(0);
+  expect(buffer("#bun")!.hasMention).toBe(false);
+
+  // A line newer than the marker still counts, with its mention.
+  await Bun.sleep(marker - Date.now() + 10);
+  irc.sendRaw(":bob!b@h PRIVMSG #bun :goose: still there?");
+  await until(() => buffer("#bun")!.unread === 1);
+  expect(buffer("#bun")!.hasMention).toBe(true);
+});
+
 test("without focus, the channel on screen is not marked read", async () => {
   await connect();
   m.setFocused(true);
