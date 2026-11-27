@@ -8,12 +8,13 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { compareVersions } from "../upgrade.ts";
 
 /** The schema version this honk writes, kept in `PRAGMA user_version`. */
 export const SCHEMA_VERSION = 1;
 
 /** The oldest SQLite honk keeps a Log with. */
-export const MIN_SQLITE = "3.39.0";
+const MIN_SQLITE = "3.39.0";
 
 /** Chat lines: these kinds go in the full-text index. The other kinds are Events. */
 export const CHAT_KINDS = ["message", "action", "notice", "topic"] as const;
@@ -113,26 +114,17 @@ CREATE TABLE writer (
 /** One function per version: MIGRATIONS[n] upgrades a file at version n to n + 1. */
 const MIGRATIONS: ((db: Database) => void)[] = [(db) => db.run(SCHEMA_V1)];
 
-/** -1, 0 or 1, comparing two "3.39.0" versions. */
-export function compareVersions(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0) return Math.sign(d);
-  }
-  return 0;
-}
-
 /**
  * Why this SQLite can't hold the Log, or undefined if it can: too old, or built
  * without FTS5.
  */
 export function checkSqlite(db: Database): string | undefined {
   const { v } = db.query("SELECT sqlite_version() AS v").get() as { v: string };
-  if (compareVersions(v, MIN_SQLITE) < 0) {
+  if (!(compareVersions(v, MIN_SQLITE) >= 0)) {
     return `SQLite ${v} is older than ${MIN_SQLITE}`;
   }
+  // A file that holds the Log already has an FTS5 table, so FTS5 works.
+  if (userVersion(db) > 0) return undefined;
   try {
     db.run("CREATE VIRTUAL TABLE temp.fts5_check USING fts5 (x)");
     db.run("DROP TABLE temp.fts5_check");
@@ -144,7 +136,7 @@ export function checkSqlite(db: Database): string | undefined {
 
 /** The file's schema version is newer than this honk knows. */
 export class NewerSchemaError extends Error {
-  constructor(readonly version: number) {
+  constructor(version: number) {
     super(`it is from a newer honk (schema ${version}, this honk knows ${SCHEMA_VERSION})`);
   }
 }

@@ -24,6 +24,8 @@ export const DELIVERY_TIMEOUT_MS = 15_000;
 export interface SentLine {
   bufferName: string;
   messageId: string;
+  /** The server sends the line back (echo-message, or a line to yourself). */
+  echoed?: boolean;
 }
 
 export interface DeliveryCallbacks {

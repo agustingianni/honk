@@ -13,29 +13,23 @@
  * reconnect (see logSync.ts).
  */
 
-import type { Casemapping } from "./names.ts";
-import { isChannelName, normalizeNick } from "./names.ts";
+import { DEFAULT_CASEMAPPING, isChannelName, normalizeNick } from "./names.ts";
 import type { ChatMessage } from "../types.ts";
-import { lineTime, parseLine } from "./ircLine.ts";
+import { lineTime, parseLine, tagsOf, type TimeTags } from "./ircLine.ts";
 import { HistoryBatch } from "./replay.ts";
 import type { SentLine } from "./delivery.ts";
 import type { Log, LogLine, LogNetwork } from "../log/log.ts";
 import { type Fill, LogSync } from "../log/logSync.ts";
 
 /** The IRCv3 cap that sends REDACT, so the Log can mark a deleted Line. */
-export const REDACTION_CAP = "draft/message-redaction";
+const REDACTION_CAP = "draft/message-redaction";
 
-type Tags = { time?: string; msgid?: string } | undefined;
+type Tags = TimeTags | undefined;
 
 /** A Line's time for the Log, from its time tag or honk's clock. */
 function logTime(tags: Tags): Pick<LogLine, "time" | "timeFromServer"> {
   const t = lineTime(tags);
   return { time: t.timestamp.getTime(), timeFromServer: t.timeFromServer === true };
-}
-
-/** The tags of an event payload from irc-client-ts. Its types leave them out. */
-function tagsOf(msg: unknown): Tags {
-  return (msg as { tags?: Tags }).tags;
 }
 
 /** A Chat line as IrcManager hands it over. */
@@ -67,14 +61,14 @@ export interface LogHost {
   newestServerTime(serverId: string): number | undefined;
   /** True if the connection has this IRCv3 cap. */
   hasCap(serverId: string, cap: string): boolean;
-  /** Sends CHATHISTORY AFTER <target> timestamp=<after> FILL_LIMIT, with a label if given. */
-  requestHistoryAfter(serverId: string, target: string, after: number, label?: string): void;
+  /**
+   * Sends CHATHISTORY AFTER <target> timestamp=<fill.after> FILL_LIMIT, and keeps it with
+   * the other History requests. Its batch comes back to `history` with this fill.
+   */
+  requestFill(serverId: string, target: string, fill: Fill): void;
   /** Shows a line in the server's *status. */
   notice(serverId: string, text: string): void;
 }
-
-/** Counts the labels of the Log's own History requests. */
-let fillLabels = 0;
 
 /**
  * One CHATHISTORY batch on its way to the Log. `isFill` is true for the Log's own
@@ -89,11 +83,6 @@ export interface LogHistory {
 
 export class LogRecorder {
   private readonly sync: LogSync;
-  /**
-   * Your lines whose Echo the Log waits for. The others enter the Log when the delivery
-   * check confirms them. See ADR 0003, rule 5.
-   */
-  private expectsEcho = new Set<string>();
 
   constructor(
     private readonly log: Log,
@@ -112,9 +101,12 @@ export class LogRecorder {
     this.log.setNetwork(serverId, info);
   }
 
-  /** A connection registered. A bouncer names its network in the 005 lines after this. */
-  registered(serverId: string, casemapping: Casemapping): void {
-    this.log.setNetwork(serverId, { bouncerNetId: "", casemapping });
+  /**
+   * A connection registered. Its 005 lines come next: CASEMAPPING, and BOUNCER_NETID
+   * from a bouncer. Until then the defaults hold.
+   */
+  registered(serverId: string): void {
+    this.log.setNetwork(serverId, { bouncerNetId: "", casemapping: DEFAULT_CASEMAPPING });
     if (this.host.hasCap(serverId, "draft/chathistory")) this.sync.start(serverId);
   }
 
@@ -175,13 +167,11 @@ export class LogRecorder {
   }
 
   /**
-   * A CHATHISTORY batch for `target` (empty for one without a target) begins.
-   * `label` is the label it answers, if any.
+   * A CHATHISTORY batch for `target` (empty for one without a target) begins. `fill`:
+   * the Log's own request it answers, if it is one.
    */
-  history(serverId: string, target: string, label: string | undefined): LogHistory {
+  history(serverId: string, target: string, fill: Fill | undefined): LogHistory {
     const targetKey = target ? this.host.key(serverId, target) : undefined;
-    const fill =
-      targetKey === undefined ? undefined : this.sync.takeFill(serverId, label, targetKey);
     // The Replay counts of this batch, per Buffer. See replay.ts.
     const batches = new Map<string, HistoryBatch>();
     // The server times of its Lines, for the gap check.
@@ -217,39 +207,25 @@ export class LogRecorder {
         `The log misses older lines of ${target}: honk stopped asking the server after ${fill!.pages} pages. It asks again at the next connect.`,
       );
     } else if (step.type === "next") {
-      const label = this.host.hasCap(serverId, "labeled-response")
-        ? `log-${++fillLabels}`
-        : undefined;
-      this.host.requestHistoryAfter(serverId, target, step.request.after, label);
-      this.sync.fillSent(serverId, targetKey, label, step.request);
+      this.host.requestFill(serverId, target, step.request);
     }
   }
 
-  /** You sent line `messageId`. `echoed`: the server will send it back. */
-  sent(messageId: string, echoed: boolean): void {
-    if (echoed) this.expectsEcho.add(messageId);
-  }
-
-  /** The Echo of your line arrived and the screen took its text, msgid and time. */
-  echoed(serverId: string, bufferName: string, messageId: string): void {
-    this.ownLine(serverId, bufferName, messageId);
-  }
-
-  /** The delivery check confirmed these lines. Lines waiting for an Echo wait for it. */
+  /**
+   * The delivery check confirmed these lines. A line the server echoes enters the Log
+   * with its Echo instead, with the server's text and msgid (ADR 0003, rule 5).
+   */
   delivered(serverId: string, lines: SentLine[]): void {
     for (const line of lines) {
-      if (!this.expectsEcho.delete(line.messageId)) {
-        this.ownLine(serverId, line.bufferName, line.messageId);
-      }
+      if (!line.echoed) this.echoed(serverId, line.bufferName, line.messageId);
     }
   }
 
-  /** These lines may not have arrived: they never enter the Log. */
-  failed(lines: SentLine[]): void {
-    for (const line of lines) this.expectsEcho.delete(line.messageId);
-  }
-
-  private ownLine(serverId: string, bufferName: string, messageId: string): void {
+  /**
+   * Your line `messageId` is confirmed: its Echo arrived and the screen took its text,
+   * msgid and time, or the delivery check confirmed a line with no Echo.
+   */
+  echoed(serverId: string, bufferName: string, messageId: string): void {
     const m = this.host.shownLine(serverId, bufferName, messageId);
     if (!m || (m.kind !== "message" && m.kind !== "action")) return;
     this.add(serverId, bufferName, {
@@ -272,6 +248,6 @@ export class LogRecorder {
     const { tags, source, params } = parseLine(rawLine);
     const msgid = params[1];
     if (!msgid) return;
-    this.log.redact(serverId, msgid, normalizeNick(source?.split("!")[0]), logTime(tags).time);
+    this.log.redact(serverId, msgid, normalizeNick(source), logTime(tags).time);
   }
 }

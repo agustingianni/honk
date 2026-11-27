@@ -4,7 +4,7 @@ import { App } from "./App.tsx";
 import { cliAction, HELP, unknownCommandText } from "./cli.ts";
 import { ConfigError, defaultConfigPath, loadConfig, saveThemeSetting } from "./config.ts";
 import { IrcManager } from "./irc/manager.ts";
-import { DEFAULT_LOG_SETTINGS, defaultLogPath, type Log, openLog } from "./log/log.ts";
+import { DEFAULT_LOG_SETTINGS, defaultLogPath, openLog } from "./log/log.ts";
 import { Notifier } from "./notify.ts";
 import { chooseNotificationProtocol, parseNotificationSetting, readTmuxInfo } from "./notifyProtocol.ts";
 import { applyTheme } from "./theme.ts";
@@ -67,17 +67,13 @@ if (!g.__ircHot) {
   const config = loadConfigOrExit();
   const demo = process.argv.includes("--demo");
   // The Log of your chats on disk. Not for the demo. See src/log/log.ts.
-  let log: Log | undefined;
-  const logNotices: string[] = [];
-  if (!demo) {
-    const opened = openLog(defaultLogPath(), config.logs ?? DEFAULT_LOG_SETTINGS, {
-      onError: (text) => manager.addAppNotice(text),
-    });
-    log = opened.log;
-    logNotices.push(...opened.notices);
-    // Writes the Lines still waiting, however honk exits. bun:sqlite is synchronous.
-    if (log) process.on("exit", () => log?.close());
-  }
+  const { log, notices: logNotices } = demo
+    ? { log: undefined, notices: [] }
+    : openLog(defaultLogPath(), config.logs ?? DEFAULT_LOG_SETTINGS, {
+        onError: (text) => manager.addAppNotice(text),
+      });
+  // Writes the Lines still waiting, however honk exits. bun:sqlite is synchronous.
+  if (log) process.on("exit", () => log.close());
   const manager = new IrcManager({ log });
 
   if (demo) {

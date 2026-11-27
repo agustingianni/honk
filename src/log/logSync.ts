@@ -36,8 +36,12 @@ export const SETTLE_MS = 15_000;
 /** How often the marker moves while connected. */
 export const MARK_EVERY_MS = 10_000;
 
-/** A Log-only History request to send: CHATHISTORY AFTER <target> timestamp=<after>. */
-export interface FillRequest {
+/**
+ * A Log-only History request: CHATHISTORY AFTER <target> timestamp=<after>. IrcManager
+ * keeps the ones it sent with its other History requests, so their batch (or FAIL)
+ * finds them.
+ */
+export interface Fill {
   after: number;
   /** The oldest Line the screen's batch had: the gap ends there. */
   until: number;
@@ -45,17 +49,10 @@ export interface FillRequest {
   pages: number;
 }
 
-/** A fill request that was sent and waits for its batch. */
-export interface Fill extends FillRequest {
-  /** The Buffer, as nameKey. */
-  target: string;
-  label?: string;
-}
-
 /** What `batchEnded` says to do next. */
-export type FillStep =
+type FillStep =
   | { type: "done" }
-  | { type: "next"; request: FillRequest }
+  | { type: "next"; request: Fill }
   /** MAX_FILL_PAGES pages came and the gap is still open. */
   | { type: "gave-up" };
 
@@ -65,9 +62,8 @@ interface ServerSync {
   /** The marker when this connection began; undefined if the Network has none yet. */
   marker?: number;
   registeredAt: number;
-  /** Buffers whose gap is not filled yet, as nameKey. */
+  /** Buffers whose gap is not filled yet, as nameKey. A fill keeps its Buffer here. */
   pending: Set<string>;
-  fills: Fill[];
   synced: boolean;
   lastMarkAt: number;
 }
@@ -91,7 +87,6 @@ export class LogSync {
       markerRead: false,
       registeredAt: this.clock.now(),
       pending: new Set(),
-      fills: [],
       synced: false,
       lastMarkAt: 0,
     });
@@ -122,26 +117,6 @@ export class LogSync {
     const s = this.servers.get(serverId);
     if (!s || s.synced || this.marker(serverId, s) === undefined) return;
     s.pending.add(target);
-  }
-
-  /** Remembers a fill request for `target` that was just sent with `label`. */
-  fillSent(serverId: string, target: string, label: string | undefined, request: FillRequest): void {
-    this.servers.get(serverId)?.fills.push({ ...request, target, label });
-  }
-
-  /**
-   * The fill that a History batch for `target` answers, taken out of the waiting ones,
-   * or undefined if the batch is not a fill. A labeled batch matches by label, an
-   * unlabeled one by target.
-   */
-  takeFill(serverId: string, label: string | undefined, target: string): Fill | undefined {
-    const fills = this.servers.get(serverId)?.fills;
-    if (!fills) return undefined;
-    const i =
-      label !== undefined
-        ? fills.findIndex((f) => f.label === label)
-        : fills.findIndex((f) => f.label === undefined && f.target === target);
-    return i === -1 ? undefined : fills.splice(i, 1)[0];
   }
 
   /**
@@ -191,7 +166,7 @@ export class LogSync {
   moveMarker(serverId: string): void {
     const s = this.servers.get(serverId);
     const time = this.serverTime(serverId);
-    if (!s || time === undefined || s.pending.size > 0 || s.fills.length > 0) return;
+    if (!s || time === undefined || s.pending.size > 0) return;
     const now = this.clock.now();
     if (now - s.registeredAt < SETTLE_MS) return;
     if (s.synced && now - s.lastMarkAt < MARK_EVERY_MS) return;

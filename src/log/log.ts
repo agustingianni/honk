@@ -49,8 +49,8 @@ export const DEFAULT_LOG_SETTINGS: LogSettings = {
   exclude: [],
 };
 
-export type ChatKind = (typeof CHAT_KINDS)[number];
-export type EventKind = (typeof EVENT_KINDS)[number];
+type ChatKind = (typeof CHAT_KINDS)[number];
+type EventKind = (typeof EVENT_KINDS)[number];
 
 /** One Line for the Log. */
 export interface LogLine {
@@ -111,6 +111,8 @@ const PRUNE_BATCH = 500;
  */
 const MAX_EARLY_REDACTIONS = 500;
 const PRUNE_PAUSE_MS = 50;
+/** The first retention run waits out the connect and join burst at startup. */
+const FIRST_PRUNE_MS = 60_000;
 /** How often old Lines are removed while honk runs. */
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -119,6 +121,8 @@ const MATCH_WINDOW_MS = 2000;
 
 interface NetworkSnapshot extends LogNetwork {
   serverId: string;
+  /** The `logs.exclude` and `logExclude` names, folded with `casemapping`. */
+  excludeKeys: Set<string>;
 }
 
 type Op =
@@ -168,7 +172,7 @@ function processAlive(pid: number): boolean {
 }
 
 /** What `openLog` takes besides the path and the settings. Tests replace the defaults. */
-export interface OpenOptions {
+interface OpenOptions {
   pid?: number;
   clock?: Clock;
   /** Whether a process runs. Tests replace it. */
@@ -237,8 +241,10 @@ export class Log {
   private pruneTimer: unknown;
   private closed = false;
   private networks = new Map<string, NetworkSnapshot>();
-  private networkIds = new Map<string, number>();
-  private bufferIds = new Map<string, number>();
+  /** Row ids, cached. A snapshot is replaced whenever its Network changes. */
+  private networkIds = new WeakMap<NetworkSnapshot, number>();
+  /** By network id and Buffer key: the row id and the display name it was written with. */
+  private bufferIds = new Map<string, { id: number; display: string }>();
   /** Redactions whose Line is not in the Log yet, by network id and msgid. */
   private earlyRedactions = new Map<string, { by: string; time: number }>();
 
@@ -251,7 +257,7 @@ export class Log {
     this.pid = options.pid ?? process.pid;
     this.onError = options.onError ?? (() => {});
     this.otherWriter = this.takeWriter(options.isAlive ?? processAlive);
-    if (this.writable) this.schedulePrune(0);
+    if (this.writable) this.schedulePrune(FIRST_PRUNE_MS);
   }
 
   /** False while another honk writes the file: then nothing is stored. */
@@ -280,27 +286,23 @@ export class Log {
 
   /** Updates what the Log knows about a Server's Network. Lines added later use it. */
   setNetwork(serverId: string, info: Partial<LogNetwork>): void {
-    const prev = this.networkOf(serverId);
-    this.networks.set(serverId, { ...prev, ...info, serverId });
+    this.networks.set(serverId, this.snapshot(serverId, { ...this.networkOf(serverId), ...info }));
   }
 
   private networkOf(serverId: string): NetworkSnapshot {
-    return (
-      this.networks.get(serverId) ?? {
-        serverId,
-        bouncerNetId: "",
-        display: serverId,
-        casemapping: DEFAULT_CASEMAPPING,
-        exclude: [],
-      }
-    );
+    let net = this.networks.get(serverId);
+    if (!net) {
+      const fresh = { bouncerNetId: "", display: serverId, casemapping: DEFAULT_CASEMAPPING, exclude: [] };
+      this.networks.set(serverId, (net = this.snapshot(serverId, fresh)));
+    }
+    return net;
   }
 
-  /** True if a Buffer called `name` is never logged on this Server. */
-  private excluded(net: NetworkSnapshot, key: string): boolean {
-    return [...this.settings.exclude, ...net.exclude].some(
-      (name) => nameKey(name, net.casemapping) === key,
-    );
+  /** A Network as Lines carry it, with its exclude names folded once. */
+  private snapshot(serverId: string, net: LogNetwork): NetworkSnapshot {
+    const names = [...this.settings.exclude, ...net.exclude];
+    const excludeKeys = new Set(names.map((name) => nameKey(name, net.casemapping)));
+    return { ...net, serverId, excludeKeys };
   }
 
   /**
@@ -312,13 +314,12 @@ export class Log {
     if (!this.writable) return;
     const net = this.networkOf(serverId);
     const key = nameKey(buffer.name, net.casemapping);
-    if (this.excluded(net, key)) return;
+    if (net.excludeKeys.has(key)) return;
     this.push({ type: "line", net, buffer: { ...buffer, key }, line, batch });
   }
 
   /** Marks the Line with `msgid` on this Server as redacted by `by`. It stays in the Log. */
   redact(serverId: string, msgid: string, by: string, time: number): void {
-    if (!this.writable) return;
     this.push({ type: "redact", net: this.networkOf(serverId), msgid, by, time });
   }
 
@@ -327,7 +328,6 @@ export class Log {
    * the Log. It never moves back. Written with the Lines added before it.
    */
   setSyncMarker(serverId: string, time: number): void {
-    if (!this.writable) return;
     this.push({ type: "sync", net: this.networkOf(serverId), time });
   }
 
@@ -342,6 +342,7 @@ export class Log {
   }
 
   private push(op: Op): void {
+    if (!this.writable) return;
     this.queue.push(op);
     if (this.queue.length >= FLUSH_LINES) this.flush();
     else if (this.flushTimer === undefined) {
@@ -367,7 +368,7 @@ export class Log {
       })();
     } catch (err) {
       // The cached ids may name rows the rollback removed.
-      this.networkIds.clear();
+      this.networkIds = new WeakMap();
       this.bufferIds.clear();
       this.report("write", `could not write to the log: ${(err as Error).message}`);
     }
@@ -394,38 +395,35 @@ export class Log {
     }
   }
 
+  /** The row id of the Network, written or updated when the snapshot is new. */
   private networkId(net: NetworkSnapshot): number {
-    const cacheKey = [net.serverId, net.bouncerNetId, net.display, net.casemapping].join("\0");
-    const cached = this.networkIds.get(cacheKey);
+    const cached = this.networkIds.get(net);
     if (cached !== undefined) return cached;
-    this.db
+    const { id } = this.db
       .query(
         `INSERT INTO network (config_id, bouncer_net, display, casemapping) VALUES (?, ?, ?, ?)
          ON CONFLICT (config_id, bouncer_net)
-         DO UPDATE SET display = excluded.display, casemapping = excluded.casemapping`,
+         DO UPDATE SET display = excluded.display, casemapping = excluded.casemapping
+         RETURNING id`,
       )
-      .run(net.serverId, net.bouncerNetId, net.display, net.casemapping);
-    const { id } = this.db
-      .query("SELECT id FROM network WHERE config_id = ? AND bouncer_net = ?")
-      .get(net.serverId, net.bouncerNetId) as { id: number };
-    this.networkIds.set(cacheKey, id);
+      .get(net.serverId, net.bouncerNetId, net.display, net.casemapping) as { id: number };
+    this.networkIds.set(net, id);
     return id;
   }
 
+  /** The row id of the Buffer, written again when its display name changed. */
   private bufferId(networkId: number, buffer: LogBuffer & { key: string }): number {
-    const cacheKey = [networkId, buffer.key, buffer.name].join("\0");
+    const cacheKey = `${networkId}\0${buffer.key}`;
     const cached = this.bufferIds.get(cacheKey);
-    if (cached !== undefined) return cached;
-    this.db
+    if (cached?.display === buffer.name) return cached.id;
+    const { id } = this.db
       .query(
         `INSERT INTO buffer (network_id, name, display, kind) VALUES (?, ?, ?, ?)
-         ON CONFLICT (network_id, name) DO UPDATE SET display = excluded.display`,
+         ON CONFLICT (network_id, name) DO UPDATE SET display = excluded.display
+         RETURNING id`,
       )
-      .run(networkId, buffer.key, buffer.name, buffer.kind);
-    const { id } = this.db
-      .query("SELECT id FROM buffer WHERE network_id = ? AND name = ?")
-      .get(networkId, buffer.key) as { id: number };
-    this.bufferIds.set(cacheKey, id);
+      .get(networkId, buffer.key, buffer.name, buffer.kind) as { id: number };
+    this.bufferIds.set(cacheKey, { id, display: buffer.name });
     return id;
   }
 
@@ -516,13 +514,15 @@ export class Log {
            AND buffer_id IN (SELECT id FROM buffer WHERE network_id = ?)`,
       )
       .run(time, by, msgid, networkId);
+    if (changes > 0) return;
+    // Already redacted, or not in the Log yet.
     const known = this.db
       .query(
         `SELECT 1 FROM message WHERE msgid = ?
            AND buffer_id IN (SELECT id FROM buffer WHERE network_id = ?)`,
       )
       .get(msgid, networkId);
-    if (changes > 0 || known) return;
+    if (known) return;
     this.earlyRedactions.set(`${networkId}\0${msgid}`, { by, time });
     if (this.earlyRedactions.size > MAX_EARLY_REDACTIONS) {
       this.earlyRedactions.delete(this.earlyRedactions.keys().next().value!);

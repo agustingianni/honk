@@ -2,19 +2,12 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   checkSqlite,
-  compareVersions,
   NewerSchemaError,
   prepare,
   SCHEMA_VERSION,
   sqlList,
   userVersion,
 } from "./schema.ts";
-
-test("compareVersions compares each number, not the text", () => {
-  expect(compareVersions("3.39.0", "3.39.0")).toBe(0);
-  expect(compareVersions("3.9.0", "3.39.0")).toBe(-1);
-  expect(compareVersions("3.40", "3.39.4")).toBe(1);
-});
 
 test("this SQLite can hold the Log", () => {
   expect(checkSqlite(new Database(":memory:"))).toBeUndefined();

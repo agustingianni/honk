@@ -18,6 +18,7 @@ import {
   casemappingOf,
   DEFAULT_CASEMAPPING,
   isChannelName,
+  isUserSender,
   NICK_CHAR,
   normalizeNick,
   nameKey,
@@ -62,7 +63,14 @@ import {
   whoisLines,
   type Endpoint,
 } from "./replies.ts";
-import { commandOf, lineTime, MAX_LINE_BYTES, parseLine, timestampParam } from "./ircLine.ts";
+import {
+  commandOf,
+  lineTime,
+  MAX_LINE_BYTES,
+  parseLine,
+  tagsOf,
+  timestampParam,
+} from "./ircLine.ts";
 import {
   isAfterMarker,
   isMarkedRead,
@@ -75,7 +83,7 @@ import {
 } from "./readMarker.ts";
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
 import type { Log } from "../log/log.ts";
-import { FILL_LIMIT } from "../log/logSync.ts";
+import { FILL_LIMIT, type Fill } from "../log/logSync.ts";
 import { LogRecorder } from "./logRecorder.ts";
 
 /** Messages kept per buffer from live traffic. */
@@ -323,19 +331,28 @@ function requestHistory(
   else void client.send({ label }, command, ...params);
 }
 
-/** A /history request waiting for its reply. */
+/** A History request waiting for its reply: a /history, or a fill for the Log. */
 interface HistoryRequest {
-  /** The buffer it was typed in, as nameKey. */
+  /** The buffer it was typed in, or the one it fills, as nameKey. */
   target: string;
   /**
    * The label tag sent with it, when the server has labeled-response. The server copies
    * it onto the reply, so a FAIL or a batch matches this request and no other.
    */
   label?: string;
+  /** Set for the Log's own request: its Lines go to the Log only. See logSync.ts. */
+  fill?: Fill;
 }
 
-/** Counts the labels sent with /history, so each one is new on its connection. */
+/** Counts the labels sent with History requests, so each one is new on its connection. */
 let historyLabels = 0;
+
+/** A new label for a History request, or none if the server has no labeled-response. */
+function historyLabel(client: Client): string | undefined {
+  return client.state.caps.enabled.has("labeled-response")
+    ? `history-${++historyLabels}`
+    : undefined;
+}
 
 /**
  * Takes the /history request that a history batch answers out of `pending`. A labeled
@@ -1232,14 +1249,16 @@ export class IrcManager {
     });
 
     // Anything from the server shows the connection worked until now. See missed.ts.
-    // Lines inside a batch don't come here: the batch plugin keeps them.
     client.on("raw", (msg) => {
       if (isStale()) return;
       const ctrl = this.getControl(serverId);
       ctrl.lastHeardAt = Date.now();
-      const time = lineTime((msg as { tags?: { time?: string } }).tags);
-      if (time.timeFromServer) {
-        ctrl.newestServerTime = Math.max(ctrl.newestServerTime ?? 0, time.timestamp.getTime());
+      // For the Log's Sync marker. Lines inside a batch don't come here: the batch
+      // plugin keeps them.
+      const time = this.logRecorder && tagsOf(msg)?.time;
+      if (time) {
+        const ms = Date.parse(time);
+        if (ms > (ctrl.newestServerTime ?? 0)) ctrl.newestServerTime = ms;
       }
     });
 
@@ -1271,7 +1290,7 @@ export class IrcManager {
       // Each connection starts from the default, whatever an earlier one said: a server
       // that sends no CASEMAPPING uses rfc1459. The 005 lines that follow may change it.
       server.casemapping = DEFAULT_CASEMAPPING;
-      this.logRecorder?.registered(serverId, DEFAULT_CASEMAPPING);
+      this.logRecorder?.registered(serverId);
       const isReconnect = ctrl.hasEverConnected;
       ctrl.hasEverConnected = true;
       this.readMarkerTracker.onConnected(serverId);
@@ -1605,13 +1624,12 @@ export class IrcManager {
       const label =
         batch.params.tags?.label ?? (parentRef && client.state.batches.get(parentRef)?.tags?.label);
       const ctrl = this.getControl(serverId);
+      const request = batchTarget
+        ? takeHistoryRequest(ctrl.historyRequests, label, this.key(serverId, batchTarget))
+        : undefined;
       // A request of the Log's own goes to the Log only, not the screen. See logRecorder.ts.
-      const logHistory = this.logRecorder?.history(serverId, batchTarget ?? "", label);
-      if (
-        !logHistory?.isFill &&
-        batchTarget &&
-        takeHistoryRequest(ctrl.historyRequests, label, this.key(serverId, batchTarget))
-      ) {
+      const logHistory = this.logRecorder?.history(serverId, batchTarget ?? "", request?.fill);
+      if (request && !request.fill && batchTarget) {
         const any = batch.params.messages.some(
           (m) => m.command === "privmsg" || m.command === "notice",
         );
@@ -1749,18 +1767,8 @@ export class IrcManager {
         ? msg.params.target
         : STATUS_BUFFER;
       const isHistory = isHistoryBatch(tags);
-      // The screen shows a notice to you in *status. The Log files it in the DM with
-      // the sender; a notice from the server itself ("irc.libera.chat") stays out.
       const self = this.same(serverId, from, this.servers.get(serverId)?.nick);
-      const logTarget = isChannelName(msg.params.target)
-        ? msg.params.target
-        : self
-          ? msg.params.target
-          : this.same(serverId, msg.params.target, this.servers.get(serverId)?.nick) &&
-              msg.source?.name &&
-              !msg.source.name.includes(".")
-            ? from
-            : undefined;
+      const logTarget = this.noticeLogTarget(serverId, msg.params.target, from, self);
       if (!isHistory && logTarget) {
         this.logRecorder?.chat(serverId, logTarget, {
           kind: "notice",
@@ -1947,16 +1955,13 @@ export class IrcManager {
     message.delivery = "pending";
     this.pushMessage(serverId, target, message);
     const bufferName = this.bufferKey(serverId, target);
-    const line: SentLine = { bufferName, messageId: message.id };
-    this.delivery.track(serverId, line, (token) => void client.send("PING", token));
     // With echo-message the server sends the line back. A line to yourself comes back
     // even without it; a second copy of it is dropped by msgid in pushMessage.
     const echoed =
       client.state.caps.enabled.has("echo-message") || this.same(serverId, target, nick);
-    if (echoed) {
-      this.echoes.add(serverId, this.key(serverId, bufferName), message.id, parts);
-    }
-    this.logRecorder?.sent(message.id, echoed);
+    const line: SentLine = { bufferName, messageId: message.id, echoed };
+    this.delivery.track(serverId, line, (token) => void client.send("PING", token));
+    if (echoed) this.echoes.add(serverId, this.key(serverId, bufferName), message.id, parts);
   }
 
   /**
@@ -2036,13 +2041,11 @@ export class IrcManager {
   private failPendingLines(serverId: string): void {
     this.echoes.drop(serverId);
     const lines = this.delivery.drop(serverId);
-    this.logRecorder?.failed(lines);
     this.setDelivery(serverId, lines, "failed");
   }
 
   /** No PONG in time: the connection is dead even though the socket looks open. */
   private deliveryTimedOut(serverId: string, lines: SentLine[]): void {
-    this.logRecorder?.failed(lines);
     this.setDelivery(serverId, lines, "failed");
     const client = this.clients.get(serverId);
     const server = this.servers.get(serverId);
@@ -2314,6 +2317,22 @@ export class IrcManager {
   }
 
   /**
+   * Where the Log files a notice: its channel, or the DM with the other person. The
+   * screen shows a notice to you in *status; the Log keeps it in the DM with the
+   * sender. A notice from the server itself ("irc.libera.chat") stays out.
+   */
+  private noticeLogTarget(
+    serverId: string,
+    target: string,
+    from: string,
+    self: boolean,
+  ): string | undefined {
+    if (isChannelName(target) || self) return target;
+    const toYou = this.same(serverId, target, this.servers.get(serverId)?.nick);
+    return toYou && isUserSender(from) ? from : undefined;
+  }
+
+  /**
    * True if a line with `text` in `target` is a Mention: it names your nick, or it is
    * in a DM. Your own lines never are; the callers check that.
    */
@@ -2340,11 +2359,16 @@ export class IrcManager {
           ?.buffers[bufferName]?.messages.findLast((m) => m.id === messageId),
       newestServerTime: (serverId) => this.controls.get(serverId)?.newestServerTime,
       hasCap: (serverId, cap) => this.clients.get(serverId)?.state.caps.enabled.has(cap) === true,
-      requestHistoryAfter: (serverId, target, after, label) => {
+      requestFill: (serverId, target, fill) => {
         const client = this.clients.get(serverId);
-        if (client) {
-          requestHistory(client, "AFTER", target, timestampParam(after), FILL_LIMIT, label);
-        }
+        if (!client) return;
+        const label = historyLabel(client);
+        this.getControl(serverId).historyRequests.push({
+          target: this.key(serverId, target),
+          label,
+          fill,
+        });
+        requestHistory(client, "AFTER", target, timestampParam(fill.after), FILL_LIMIT, label);
       },
       notice: (serverId, text) =>
         this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text)),
@@ -3265,9 +3289,7 @@ export class IrcManager {
         const oldest = buf?.messages.find(
           (m) => m.kind === "message" || m.kind === "action" || m.kind === "notice",
         );
-        const label = client.state.caps.enabled.has("labeled-response")
-          ? `history-${++historyLabels}`
-          : undefined;
+        const label = historyLabel(client);
         this.getControl(server.id).historyRequests.push({
           target: this.key(server.id, activeBuffer),
           label,

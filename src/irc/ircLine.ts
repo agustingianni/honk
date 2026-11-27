@@ -166,6 +166,14 @@ export function timestampParam(ms: number): string {
   return `timestamp=${new Date(ms).toISOString()}`;
 }
 
+/** The IRCv3 tags honk reads from a line. */
+export type TimeTags = { time?: string; msgid?: string };
+
+/** The tags of an event payload from irc-client-ts. Its types leave them out. */
+export function tagsOf(msg: unknown): TimeTags | undefined {
+  return (msg as { tags?: TimeTags }).tags;
+}
+
 /**
  * When a line was sent: its IRCv3 server-time tag, or now when it has none.
  * A tag that does not parse also gives now, because an Invalid Date breaks
