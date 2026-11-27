@@ -165,7 +165,7 @@ export class ReadMarkerTracker {
    * When you started reading the buffer on screen (ms): the switch to it, or later if
    * you came back after that. See onActiveChanged and startReading.
    */
-  private activeSince = 0;
+  private readingSince = 0;
   /**
    * Per server, how far you have read each buffer (ms), by buffer name (see nameKey),
    * as the server last said in a MARKREAD. Kept across reconnects.
@@ -218,15 +218,16 @@ export class ReadMarkerTracker {
    * before, when the switch went to a different one, and null otherwise.
    */
   onActiveChanged(leaving: ActiveBuffer | null): void {
-    if (leaving) {
-      // Its last lines were on screen long enough to read: mark them now. A buffer you
-      // only flipped past is not marked. The timer starts over for the new buffer.
-      const now = this.clock.now();
-      if (now - this.activeSince >= this.delayMs) this.send(leaving.serverId, leaving.buffer);
-      this.stop();
-      this.activeSince = now;
+    if (!leaving) {
+      this.schedule();
+      return;
     }
-    this.schedule();
+    // You read its last lines long enough: mark them now. A buffer you only flipped
+    // past is not marked. Reading, and the timer, start over for the new buffer.
+    if (this.clock.now() - this.readingSince >= this.delayMs) {
+      this.send(leaving.serverId, leaving.buffer);
+    }
+    this.startReading();
   }
 
   /** A new connection to the server registered: send again what the old one may have lost. */
@@ -273,14 +274,14 @@ export class ReadMarkerTracker {
   }
 
   /**
-   * You came back: focus returned, or a key press after a time without one. The
-   * buffer on screen counts as read only once you have been back for `delayMs`, the
-   * same as after a switch, so the lines that came while you were away are not marked
-   * when you come back and switch away at once. A timer set while you were away
-   * starts over too.
+   * You started reading the buffer on screen: you switched to it, focus came back, or
+   * you pressed a key after a time without one. It counts as read only once you have
+   * read it for `delayMs` since then, so the lines that came while you were away are
+   * not marked when you come back and switch away at once. A timer set before starts
+   * over too.
    */
   private startReading(): void {
-    this.activeSince = this.clock.now();
+    this.readingSince = this.clock.now();
     this.stop();
     this.schedule();
   }
