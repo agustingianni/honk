@@ -145,6 +145,25 @@ describe("schemeToTheme", () => {
     expect(contrast(t.bgInput, t.bgFooter)).toBeGreaterThan(1.04);
   });
 
+  test("makes a faint or dark omnibox selection a visible step toward the text", () => {
+    const lighter = (a: string, b: string) => contrast(a, "#000000") > contrast(b, "#000000");
+    for (const [variant, palette, towardWhite] of [
+      // base02 is the same as the background.
+      ["dark", { ...PALETTE16, base02: "#1e1e2e" }, true],
+      // base02 is darker than the omnibox: clear contrast, but a dark hole.
+      ["dark", { ...PALETTE16, base02: "#0a0a14" }, true],
+      ["light", { ...PALETTE16, base00: "#ffffff", base05: "#1f2328", base02: "#ffffff" }, false],
+    ] as const) {
+      const r = checkScheme({ ...scheme16(palette), variant });
+      if (!r.ok) throw new Error(r.problems.join("; "));
+      const t = schemeToTheme(r.scheme);
+      const shown = contrast(t.bgOverlaySel, t.bgOverlay);
+      expect(shown).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
+      expect(shown).toBeLessThan(MIN_SELECTION_CONTRAST + 0.03);
+      expect(lighter(t.bgOverlaySel, t.bgOverlay)).toBe(towardWhite);
+    }
+  });
+
   test("moves a hard-to-read accent toward the text until it reaches 3:1", () => {
     // A dark blue accent on a dark background.
     const r = checkScheme(scheme16({ ...PALETTE16, base0D: "#1e3050" }));

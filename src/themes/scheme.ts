@@ -158,10 +158,13 @@ export function schemeToTheme(scheme: Scheme): Theme {
   const selection = nearBg(p.base02) ?? mix(bg, p.base02!, 0.4);
   const overlay = mix(bg, fg, 0.05);
   // The selected omnibox row must stand out from the other rows (broadcast's
-  // selection is 1.015:1 on the omnibox). When it does not, step from the
-  // omnibox color toward the text color instead.
+  // selection is 1.015:1 on the omnibox), on the side of the text color: in a
+  // dark theme a darker row looks like a hole, not a highlight. When it does
+  // not, step from the omnibox color toward the text color instead.
+  const towardText =
+    luminance(selection) > luminance(overlay) === luminance(fg) > luminance(overlay);
   const overlaySel =
-    contrast(selection, overlay) >= MIN_SELECTION_CONTRAST
+    towardText && contrast(selection, overlay) >= MIN_SELECTION_CONTRAST
       ? selection
       : smallestStep(overlay, fg, MIN_SELECTION_CONTRAST);
 
