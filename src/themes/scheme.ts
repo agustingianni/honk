@@ -206,7 +206,12 @@ export function schemeToTheme(scheme: Scheme): Theme {
   // Accents are used as text (channel names, notices, links), so they must
   // be readable.
   const readable = (color: string) => stepUntil(color, fgBright, surfaces, MIN_ACCENT_CONTRAST);
-  const fgMuted = stepUntil(muted, fg, surfaces, MIN_MUTED_CONTRAST);
+  // Muted text must be weaker than secondary text. When base03 is too faint
+  // to use, the fallback gray can be brighter than the scheme's own base04
+  // (carbonfox), so start half-way from the secondary text to the background.
+  const mutedStart =
+    contrast(muted, bg) < contrast(fgSecondary, bg) ? muted : mix(fgSecondary, bg, 0.5);
+  const fgMuted = stepUntil(mutedStart, fg, surfaces, MIN_MUTED_CONTRAST);
 
   const accents = [
     p.base08, p.base09, p.base0A, p.base0B, p.base0C, p.base0D, p.base0E,

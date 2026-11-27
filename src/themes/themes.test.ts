@@ -75,6 +75,10 @@ describe("bundled themes", () => {
         const [worst, surface] = worstContrast(t, color);
         expect(worst, `${label} on ${surface}`).toBeGreaterThanOrEqual(min);
       }
+      // Muted text (timestamps, hints) is weaker than secondary text (the nicklist).
+      expect(contrast(t.fgMuted, t.bgBase), "fgMuted than fgSecondary").toBeLessThan(
+        contrast(t.fgSecondary, t.bgBase),
+      );
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);
       // The active channel, and the omnibox row that Enter picks, must be easy to see.
