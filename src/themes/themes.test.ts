@@ -16,6 +16,7 @@ import {
   MIN_ACCENT_CONTRAST,
   MIN_HOVER_CONTRAST,
   MIN_PANEL_CONTRAST,
+  MIN_SELECTION_CONTRAST,
   MIN_TEXT_CONTRAST,
   mix,
   schemeToTheme,
@@ -58,10 +59,11 @@ describe("bundled themes", () => {
       }
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
       expect(t.nickPalette.length).toBeGreaterThanOrEqual(4);
+      // The selected omnibox row is the one Enter picks: it must be easy to see.
+      expect(contrast(t.bgOverlaySel, t.bgOverlay)).toBeGreaterThanOrEqual(MIN_SELECTION_CONTRAST);
       // A row under the mouse shows, but looks weaker than the selected row.
-      // Where the selection color is itself hard to see (broadcast's omnibox:
-      // 1.015:1), the accent bar marks the selected row, and the hover stays
-      // at the smallest visible step.
+      // Where the selection color is itself faint, the hover stays at the
+      // smallest visible step.
       for (const [background, hover, selection] of [
         [t.bgSidebar, t.bgRowHover, t.bgActiveRow],
         [t.bgNicklist, t.bgRowHover, t.bgActiveRow],
