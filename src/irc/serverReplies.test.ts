@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { FakeIrcd } from "../../dev/fakeircd/server.ts";
 import { until } from "../../dev/fakeircd/testing.ts";
 import { IrcManager } from "./manager.ts";
+import { STATUS_BUFFER } from "./names.ts";
 
 let irc: FakeIrcd;
 let m: IrcManager;
@@ -274,4 +275,41 @@ test("717 (they were told you wrote) is an ordinary line, not an error", async (
   await until(() => texts("#honk").includes("alice was told that you wrote."));
   const line = server().buffers["#honk"]!.messages.find((x) => x.text === "alice was told that you wrote.");
   expect(line?.kind).toBe("system");
+});
+
+test("a line honk cannot handle is shown once in *status, and the connection goes on", async () => {
+  await inHonk();
+  // Make honk's own line handling throw on one line, like a bug would.
+  const raw = m as unknown as { onRawLine(serverId: string, line: string): void };
+  const onRawLine = raw.onRawLine.bind(m);
+  raw.onRawLine = (serverId, line) => {
+    if (line.includes("trigger")) throw new Error("cannot handle it");
+    onRawLine(serverId, line);
+  };
+
+  irc.sendRaw(":irc.alpha NOTICE $NICK :trigger");
+  irc.sendRaw(":irc.alpha NOTICE $NICK :trigger again");
+  irc.sendRaw(":alice!a@host PRIVMSG #honk :still connected");
+  await until(() => texts("#honk").includes("still connected"));
+  // The same error is reported once per connection, not for every line.
+  const reports = texts(STATUS_BUFFER).filter((t) => t.startsWith("A bug in honk:"));
+  expect(reports).toHaveLength(1);
+  const report = reports[0];
+  expect(report).toStartWith("A bug in honk: it could not handle this line from the server (cannot handle it, at ");
+  expect(report).toEndWith(":irc.alpha NOTICE goose :trigger"); // after the @time tag
+  // irc-client-ts still read the line: the notice itself is shown too.
+  expect(texts(STATUS_BUFFER)).toContain("trigger");
+});
+
+test("a bug that hits many lines is reported 5 times at most", async () => {
+  await inHonk();
+  const raw = m as unknown as { onRawLine(serverId: string, line: string): void };
+  raw.onRawLine = (_serverId, line) => {
+    // A different message each time, so each line looks like a new bug.
+    if (line.includes("trigger")) throw new Error(`cannot handle ${line.slice(-2)}`);
+  };
+  for (let i = 10; i < 20; i++) irc.sendRaw(`:irc.alpha NOTICE $NICK :trigger ${i}`);
+  irc.sendRaw(":alice!a@host PRIVMSG #honk :still connected");
+  await until(() => texts("#honk").includes("still connected"));
+  expect(texts(STATUS_BUFFER).filter((t) => t.startsWith("A bug in honk:"))).toHaveLength(5);
 });

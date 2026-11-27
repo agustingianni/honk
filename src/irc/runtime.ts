@@ -3,10 +3,63 @@ import { connect as netConnect, type Socket } from "node:net";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
 import type { Conn } from "irc-client-ts";
 
-import { LineSplitter } from "./ircLine.ts";
+import { commandOf, LineSplitter } from "./ircLine.ts";
 
 /** Called with each line the server sends, without "\r\n", before irc-client-ts reads it. */
 type LineListener = (line: string) => void;
+
+/** Called with a line, and what the LineListener threw for it. */
+type LineErrorListener = (line: string, err: unknown) => void;
+
+/**
+ * Calls `onLine` for each line, and gives what it throws to `onLineError`.
+ *
+ * The lines are split inside the socket's "data" listener. Since Bun 1.4.3, as in
+ * Node, an error thrown there goes to uncaughtException, which would end honk. It
+ * would also skip the rest of the chunk, so irc-client-ts would lose those bytes.
+ */
+/** The longest part of a line that a report shows. An IRC message is 512 bytes. */
+const MAX_LINE_IN_REPORT = 512;
+
+/**
+ * How to report what a LineListener threw for `line`: the text for *status, and a key
+ * that is the same for the same bug on the same kind of line.
+ *
+ *   "A bug in honk: it could not handle this line from the server
+ *    (no buffer, at onNumeric (manager.ts:1620:11)): :srv 470 goose #a #b :Forwarding"
+ */
+export function describeLineError(line: string, err: unknown): { key: string; text: string } {
+  const reason = err instanceof Error ? err.message || err.name : String(err);
+  // The first stack frame says which function failed. Paths are cut to the file name.
+  const frame =
+    err instanceof Error
+      ? err.stack
+          ?.split("\n")
+          .find((l) => l.trimStart().startsWith("at "))
+          ?.trim()
+          .replace(/[^\s(]*\//g, "")
+      : undefined;
+  const shown =
+    line.length > MAX_LINE_IN_REPORT ? `${line.slice(0, MAX_LINE_IN_REPORT)}...` : line;
+  return {
+    key: `${commandOf(line)} ${reason}`,
+    text: `A bug in honk: it could not handle this line from the server (${reason}${frame ? `, ${frame}` : ""}): ${shown}`,
+  };
+}
+
+export function guardLines(onLine: LineListener, onLineError: LineErrorListener): LineListener {
+  return (line) => {
+    try {
+      onLine(line);
+    } catch (err) {
+      try {
+        onLineError(line, err);
+      } catch {
+        // Reporting the error failed too. Drop it: it must never end honk.
+      }
+    }
+  };
+}
 
 class NodeSocketConn implements Conn {
   private socket: Socket;
@@ -143,8 +196,14 @@ function whenConnected(
 /**
  * A node:net / node:tls runtime for irc-client-ts. Aborting `signal` cancels a pending
  * connect. `onLine` sees every line from the server first (see IrcManager.onRawLine).
+ * When it throws, `onLineError` gets the line and the error, and the connection goes on.
  */
-export function createNodeRuntime(signal: AbortSignal | undefined, onLine: LineListener) {
+export function createNodeRuntime(
+  signal: AbortSignal | undefined,
+  onLine: LineListener,
+  onLineError: LineErrorListener,
+) {
+  onLine = guardLines(onLine, onLineError);
   return {
     connect(opts: { hostname: string; port: number }): Promise<Conn> {
       return whenConnected(netConnect(opts.port, opts.hostname), "connect", signal, onLine);

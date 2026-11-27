@@ -57,7 +57,7 @@ import {
   type Endpoint,
 } from "./replies.ts";
 import { commandOf, parseLine } from "./ircLine.ts";
-import { createNodeRuntime } from "./runtime.ts";
+import { createNodeRuntime, describeLineError } from "./runtime.ts";
 
 /** Messages kept per buffer from live traffic. */
 const MAX_MESSAGES = 500;
@@ -65,6 +65,8 @@ const MAX_MESSAGES = 500;
 const MAX_MESSAGES_WITH_HISTORY = 5000;
 /** A paste with more lines than this is refused, so a wrong paste can't flood a channel. */
 const MAX_PASTE_LINES = 10;
+/** Reports of a bug in honk's line handling, per connection. See createNodeRuntime. */
+const MAX_LINE_ERROR_REPORTS = 5;
 
 /** In the demo: how long someone takes to answer you, and the gap between ambient lines. */
 const DEMO_REPLY_DELAY_MS = 1_200;
@@ -747,10 +749,26 @@ export class IrcManager {
     // a connect that is still pending (e.g. after the connect timeout below).
     const abort = new AbortController();
     connectAborts.set(client, abort);
+    // Each bug once per connection, and a few at most: a bug that hits every line of
+    // one kind, such as each NAMES reply, would otherwise push everything else out of
+    // *status.
+    const reported = new Set<string>();
     (client as unknown as { runtime: ReturnType<typeof createNodeRuntime> }).runtime =
-      createNodeRuntime(abort.signal, (line) => {
-        if (this.clients.get(serverId) === client) this.onRawLine(serverId, line);
-      });
+      createNodeRuntime(
+        abort.signal,
+        (line) => {
+          if (this.clients.get(serverId) === client) this.onRawLine(serverId, line);
+        },
+        // A bug in honk, not in the server: say so, show the line, and keep going.
+        // irc-client-ts still reads the line.
+        (line, err) => {
+          if (this.clients.get(serverId) !== client) return;
+          const { key, text } = describeLineError(line, err);
+          if (reported.has(key) || reported.size >= MAX_LINE_ERROR_REPORTS) return;
+          reported.add(key);
+          this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
+        },
+      );
 
     // Request IRCv3 draft/chathistory when advertised by server/bouncer (e.g. soju)
     if (!client.state.caps.requested.includes("draft/chathistory")) {
