@@ -72,6 +72,17 @@ interface OmniboxProps {
   onOpenHit: (id: number, query: string, selectedId: string) => void;
 }
 
+/** The rows the omnibox shows, and what it says about them. */
+interface ListView {
+  items: OmniboxItem[];
+  /** Matches left out of the list, so the user knows to type more. */
+  more: number;
+  /** Lines shown when there are no rows. */
+  note?: string[];
+  /** The search found more Lines than it shows. */
+  moreHits?: boolean;
+}
+
 /**
  * "main": buffers and the prefix modes. "theme": the color theme list. "search": search
  * the Log (Ctrl+F, /search).
@@ -391,15 +402,36 @@ export function Omnibox({
     : servers[0];
 
   /**
-   * `more`: matches left out of the list, so the user knows to type more. `note`: lines
-   * shown when there are no rows. `plus`: the search found more than it shows.
+   * The search results. Apart from the other lists, so the Log is read again only when
+   * the query changes, not on every IRC update.
    */
-  const { items, more, note, plus } = useMemo<{
-    items: OmniboxItem[];
-    more: number;
-    note?: string[];
-    plus?: boolean;
-  }>(() => {
+  const searchList = useMemo<ListView | undefined>(() => {
+    if (mode !== "search") return undefined;
+    const noteOnly = (...note: string[]) => ({ items: [], more: 0, note });
+    if ("off" in logSearch) return noteOnly(`Search is off: ${logSearch.off}`);
+    if (!query.trim()) return noteOnly(...SEARCH_HELP);
+    const parsed = parseSearch(query);
+    if ("error" in parsed) return noteOnly(parsed.error);
+    const result = logSearch.search(parsed.query);
+    if ("error" in result) return noteOnly(result.error);
+    const now = new Date();
+    return {
+      items: result.hits.map((hit): OmniboxItem => {
+        const id = `hit-${hit.id}`;
+        return {
+          id,
+          // One cell goes to the space before the label.
+          ...hitRow(hit, now, rowWidth - 1),
+          onSelect: () => onOpenHit(hit.id, query, id),
+        };
+      }),
+      more: 0,
+      note: ["No lines match"],
+      moreHits: result.more,
+    };
+  }, [mode, query, logSearch, onOpenHit, rowWidth]);
+
+  const { items, more, note, moreHits } = useMemo<ListView>(() => {
     const trimmed = query.trimStart();
     const top = (list: OmniboxItem[]) => ({
       items: list.slice(0, MAX_RESULTS),
@@ -436,30 +468,7 @@ export function Omnibox({
           })),
       );
     }
-    if (mode === "search") {
-      const say = (...note: string[]) => ({ items: [], more: 0, note });
-      if ("off" in logSearch) return say(`Search is off: ${logSearch.off}`);
-      if (!query.trim()) return say(...SEARCH_HELP);
-      const parsed = parseSearch(query);
-      if ("error" in parsed) return say(parsed.error);
-      const result = logSearch.search(parsed.query);
-      if ("error" in result) return say(result.error);
-      const now = new Date();
-      return {
-        items: result.hits.map((hit): OmniboxItem => {
-          const id = `hit-${hit.id}`;
-          return {
-            id,
-            // One cell goes to the space before the label.
-            ...hitRow(hit, now, rowWidth - 1),
-            onSelect: () => onOpenHit(hit.id, query, id),
-          };
-        }),
-        more: 0,
-        note: ["No lines match"],
-        plus: result.more,
-      };
-    }
+    if (mode === "search") return searchList!;
     const themeAction = (id: string): OmniboxItem => ({
       id,
       label: THEME_ACTION_LABEL,
@@ -796,9 +805,7 @@ export function Omnibox({
     onRunCommandOn,
     onToggleSidebar,
     onToggleNicklist,
-    logSearch,
-    onOpenHit,
-    rowWidth,
+    searchList,
   ]);
 
   const foundIndex = items.findIndex((item) => item.id === selectedId);
@@ -978,7 +985,7 @@ export function Omnibox({
         ) : null}
         {scrolls && items.length > MAX_RESULTS ? (
           <box height={1} paddingLeft={2}>
-            <text fg={theme.fgMuted}>{`${selectedIndex + 1} of ${items.length}${plus ? "+" : ""}`}</text>
+            <text fg={theme.fgMuted}>{`${selectedIndex + 1} of ${items.length}${moreHits ? "+" : ""}`}</text>
           </box>
         ) : null}
       </box>

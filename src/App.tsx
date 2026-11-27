@@ -194,20 +194,6 @@ export function App({
     setContext(null);
     openOmnibox({ search: context.query, selectedId: context.selectedId });
   }, [context, openOmnibox]);
-  const contextServerId = context?.view.serverId;
-  const openContextNick = useCallback(
-    (nick: string) => {
-      if (contextServerId) openDm(contextServerId, nick);
-    },
-    [openDm, contextServerId],
-  );
-  const openContextChannel = useCallback(
-    (channel: string) => {
-      setContext(null);
-      if (contextServerId) manager.openChannel(contextServerId, channel);
-    },
-    [manager, contextServerId],
-  );
   const pasteLines = useCallback(
     (lines: string[]) => manager.sendLines(lines),
     [manager],
@@ -307,8 +293,6 @@ export function App({
               focused={!omniboxOpen}
               paneWidth={chatWidth}
               onBack={closeContext}
-              onOpenNick={openContextNick}
-              onOpenChannel={openContextChannel}
             />
           ) : (
           <ChatPane

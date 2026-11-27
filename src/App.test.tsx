@@ -54,7 +54,7 @@ async function renderApp(logSearch: LogSearch) {
       mockInput.pressEscape();
       await Bun.sleep(50);
     });
-  return { screen, mockInput, escape, destroy };
+  return { screen, mockInput, escape, destroy, manager };
 }
 
 test("Ctrl+F searches the Log; Enter shows the Context view; Esc goes back, then out", async () => {
@@ -129,6 +129,29 @@ test("with no Log, search mode says why", async () => {
     await act(async () => app.mockInput.pressKey("f", { ctrl: true }));
     await act(async () => app.mockInput.typeText("x"));
     expect(await app.screen()).toContain("Search is off: logs.enabled is false in the config");
+  } finally {
+    app.destroy();
+  }
+});
+
+test("an IRC update while search is open does not read the Log again", async () => {
+  let searches = 0;
+  const counting: LogSearch = {
+    search: (query) => {
+      searches++;
+      return log.search(query);
+    },
+    context: (id) => log.context(id),
+  };
+  const app = await renderApp(counting);
+  try {
+    await act(async () => app.mockInput.pressKey("f", { ctrl: true }));
+    await act(async () => app.mockInput.typeText("lol"));
+    await app.screen();
+    const before = searches;
+    await act(async () => app.manager.addAppNotice("something happened"));
+    await app.screen();
+    expect(searches).toBe(before);
   } finally {
     app.destroy();
   }

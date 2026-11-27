@@ -54,9 +54,13 @@ function localDay(text: string): number | undefined {
   return date.getTime();
 }
 
+/** The start of a YYYY-MM-DD date, such as "2026-1": the user is still typing it. */
+const PARTIAL_DAY = /^\d{1,4}(-(\d{1,2}(-\d?)?)?)?$/;
+
 /**
- * Reads what the user typed. A filter with no value yet ("from:") is left out, so the
- * results stay while the user types it. A date that is not YYYY-MM-DD is an error.
+ * Reads what the user typed. A filter with no value yet ("from:") or half a date
+ * ("before:2026-1") is left out, so the results stay while the user types it. A date
+ * that is not YYYY-MM-DD is an error.
  */
 export function parseSearch(text: string): { query: SearchQuery } | { error: string } {
   const query: SearchQuery = { words: [] };
@@ -69,6 +73,7 @@ export function parseSearch(text: string): { query: SearchQuery } | { error: str
       if (!value) continue;
       if (name === "before" || name === "after") {
         const day = localDay(value);
+        if (day === undefined && PARTIAL_DAY.test(value) && value.length < 10) continue;
         if (day === undefined) return { error: `${name}: takes a date such as 2026-10-01` };
         query[name] = day;
       } else {
@@ -119,7 +124,7 @@ export interface SearchResult {
 }
 
 /** One Line of a Context view. */
-export interface LogRow {
+export interface ContextLine {
   id: number;
   /** Unix ms. */
   time: number;
@@ -138,7 +143,7 @@ export interface LogContext {
   network: string;
   buffer: string;
   bufferKind: "channel" | "dm";
-  lines: LogRow[];
+  lines: ContextLine[];
   /** The index of the hit in `lines`. */
   match: number;
 }
@@ -252,7 +257,7 @@ interface ContextRow {
   mention: number;
 }
 
-function logRow(r: ContextRow): LogRow {
+function contextLine(r: ContextRow): ContextLine {
   return {
     id: r.id,
     time: r.ts,
@@ -267,7 +272,8 @@ function logRow(r: ContextRow): LogRow {
 
 /**
  * The Line with row id `id` and up to `around` Lines on each side of it, from its
- * Buffer, Events too. Redacted Lines are left out. Undefined if the Line is gone.
+ * Buffer, Events too. Redacted Lines are left out. Undefined if the Line is gone or
+ * was redacted after the search.
  */
 export function logContext(db: Database, id: number, around = CONTEXT_LINES): LogContext | undefined {
   const hit = db
@@ -275,7 +281,7 @@ export function logContext(db: Database, id: number, around = CONTEXT_LINES): Lo
       `SELECT m.buffer_id, m.ts, b.display AS buffer, b.kind AS bkind,
               n.config_id AS server, n.display AS network
        FROM message m JOIN buffer b ON b.id = m.buffer_id JOIN network n ON n.id = b.network_id
-       WHERE m.id = ?`,
+       WHERE m.id = ? AND m.redacted_at IS NULL`,
     )
     .get(id) as
     | { buffer_id: number; ts: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string }
@@ -298,7 +304,7 @@ export function logContext(db: Database, id: number, around = CONTEXT_LINES): Lo
     network: hit.network,
     buffer: hit.buffer,
     bufferKind: hit.bkind,
-    lines: [...before, self, ...after].map(logRow),
+    lines: [...before, self, ...after].map(contextLine),
     match: before.length,
   };
 }

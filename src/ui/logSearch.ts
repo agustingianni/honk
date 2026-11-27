@@ -3,6 +3,7 @@
  */
 
 import type { Log } from "../log/log.ts";
+import { joinText, kickText, nickText, partText, quitText, topicText } from "../irc/eventText.ts";
 import type { LogContext, SearchHit } from "../log/search.ts";
 import type { ChatMessage, MessageKind } from "../types.ts";
 import { glyphs } from "./glyphs.ts";
@@ -61,8 +62,6 @@ export function hitRow(hit: SearchHit, now: Date, width: number): { label: strin
   return { label, highlights };
 }
 
-const reason = (text: string) => (text ? ` (${text})` : "");
-
 /** The Lines of a Context view as chat lines, worded as the chat pane words them. */
 export function contextMessages(context: LogContext): ChatMessage[] {
   return context.lines.map((row) => {
@@ -81,20 +80,17 @@ export function contextMessages(context: LogContext): ChatMessage[] {
       case "notice":
         return line(row.kind, row.text, row.nick);
       case "join":
-        return line("join", `${row.nick} joined ${context.buffer}`);
+        return line("join", joinText(row.nick, context.buffer));
       case "part":
-        return line("part", `${row.nick} left ${context.buffer}${reason(row.text)}`);
+        return line("part", partText(row.nick, context.buffer, row.text));
       case "quit":
-        return line("part", `${row.nick} quit${reason(row.text)}`);
+        return line("part", quitText(row.nick, row.text));
       case "nick":
-        return line("system", `${row.nick} is now known as ${row.subject ?? ""}`);
+        return line("system", nickText(row.nick, row.subject ?? ""));
       case "kick":
-        return line("error", `${row.subject ?? ""} was kicked by ${row.nick}${reason(row.text)}`);
+        return line("error", kickText(row.subject ?? "", row.nick, row.text));
       default:
-        return line(
-          "system",
-          row.text ? `${row.nick} changed the topic to: ${row.text}` : `${row.nick} cleared the topic`,
-        );
+        return line("system", topicText(row.nick, row.text));
     }
   });
 }

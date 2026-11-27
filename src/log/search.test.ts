@@ -50,6 +50,11 @@ describe("parseSearch", () => {
     });
   });
 
+  test("half a date is left out while it is typed", () => {
+    expect(query("lol before:2026-1")).toEqual({ words: [{ text: "lol", prefix: false }] });
+    expect(query("lol after:2026-10-0")).toEqual({ words: [{ text: "lol", prefix: false }] });
+  });
+
   test("a word that is only * means nothing", () => {
     expect(query("* lol")).toEqual({ words: [{ text: "lol", prefix: false }] });
   });
@@ -266,6 +271,15 @@ describe("Log.context", () => {
     const context = log.context(result.hits[0]!.id)!;
     expect(context.lines.map((l) => l.kind)).toEqual(["join", "message"]);
     expect(context.match).toBe(1);
+  });
+
+  test("a hit redacted after the search has no Context view", () => {
+    const log = open();
+    log.add("libera", rust, line("oops", { msgid: "x" }));
+    const result = log.search(query("oops"));
+    if ("error" in result) throw new Error(result.error);
+    log.redact("libera", "x", "alice", T);
+    expect(log.context(result.hits[0]!.id)).toBeUndefined();
   });
 
   test("Lines at the same time keep the order they were written in", () => {

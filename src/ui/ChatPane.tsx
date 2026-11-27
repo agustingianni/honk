@@ -101,6 +101,7 @@ export const MessageRow = memo(function MessageRow({
   highlightMentions,
   names,
   highlighted = false,
+  interactive = true,
 }: {
   msg: ChatMessage;
   grouped: boolean;
@@ -109,6 +110,8 @@ export const MessageRow = memo(function MessageRow({
   names: NameActions;
   /** The search hit in a Context view. */
   highlighted?: boolean;
+  /** False in a Context view: no nick or channel name opens anything. */
+  interactive?: boolean;
 }) {
   const themeVersion = useThemeVersion(); // re-render when the theme changes
   const mention = highlightMentions && Boolean(msg.isMention);
@@ -136,7 +139,7 @@ export const MessageRow = memo(function MessageRow({
     case "message":
       label = <strong>{shortNick(sender)}</strong>;
       labelFg = senderColor;
-      if (!msg.isSelf && isUserSender(sender)) clickableNick = sender;
+      if (interactive && !msg.isSelf && isUserSender(sender)) clickableNick = sender;
       bg = mention ? theme.bgMention : theme.bgBase;
       textFg = unconfirmed ? theme.fgMuted : mention ? theme.fgBright : theme.fgPrimary;
       break;
@@ -215,7 +218,11 @@ export const MessageRow = memo(function MessageRow({
         customBorderChars={glyphs.border}
         borderColor={theme.gutter}
       >
-        {segments ? (
+        {segments && !interactive ? (
+          <text>
+            <Segments segments={segments} defaultFg={textFg} forceItalic={msg.kind === "action"} />
+          </text>
+        ) : segments ? (
           <NameText names={names} namesEnd={segments.reduce((n, seg) => n + seg.text.length, 0)}>
             {(hovered) => (
               <>

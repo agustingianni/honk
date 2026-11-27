@@ -16,13 +16,10 @@ interface ContextViewProps {
   focused: boolean;
   /** Esc: back to the search results. */
   onBack: () => void;
-  /** A click on a nick or a channel name, on the hit's Server. */
-  onOpenNick: (nick: string) => void;
-  onOpenChannel: (channel: string) => void;
 }
 
-/** Lines per Up or Down. */
-const STEP = 1;
+/** The view is read-only: no name in it opens anything. */
+const NO_NAMES: NameActions = { findNick: () => undefined, openNick: () => {}, openChannel: () => {} };
 
 /**
  * A Context view: the Lines around a search hit, read from the Log, with the hit
@@ -33,16 +30,10 @@ export function ContextView({
   paneWidth,
   focused,
   onBack,
-  onOpenNick,
-  onOpenChannel,
 }: ContextViewProps) {
   const scrollRef = useRef<ScrollBoxRenderable>(null);
   const messages = useMemo(() => contextMessages(context), [context]);
   const matchId = messages[context.match]?.id;
-  const names = useMemo(
-    (): NameActions => ({ findNick: () => undefined, openNick: onOpenNick, openChannel: onOpenChannel }),
-    [onOpenNick, onOpenChannel],
-  );
 
   // The hit starts a third of the way down, with the Lines before it above.
   useEffect(() => {
@@ -61,7 +52,7 @@ export function ContextView({
     else if (key.name === "pageup" || key.name === "pagedown") {
       sb?.scrollBy(key.name === "pageup" ? -0.5 : 0.5, "viewport");
     } else if (key.name === "up" || key.name === "down") {
-      sb?.scrollBy(key.name === "up" ? -STEP : STEP);
+      sb?.scrollBy(key.name === "up" ? -1 : 1);
     }
   });
 
@@ -102,7 +93,8 @@ export function ContextView({
                   msg={msg}
                   grouped={false}
                   highlightMentions={context.bufferKind === "channel"}
-                  names={names}
+                  names={NO_NAMES}
+                  interactive={false}
                   highlighted={idx === context.match}
                 />
               </box>
