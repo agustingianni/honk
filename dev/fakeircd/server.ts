@@ -161,6 +161,9 @@ export class FakeIrcd {
   rejectSasl = false;
   /** CHATHISTORY gets a FAIL and no batch while this is true. */
   failHistory = false;
+  /** While set, echo-message echoes wait in heldEchoes until releaseEchoes(). */
+  holdEchoes = false;
+  private heldEchoes: (() => void)[] = [];
   /** Lowercase targets whose CHATHISTORY gets a FAIL and no batch, as failHistory does. */
   readonly failHistoryIn = new Set<string>();
   /**
@@ -640,7 +643,21 @@ export class FakeIrcd {
       const to = this.clientByNick(target);
       if (to && to !== sender) this.send(to, line, tags);
     }
-    if (sender?.caps.has("echo-message")) this.send(sender, line, tags);
+    if (sender?.caps.has("echo-message")) {
+      if (this.holdEchoes) this.heldEchoes.push(() => this.send(sender, line, tags));
+      else this.send(sender, line, tags);
+    }
+  }
+
+  /** Sends the echoes held by holdEchoes, in order, and stops holding them. */
+  releaseEchoes(): void {
+    this.holdEchoes = false;
+    for (const send of this.heldEchoes.splice(0)) send();
+  }
+
+  /** How many echoes holdEchoes is holding. */
+  get heldEchoCount(): number {
+    return this.heldEchoes.length;
   }
 
   // ---- Client commands ----

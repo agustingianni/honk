@@ -24,6 +24,7 @@ import {
 import type { MentionEvent } from "../notify.ts";
 import { findSlashCommand, SLASH_COMMANDS, syntax } from "./commands.ts";
 import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine } from "./delivery.ts";
+import { EchoTracker, type SentPart } from "./echo.ts";
 import {
   dmTargets,
   historyTimestamp,
@@ -328,11 +329,30 @@ function beforeEmit(
   client: Client,
   hook: (event: string, payload: unknown) => void,
 ): void {
+  beforeCall(client, "emit", hook as (...args: unknown[]) => void);
+}
+
+/**
+ * Calls `hook` with the arguments of every `client.send`, before the line goes out. The
+ * first argument is the tags object when the call has tags.
+ */
+function beforeSend(client: Client, hook: (...args: unknown[]) => void): void {
+  beforeCall(client, "send", hook);
+}
+
+/** Runs `hook` before each call of a client method, through irc-client-ts's own hooks. */
+function beforeCall(client: Client, key: "emit" | "send", hook: (...args: unknown[]) => void): void {
   (
     client as unknown as {
-      hooks: { beforeCall(key: "emit", hook: (event: string, payload: unknown) => void): void };
+      hooks: { beforeCall(key: string, hook: (...args: unknown[]) => void): void };
     }
-  ).hooks.beforeCall("emit", hook);
+  ).hooks.beforeCall(key, hook);
+}
+
+/** A PRIVMSG text as a line: "\x01ACTION waves\x01" is the action "waves". */
+function sentPart(text: string): SentPart {
+  if (!text.startsWith("\x01ACTION ")) return { kind: "message", text };
+  return { kind: "action", text: text.slice(8, text.endsWith("\x01") ? -1 : undefined) };
 }
 
 /** Buffer order for the sidebar: *status, then channels, then DMs, each sorted by name. */
@@ -388,6 +408,10 @@ export class IrcManager {
   private listeners = new Set<() => void>();
   private mentionListeners = new Set<(event: MentionEvent) => void>();
   private missedListeners = new Set<(events: MentionEvent[]) => void>();
+  /** Matches the echo of each line you send to the line already shown. See echo.ts. */
+  private echoes = new EchoTracker();
+  /** While pushSent sends one of your lines: each PRIVMSG that went out. See beforeSend. */
+  private outgoing: SentPart[] | null = null;
   /** Confirms that the lines you send reach the server. See delivery.ts. */
   private delivery = new DeliveryTracker({
     delivered: (serverId, lines) => this.setDelivery(serverId, lines, undefined),
@@ -780,6 +804,14 @@ export class IrcManager {
     if (!client.state.caps.requested.includes("draft/event-playback")) {
       client.state.caps.requested.push("draft/event-playback");
     }
+
+    // The text of each PRIVMSG as it goes out: irc-client-ts splits a long line into
+    // several. The echo has these parts, not what you typed.
+    beforeSend(client, (...args) => {
+      if (!this.outgoing) return;
+      const [command, , text] = typeof args[0] === "object" ? args.slice(1) : args;
+      if (command === "PRIVMSG" && typeof text === "string") this.outgoing.push(sentPart(text));
+    });
 
     this.clients.set(serverId, client);
     this.bindClientEvents(serverId, client);
@@ -1331,8 +1363,16 @@ export class IrcManager {
         !isHistory &&
         (!isChannelName(target) || mentionsNick(msg.params.text, server.nick));
 
-      if (!isHistory && isSelf && this.wasRecentlyEchoed(serverId, target, msg.params.text)) {
-        return;
+      // The echo of a line you sent here takes over the line already shown, so it
+      // shows once, with the server's text and msgid. Only the first part of a split
+      // line does; the other parts are new lines, as everyone else sees them.
+      if (isSelf && !isHistory) {
+        const echo = { kind, text: msg.params.text };
+        const shownId = this.echoes.take(serverId, this.bufferKey(serverId, target), echo);
+        if (shownId) {
+          this.applyEcho(serverId, target, shownId, msg.params.text, tags?.msgid);
+          return;
+        }
       }
 
       this.pushMessage(
@@ -1354,7 +1394,7 @@ export class IrcManager {
 
     // With echo-message, the library reports our own lines (typed here, or sent from
     // another client on the same bouncer account) as echo:* instead of privmsg/notice.
-    // onChat drops the echo of a line this client already showed.
+    // onChat merges the echo of a line this client already showed. See echo.ts.
     client.on("echo:privmsg", (msg) => onChat("message", msg));
 
     const onNotice = (msg: {
@@ -1477,15 +1517,54 @@ export class IrcManager {
    * lists, which are stale until the server re-joins (and sends NAMES again).
    */
   /**
-   * Shows a line you just sent as "sending" and starts confirming it with a PING.
-   * See delivery.ts.
+   * Sends one of your lines, shows it as "sending", and starts confirming it with a
+   * PING (see delivery.ts). With echo-message, its echo is awaited (see echo.ts).
    */
-  private pushSent(serverId: string, client: Client, target: string, message: ChatMessage): void {
-    message.isSelf = true;
+  private pushSent(
+    serverId: string,
+    client: Client,
+    target: string,
+    kind: "message" | "action",
+    text: string,
+  ): void {
+    const parts: SentPart[] = [];
+    this.outgoing = parts;
+    try {
+      if (kind === "action") client.action(target, text);
+      else client.privmsg(target, text);
+    } finally {
+      this.outgoing = null;
+    }
+    const nick = this.servers.get(serverId)?.nick;
+    const message = makeMessage(kind, text, { from: nick, isSelf: true });
     message.delivery = "pending";
     this.pushMessage(serverId, target, message);
-    const line: SentLine = { bufferName: this.bufferKey(serverId, target), messageId: message.id };
+    const bufferName = this.bufferKey(serverId, target);
+    const line: SentLine = { bufferName, messageId: message.id };
     this.delivery.track(serverId, line, (token) => void client.send("PING", token));
+    // With echo-message the server sends the line back. A line to yourself comes back
+    // even without it; a second copy of it is dropped by msgid in pushMessage.
+    const echoed = client.state.caps.enabled.has("echo-message") || sameNick(target, nick);
+    if (echoed) this.echoes.add(serverId, bufferName, message.id, parts);
+  }
+
+  /**
+   * The echo of a line you sent: the line shows the text the server has (trimmed, or
+   * the first part of a split line) and gets its msgid, so history doesn't add it again.
+   */
+  private applyEcho(
+    serverId: string,
+    target: string,
+    messageId: string,
+    text: string,
+    msgid: string | undefined,
+  ): void {
+    this.updateMessages(serverId, this.bufferKey(serverId, target), new Set([messageId]), (m) => ({
+      ...m,
+      text,
+      ...(msgid ? { msgid } : {}),
+    }));
+    this.emit();
   }
 
   /** Sets the delivery state of sent lines. `undefined` means the server has them. */
@@ -1503,20 +1582,31 @@ export class IrcManager {
       idsByBuffer.set(l.bufferName, ids);
     }
     for (const [name, ids] of idsByBuffer) {
-      const buf = server.buffers[name];
-      if (!buf) continue;
-      const messages = buf.messages.map((m) => {
-        if (!ids.has(m.id)) return m;
+      this.updateMessages(serverId, name, ids, (m) => {
         const { delivery: _, ...rest } = m;
         return state ? { ...rest, delivery: state } : rest;
       });
-      server.buffers = { ...server.buffers, [name]: { ...buf, messages } };
     }
     this.emit();
   }
 
+  /** Replaces the messages with these ids in one buffer by `update(message)`. */
+  private updateMessages(
+    serverId: string,
+    bufferName: string,
+    ids: Set<string>,
+    update: (m: ChatMessage) => ChatMessage,
+  ): void {
+    const server = this.servers.get(serverId);
+    const buf = server?.buffers[bufferName];
+    if (!server || !buf) return;
+    const messages = buf.messages.map((m) => (ids.has(m.id) ? update(m) : m));
+    server.buffers = { ...server.buffers, [bufferName]: { ...buf, messages } };
+  }
+
   /** Lines still waiting for their PONG when the connection closes may not have arrived. */
   private failPendingLines(serverId: string): void {
+    this.echoes.drop(serverId);
     this.setDelivery(serverId, this.delivery.drop(serverId), "failed");
   }
 
@@ -1589,7 +1679,10 @@ export class IrcManager {
     // next PONG mark it delivered.
     if (isErrorKind(name, "message") && subject[0]) {
       const refused = this.delivery.reject(serverId, subject[0]);
-      if (refused) this.setDelivery(serverId, [refused], "failed");
+      if (refused) {
+        this.setDelivery(serverId, [refused], "failed");
+        this.echoes.forget(serverId, refused.messageId);
+      }
     }
     const described = describeErrorReply(name, subject, text);
     if (described === null) return;
@@ -1674,27 +1767,6 @@ export class IrcManager {
   /** Where replies to a command (errors, WHOIS) go: the active buffer if it is on this server. */
   private replyTarget(serverId: string): string {
     return this.active?.serverId === serverId ? this.active.buffer : STATUS_BUFFER;
-  }
-
-  private wasRecentlyEchoed(
-    serverId: string,
-    target: string,
-    text: string,
-  ): boolean {
-    const buf = this.servers.get(serverId)?.buffers[this.bufferKey(serverId, target)];
-    if (!buf || buf.messages.length === 0) return false;
-    const now = Date.now();
-    for (
-      let i = buf.messages.length - 1;
-      i >= Math.max(0, buf.messages.length - 5);
-      i--
-    ) {
-      const m = buf.messages[i]!;
-      if (m.isSelf && m.text === text && now - m.timestamp.getTime() < 5000) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private ensureBuffer(
@@ -1815,15 +1887,16 @@ export class IrcManager {
     const buf = this.ensureBuffer(serverId, bufferName);
     if (!server || !buf) return;
 
-    // Deduplicate history / replay messages by msgid or (timestamp + sender + text)
+    // A line the buffer already has: same msgid (a replay, or a line to yourself that
+    // came as the echo and as a message), or for history, same sender, text and time.
+    if (message.msgid && buf.messages.some((m) => m.msgid === message.msgid)) return;
     if (message.isHistory) {
       const msgTime = message.timestamp.getTime();
       const isDup = buf.messages.some(
         (m) =>
-          (message.msgid && m.msgid === message.msgid) ||
-          (m.from === message.from &&
-            m.text === message.text &&
-            Math.abs(m.timestamp.getTime() - msgTime) < 2000),
+          m.from === message.from &&
+          m.text === message.text &&
+          Math.abs(m.timestamp.getTime() - msgTime) < 2000,
       );
       if (isDup) return;
     }
@@ -2350,9 +2423,9 @@ export class IrcManager {
       return false;
     }
 
-    client.privmsg(buffer, raw);
     this.clearUnreadDivider(serverId, buffer);
-    this.pushSent(serverId, client, buffer, makeMessage("message", raw, { from: server.nick }));
+    // The library would trim the end anyway; show what it sends.
+    this.pushSent(serverId, client, buffer, "message", raw.trimEnd());
     return true;
   }
 
@@ -2517,8 +2590,7 @@ export class IrcManager {
         this.ensureBuffer(server.id, target);
         this.setActive(server.id, target);
         if (text) {
-          client.privmsg(target, text);
-          this.pushSent(server.id, client, target, makeMessage("message", text, { from: server.nick }));
+          this.pushSent(server.id, client, target, "message", text);
         }
         return;
       }
@@ -2530,8 +2602,7 @@ export class IrcManager {
         if (server.status !== "connected") {
           return reply(this.notConnectedText(server), "error");
         }
-        client.action(activeBuffer, rest);
-        this.pushSent(server.id, client, activeBuffer, makeMessage("action", rest, { from: server.nick }));
+        this.pushSent(server.id, client, activeBuffer, "action", rest);
         return;
       }
 
