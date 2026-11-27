@@ -204,6 +204,7 @@ export function App({
             paneWidth={chatWidth}
             onSubmit={submit}
             onPasteLines={pasteLines}
+            onSelectUser={selectUser}
           />
 
           {showNicklist && (

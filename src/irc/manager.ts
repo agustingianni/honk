@@ -19,6 +19,7 @@ import {
   nameKey,
   sameNick,
   STATUS_BUFFER,
+  UNKNOWN_SENDER,
 } from "./names.ts";
 import type { MentionEvent } from "../notify.ts";
 import { findSlashCommand, SLASH_COMMANDS, syntax } from "./commands.ts";
@@ -1254,7 +1255,7 @@ export class IrcManager {
         const cmd = raw.command;
         if (cmd !== "privmsg" && cmd !== "notice") continue;
 
-        const from = normalizeNick(raw.source?.name) || "unknown";
+        const from = normalizeNick(raw.source?.name) || UNKNOWN_SENDER;
         const rawText = raw.params[1] ?? "";
         const isSelf = sameNick(from, server.nick);
         const target =
@@ -1299,7 +1300,7 @@ export class IrcManager {
       const server = live();
       if (!server) return;
       const tags = msg.tags ?? chatTags.get(msg);
-      const from = normalizeNick(msg.source?.name) || "unknown";
+      const from = normalizeNick(msg.source?.name) || UNKNOWN_SENDER;
       const isSelf = sameNick(from, server.nick);
       const target = routeTarget(msg.params.target, from, isSelf);
       // A DM opened as "/msg dave" takes the sender's real casing ("Dave") when they write.
