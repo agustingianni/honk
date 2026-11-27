@@ -146,7 +146,7 @@ export interface ReadMarkerCallbacks {
  *   busy channel is marked once per delay.
  * - A buffer switch starts the wait over. The buffer you leave is marked at once if you
  *   read it for at least `delayMs`, and not at all if you only flipped past it.
- *   Reading starts at the switch, or later when you come back (see startReading).
+ *   See startReading for when reading starts.
  * - It never sends a marker at or before one the server said or honk already sent on
  *   this connection.
  *
@@ -162,8 +162,7 @@ export class ReadMarkerTracker {
   /** Waits before sending MARKREAD for the buffer on screen. See schedule. */
   private timer: unknown = null;
   /**
-   * When you started reading the buffer on screen (ms): the switch to it, or later if
-   * you came back after that. See onActiveChanged and startReading.
+   * When you started reading the buffer on screen (ms). See startReading.
    */
   private readingSince = 0;
   /**
@@ -195,7 +194,7 @@ export class ReadMarkerTracker {
   setFocused(focused: boolean): void {
     const wasReading = this.isReading();
     this.focus = focused ? "focused" : "blurred";
-    if (focused && !wasReading) this.startReading();
+    if (!wasReading && this.isReading()) this.startReading();
   }
 
   /**
@@ -205,7 +204,7 @@ export class ReadMarkerTracker {
   noteKeyPress(): void {
     const wasReading = this.isReading();
     this.lastKeyAt = this.clock.now();
-    if (this.focus === "unknown" && !wasReading) this.startReading();
+    if (!wasReading && this.isReading()) this.startReading();
   }
 
   /** A line went into the buffer on screen. */
@@ -223,7 +222,7 @@ export class ReadMarkerTracker {
       return;
     }
     // You read its last lines long enough: mark them now. A buffer you only flipped
-    // past is not marked. Reading, and the timer, start over for the new buffer.
+    // past is not marked.
     if (this.clock.now() - this.readingSince >= this.delayMs) {
       this.send(leaving.serverId, leaving.buffer);
     }
@@ -257,7 +256,7 @@ export class ReadMarkerTracker {
     this.sentMarkers.delete(serverId);
   }
 
-  /** Cancels the timer: on a buffer switch, and when honk shuts down. */
+  /** Cancels the timer: when reading starts over, and when honk shuts down. */
   stop(): void {
     if (this.timer !== null) this.clock.clearTimeout(this.timer);
     this.timer = null;
