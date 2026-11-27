@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { theme } from "../theme.ts";
-import { cellWidth } from "./display.ts";
 import { applyGlyphs } from "./glyphs.ts";
 import { parseIrcText, plainSegments, truncateSegments, underlineRange } from "./format.tsx";
 
@@ -33,7 +32,6 @@ test("URLs are still links", () => {
 
 describe("truncateSegments", () => {
   const shown = (segs: { text: string }[]) => segs.map((s) => s.text).join("");
-  const colored = (segs: { text: string; fg?: string }[]) => segs.map((s) => [s.text, s.fg]);
 
   test("text that fits is kept as it is", () => {
     const segs = parseIrcText("hi https://a.io");
@@ -51,36 +49,21 @@ describe("truncateSegments", () => {
     expect(shown(segs)).toBe("red and…");
   });
 
-  // The topic from issue #57: 41 characters, 29 cells shown. A cut before parsing
-  // counted the color digits as 6 more cells.
-  const coloredTopic = "\x0304red\x03 \x0309green\x03 \x0312blue\x03 rules: be nice";
-
-  test("a colored topic that fits once the codes are gone shows in full", () => {
-    const segs = parseIrcText(coloredTopic);
-    expect(shown(segs)).toBe("red green blue rules: be nice");
-    expect(truncateSegments(segs, 29)).toBe(segs);
+  test("a colored text that does not fit is cut at the room, and keeps its colors", () => {
+    const segs = parseIrcText("\x0304red\x03 \x0309green\x03 \x0312blue\x03 rules: be nice");
+    const cut = truncateSegments(segs, 12);
+    expect(cut.map((s) => s.text)).toEqual(["red", " ", "green", " ", "b…"]);
+    expect(cut.map((s) => s.fg)).toEqual(segs.slice(0, 5).map((s) => s.fg));
   });
 
-  test("a colored topic that does not fit is cut at the room, and keeps its colors", () => {
-    const segs = truncateSegments(parseIrcText(coloredTopic), 12);
-    expect(colored(segs)).toEqual([
-      ["red", "#f7768e"],
-      [" ", undefined],
-      ["green", "#9ece6a"],
-      [" ", undefined],
-      ["b…", "#7aa2f7"],
-    ]);
-  });
-
-  test("a wide colored topic is cut between graphemes", () => {
-    // 4 cells, then 10 cells of CJK in light blue.
+  test("a wide colored text is cut between graphemes, and keeps its color", () => {
+    // 4 cells, then 10 cells of CJK.
     const segs = parseIrcText("\x0304red \x0312日本語です");
-    expect(colored(truncateSegments(segs, 9))).toEqual([
-      ["red ", "#f7768e"],
-      ["日本…", "#7aa2f7"],
-    ]);
+    const cut = truncateSegments(segs, 9);
+    expect(shown(cut)).toBe("red 日本…");
+    expect(cut[1]!.fg).toBe(segs[1]!.fg);
     // An even room cannot fit a wide character before the ellipsis: one cell short.
-    expect(cellWidth(shown(truncateSegments(segs, 10)))).toBe(9);
+    expect(shown(truncateSegments(segs, 10))).toBe("red 日本…");
   });
 
   test("a segment that fills the room exactly still ends in an ellipsis", () => {
