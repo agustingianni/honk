@@ -148,6 +148,8 @@ export function Clickable({ hoverColor, children, ...props }: ClickableProps) {
 
 /** A click this soon after the terminal window got focus may be the click that focused it. */
 const FOCUS_CLICK_MS = 500;
+/** How long a click on a link waits for a second click, which makes it a double-click. */
+const DOUBLE_CLICK_MS = 250;
 
 type LinkAreaProps = Omit<
   BoxProps,
@@ -155,6 +157,8 @@ type LinkAreaProps = Omit<
 > & {
   /** Opens a link. Without it (over SSH), links get no hand pointer and a click is left to the terminal. */
   onOpenLink: ((href: string) => void) | undefined;
+  /** How long a click waits for a second one. The tests make it short. */
+  doubleClickMs?: number;
 };
 
 /**
@@ -174,11 +178,19 @@ type LinkAreaProps = Omit<
  *   slide their link under a click that started on plain text.
  * - The terminal window did not just get focus: some terminals pass the click
  *   that focuses the window on to honk.
+ * - It is not the first half of a double-click. People double-click a link to
+ *   select it, often to look at it before they trust it. So a click waits
+ *   DOUBLE_CLICK_MS, and a second press in that time cancels the open.
  *
  * The pointer is checked only when the mouse moves. After a wheel scroll or a
  * new line under a still mouse, it is updated on the next move.
  */
-export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
+export function LinkArea({
+  onOpenLink,
+  doubleClickMs = DOUBLE_CLICK_MS,
+  children,
+  ...props
+}: LinkAreaProps) {
   const renderer = useRenderer();
   const [overLink, setOverLink] = useState(false);
   usePointer(overLink, setOverLink);
@@ -187,6 +199,14 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
   const pressedLink = useRef<string | null>(null);
   // When the window last got focus; never, until it does.
   const focusedAt = useRef(Number.NEGATIVE_INFINITY);
+  // The open that waits to see whether a second click comes.
+  const pendingOpen = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancelOpen = () => {
+    clearTimeout(pendingOpen.current);
+    pendingOpen.current = undefined;
+  };
+  // A link must not open after the pane is gone.
+  useEffect(() => cancelOpen, []);
 
   useEffect(() => {
     const onFocus = () => {
@@ -211,6 +231,7 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
       onMouseMove={check}
       onMouseOut={() => setOverLink(false)}
       onMouseDown={(event) => {
+        cancelOpen();
         pressedLink.current = renderer.getLinkAt(event.x, event.y);
       }}
       onMouseUp={(event) => {
@@ -218,7 +239,11 @@ export function LinkArea({ onOpenLink, children, ...props }: LinkAreaProps) {
         pressedLink.current = null;
         if (!onOpenLink || !pressed || !isPlainClick(renderer, event)) return;
         if (performance.now() - focusedAt.current < FOCUS_CLICK_MS) return;
-        if (renderer.getLinkAt(event.x, event.y) === pressed) onOpenLink(pressed);
+        if (renderer.getLinkAt(event.x, event.y) !== pressed) return;
+        pendingOpen.current = setTimeout(() => {
+          pendingOpen.current = undefined;
+          onOpenLink(pressed);
+        }, doubleClickMs);
       }}
     >
       {children}

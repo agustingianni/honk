@@ -99,13 +99,25 @@ describe("isPlainClick", () => {
 });
 
 describe("LinkArea", () => {
+  // A click waits this long for a second one before it opens the link.
+  const DOUBLE_CLICK_MS = 100;
+  /** A click, then the wait for the open. */
+  const click = async (mouse: { click: (x: number, y: number) => Promise<void> }, x: number, y: number) => {
+    await act(() => mouse.click(x, y));
+    await Bun.sleep(DOUBLE_CLICK_MS * 3);
+  };
+
   // "see " then a link 26 cells long, in a box 10 cells wide, so the link
   // wraps onto three lines: "see https:", "//example.", "com/abcdef" ...
   const URL = "https://example.com/abcdef";
   async function setup({ canOpen = true } = {}) {
     const opened: string[] = [];
     const rendered = await testRender(
-      <LinkArea onOpenLink={canOpen ? (href) => opened.push(href) : undefined} width={10}>
+      <LinkArea
+        onOpenLink={canOpen ? (href) => opened.push(href) : undefined}
+        doubleClickMs={DOUBLE_CLICK_MS}
+        width={10}
+      >
         <text>
           see <a href={URL}>{URL}</a>
         </text>
@@ -125,16 +137,16 @@ describe("LinkArea", () => {
       "//example.",
       "com/abcdef",
     ]);
-    await act(() => mockMouse.click(6, 0));
-    await act(() => mockMouse.click(3, 1));
-    await act(() => mockMouse.click(8, 2));
+    await click(mockMouse, 6, 0);
+    await click(mockMouse, 3, 1);
+    await click(mockMouse, 8, 2);
     expect(opened).toEqual([URL, URL, URL]);
     await act(() => dispose());
   });
 
   test("a click on plain text next to a link opens nothing", async () => {
     const { mockMouse, opened, dispose } = await setup();
-    await act(() => mockMouse.click(1, 0));
+    await click(mockMouse, 1, 0);
     expect(opened).toEqual([]);
     await act(() => dispose());
   });
@@ -198,10 +210,18 @@ describe("LinkArea", () => {
     await act(() => dispose());
   });
 
+  test("a double-click on a link, to select it, does not open it", async () => {
+    const { mockMouse, opened, dispose } = await setup();
+    await act(() => mockMouse.doubleClick(6, 0, MouseButtons.LEFT, { delayMs: 1 }));
+    await Bun.sleep(DOUBLE_CLICK_MS * 3);
+    expect(opened).toEqual([]);
+    await act(() => dispose());
+  });
+
   test("the click that focuses the terminal window does not open a link", async () => {
     const { mockMouse, opened, renderer, dispose } = await setup();
     renderer.emit("focus");
-    await act(() => mockMouse.click(6, 0));
+    await click(mockMouse, 6, 0);
     expect(opened).toEqual([]);
     await act(() => dispose());
   });

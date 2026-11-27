@@ -131,8 +131,11 @@ test("a click opens a link in a message and in the topic", async () => {
     };
     const topic = at("https://honk.example/docs");
     const body = at("https://example.com/x");
+    // Each click waits for a possible second click before it opens the link.
     await act(() => mockMouse.click(topic.x, topic.y));
+    await Bun.sleep(400);
     await act(() => mockMouse.click(body.x, body.y));
+    await Bun.sleep(400);
     expect(opened).toEqual(["https://honk.example/docs", "https://example.com/x"]);
   } finally {
     destroy();
@@ -151,6 +154,7 @@ test("a topic link that is cut to fit is not a link", async () => {
     const y = screen.findIndex((line) => line.includes("https://"));
     expect(screen[y]).toContain("https://github.com…");
     await act(() => mockMouse.click(screen[y]!.indexOf("https://") + 2, y));
+    await Bun.sleep(400);
     expect(opened).toEqual([]);
   } finally {
     destroy();
@@ -197,6 +201,7 @@ test("after the topic changes, a click opens the link it shows now", async () =>
     const screen = captureCharFrame().split("\n");
     const y = screen.findIndex((line) => line.includes("https://github.com"));
     await act(() => mockMouse.click(screen[y]!.indexOf("https://github.com") + 3, y));
+    await Bun.sleep(400);
     expect(opened).toEqual(["https://github.com/agustingianni/honk"]);
   } finally {
     act(() => renderer.destroy());
