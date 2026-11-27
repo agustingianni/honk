@@ -12,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { type AddressInfo, createServer } from "node:net";
+import { type AddressInfo, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -31,27 +31,56 @@ const release = {
   tag: "v0.3.0" as string | undefined, // undefined: the repo has no releases
   asset: new Uint8Array(), // the bytes of honk-linux-x64.gz
   sums: "", // filled from `asset` unless a test sets it
-  // Which download breaks halfway: the server sends half of it, then closes.
-  cut: undefined as "asset" | "sums" | undefined,
+  // Which download goes to rawServer, and how that server breaks it (see there).
+  broken: undefined as { file: "asset" | "sums"; how: Break } | undefined,
   refused: false, // true: the asset download goes to a port where nothing listens
 };
 const requests: string[] = [];
 
-// A server that promises a whole file with Content-Length, sends half of it,
-// and closes: what a connection that breaks halfway looks like. Bun.serve
-// cannot do this, because it fixes up the Content-Length. node:net, because
-// its write() buffers all the bytes and end() sends them before it closes.
-const cutServer = createServer((socket) => {
+// How rawServer sends a file:
+// - cut: promises the whole file with Content-Length, sends half, and closes.
+// - stall: sends half and keeps the connection open without sending more.
+// - silent: accepts the connection and never answers.
+// - slow: sends the whole file in 5 parts, 100 ms apart.
+// - late: sends the headers after 200 ms, and the whole file 200 ms after that.
+type Break = "cut" | "stall" | "silent" | "slow" | "late";
+const SLOW_GAP_MS = 100;
+
+// Bun.serve cannot do these, because it fixes up the Content-Length. node:net,
+// because its write() buffers all the bytes and end() sends them before it closes.
+// The request path is /<how>/<file>.
+const rawSockets = new Set<Socket>();
+const rawServer = createServer((socket) => {
+  rawSockets.add(socket);
+  socket.on("close", () => rawSockets.delete(socket));
+  socket.on("error", () => {}); // the client aborts stalled requests
   socket.once("data", (request) => {
-    const whole = request.toString().startsWith("GET /sums ")
-      ? new TextEncoder().encode(release.sums)
-      : release.asset;
-    socket.write(`HTTP/1.1 200 OK\r\nContent-Length: ${whole.length}\r\n\r\n`);
-    socket.end(whole.subarray(0, Math.floor(whole.length / 2)));
+    const [, how, file] = /^\S+ \/(\w+)\/(\S*)/.exec(request.toString()) ?? [];
+    if (how === "silent") return;
+    const whole = file === "sums" ? new TextEncoder().encode(release.sums) : release.asset;
+    // It answers one request per connection, so fetch() must not reuse one.
+    const headers = `HTTP/1.1 200 OK\r\nContent-Length: ${whole.length}\r\nConnection: close\r\n\r\n`;
+    if (how === "late") {
+      setTimeout(() => socket.write(headers), 200);
+      setTimeout(() => socket.end(whole), 400);
+      return;
+    }
+    socket.write(headers);
+    const half = whole.subarray(0, Math.floor(whole.length / 2));
+    if (how === "cut") socket.end(half);
+    else if (how === "stall") socket.write(half);
+    else if (how === "slow") {
+      const part = Math.ceil(whole.length / 5);
+      for (let i = 0; i < 5; i++) {
+        setTimeout(() => {
+          if (!socket.destroyed) socket.write(whole.subarray(i * part, (i + 1) * part));
+        }, i * SLOW_GAP_MS);
+      }
+    }
   });
 });
-await new Promise<void>((resolve) => cutServer.listen(0, "127.0.0.1", resolve));
-const cutUrl = `http://127.0.0.1:${(cutServer.address() as AddressInfo).port}`;
+await new Promise<void>((resolve) => rawServer.listen(0, "127.0.0.1", resolve));
+const rawUrl = `http://127.0.0.1:${(rawServer.address() as AddressInfo).port}`;
 
 // A URL where nothing listens. The OS never hands out port 1 as a free port,
 // and almost nothing listens on it.
@@ -68,13 +97,14 @@ const server = Bun.serve({
       return new Response(null, { status: 302, headers: { location: `${origin}${to}` } });
     }
     const download = `/${REPO}/releases/download/${release.tag}/`;
-    // GitHub redirects downloads to another host. Send the one to break to cutServer.
+    // GitHub redirects downloads to another host. Send the one to break to rawServer.
+    const broken = release.broken;
     if (path === `${download}SHA256SUMS`) {
-      if (release.cut === "sums") return Response.redirect(`${cutUrl}/sums`, 302);
+      if (broken?.file === "sums") return Response.redirect(`${rawUrl}/${broken.how}/sums`, 302);
       return new Response(release.sums);
     }
     if (path === `${download}honk-linux-x64.gz`) {
-      if (release.cut === "asset") return Response.redirect(`${cutUrl}/asset.gz`, 302);
+      if (broken?.file === "asset") return Response.redirect(`${rawUrl}/${broken.how}/asset.gz`, 302);
       if (release.refused) return Response.redirect(`${refusedUrl}/asset.gz`, 302);
       return new Response(release.asset);
     }
@@ -84,6 +114,12 @@ const server = Bun.serve({
 const githubUrl = server.url.origin;
 
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
+
+/** Makes `bytes` the release's honk-linux-x64.gz, with a matching SHA256SUMS. */
+function setAsset(bytes: typeof release.asset) {
+  release.asset = bytes;
+  release.sums = `${sha256(bytes)}  honk-linux-x64.gz\n`;
+}
 const root = mkdtempSync(join(tmpdir(), "honk-upgrade-test-"));
 let dir: string;
 let binary: string;
@@ -97,6 +133,7 @@ function options(overrides: Partial<UpgradeOptions> = {}): UpgradeOptions {
     execPath: binary,
     receiptPath: receipt,
     githubUrl,
+    idleTimeoutMs: 5_000,
     verifyAttestation: async (): Promise<AttestationResult> => "skipped",
     log: (line) => logs.push(line),
     ...overrides,
@@ -111,7 +148,7 @@ beforeEach(() => {
   release.tag = "v0.3.0";
   release.asset = Bun.gzipSync("new honk binary");
   release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n${"0".repeat(64)}  honk-darwin-arm64.gz\n`;
-  release.cut = undefined;
+  release.broken = undefined;
   release.refused = false;
   requests.length = 0;
   logs = [];
@@ -127,7 +164,8 @@ beforeEach(() => {
 
 afterAll(() => {
   server.stop(true);
-  cutServer.close();
+  for (const socket of rawSockets) socket.destroy();
+  rawServer.close();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -197,8 +235,7 @@ describe("upgrade", () => {
   });
 
   test("keeps the old binary when the download is not valid gzip", async () => {
-    release.asset = new TextEncoder().encode("not gzip data");
-    release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n`;
+    setAsset(new TextEncoder().encode("not gzip data"));
     await expect(upgrade(options())).rejects.toThrow(/could not unpack honk-linux-x64\.gz/);
     expect(binaryText()).toBe("old honk binary");
     expect(leftovers()).toEqual([]);
@@ -216,9 +253,8 @@ describe("upgrade", () => {
     ["a small", 100],
     ["a big", 4_000_000],
   ])("names the download when the connection breaks halfway through %s download", async (_, size) => {
-    release.asset = crypto.getRandomValues(new Uint8Array(size));
-    release.sums = `${sha256(release.asset)}  honk-linux-x64.gz\n`;
-    release.cut = "asset";
+    setAsset(crypto.getRandomValues(new Uint8Array(size)));
+    release.broken = { file: "asset", how: "cut" };
     const message = await failure();
     expect(message?.startsWith(`download failed: ${assetUrl()}: `)).toBe(true);
     expect(message).not.toContain("verbose: true"); // Bun's advice for developers
@@ -227,13 +263,54 @@ describe("upgrade", () => {
   });
 
   test("names SHA256SUMS when the connection breaks halfway through it", async () => {
-    release.cut = "sums";
+    release.broken = { file: "sums", how: "cut" };
     expect(await failure()).toStartWith(`download failed: ${githubUrl}/${REPO}/releases/download/v0.3.0/SHA256SUMS: `);
   });
 
   test("names the release page when GitHub cannot be reached", async () => {
     const message = await failure(options({ githubUrl: refusedUrl }));
     expect(message).toStartWith(`could not find the latest release (${refusedUrl}/${REPO}/releases/latest: `);
+  });
+
+  // The idle timeout for the tests below. The slow server's gap must stay below it.
+  const IDLE_MS = 300;
+  const idleOptions = () => options({ idleTimeoutMs: IDLE_MS });
+  const noData = "no data for 0.3 seconds";
+
+  const sumsUrl = () => `${githubUrl}/${REPO}/releases/download/v0.3.0/SHA256SUMS`;
+  test.each([
+    ["a download that stops sending data halfway", "asset", "stall", assetUrl],
+    ["SHA256SUMS when it stops sending data halfway", "sums", "stall", sumsUrl],
+    ["a download host that never answers", "asset", "silent", assetUrl],
+  ] as const)("gives up on %s", async (_, file, how, url) => {
+    release.broken = { file, how };
+    expect(await failure(idleOptions())).toBe(`download failed: ${url()}: ${noData}`);
+    expect(binaryText()).toBe("old honk binary");
+    expect(leftovers()).toEqual([]);
+  });
+
+  test("gives up on a release page that never answers", async () => {
+    const pageUrl = `${rawUrl}/silent/${REPO}/releases/latest`;
+    const message = await failure(options({ githubUrl: `${rawUrl}/silent`, idleTimeoutMs: IDLE_MS }));
+    expect(message).toBe(`could not find the latest release (${pageUrl}: ${noData})`);
+  });
+
+  test("keeps a slow download going while data still arrives", async () => {
+    // 5 parts, 100 ms apart: the whole download takes longer than the idle timeout.
+    setAsset(Bun.gzipSync(new TextEncoder().encode(`new honk binary${" ".repeat(50_000)}`)));
+    release.broken = { file: "asset", how: "slow" };
+    const started = Date.now();
+    await upgrade(idleOptions());
+    expect(Date.now() - started).toBeGreaterThan(IDLE_MS);
+    expect(binaryText().trimEnd()).toBe("new honk binary");
+  });
+
+  test("restarts the timer when the headers arrive", async () => {
+    // 200 ms to the headers, 200 ms more to the body: no gap is as long as the
+    // timeout, but the whole download is longer.
+    release.broken = { file: "asset", how: "late" };
+    await upgrade(idleOptions());
+    expect(binaryText()).toBe("new honk binary");
   });
 
   test("names the download when its host cannot be reached", async () => {

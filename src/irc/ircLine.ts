@@ -4,22 +4,93 @@
  * fake server in dev/fakeircd and its tests use it too.
  */
 
-/** Cuts a byte stream into lines, without "\r\n". A UTF-8 character split across chunks stays whole. */
+/**
+ * The longest line LineSplitter keeps, "\r\n" included. A normal IRC line is at most
+ * 8191 bytes of IRCv3 tags and a 512-byte message, but a server may allow longer
+ * messages (ISUPPORT LINELEN), so the limit leaves plenty of room.
+ */
+export const MAX_LINE_BYTES = 64 * 1024;
+
+/**
+ * Cuts a byte stream into lines, without "\r\n". A UTF-8 character split across chunks
+ * stays whole.
+ *
+ * A line longer than MAX_LINE_BYTES is dropped, up to and including its "\n", and
+ * `onTooLong` is called. So a server that never sends "\n" can't make honk keep more
+ * than MAX_LINE_BYTES:
+ *
+ *   push("PING a\r\n" + 100_000 x "x" + "\r\nPING b\r\n")
+ *   -> onLine("PING a"), onTooLong(), onLine("PING b")
+ */
+// Each line is decoded on its own, so a U+FEFF at the start of a line must stay.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+
 export class LineSplitter {
-  private decoder = new TextDecoder();
-  private pending = "";
+  /** The start of a line whose "\n" has not come yet. */
+  private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
+  /** True while skipping the rest of a line that was too long. */
+  private dropping = false;
 
-  constructor(private onLine: (line: string) => void) {}
+  constructor(
+    private onLine: (line: string) => void,
+    private onTooLong?: () => void,
+  ) {}
 
-  push(bytes: Uint8Array): void {
-    this.pending += this.decoder.decode(bytes, { stream: true });
-    let end: number;
-    while ((end = this.pending.indexOf("\n")) !== -1) {
-      const line = this.pending.slice(0, end).replace(/\r$/, "");
-      this.pending = this.pending.slice(end + 1);
+  /**
+   * Calls onLine for each line that `bytes` completes. Returns the bytes of those lines,
+   * "\r\n" included, in a new array: the stream without the lines that were too long
+   * and without the start of a line that has not ended yet.
+   */
+  push(bytes: Uint8Array): Uint8Array {
+    const whole: Uint8Array[] = [];
+    let start = 0;
+    while (start < bytes.length) {
+      const nl = bytes.indexOf(10, start);
+      const end = nl === -1 ? bytes.length : nl + 1;
+      const part = bytes.subarray(start, end);
+      start = end;
+
+      if (this.dropping) {
+        if (nl !== -1) this.dropping = false;
+        continue;
+      }
+      if (this.pendingBytes + part.length > MAX_LINE_BYTES) {
+        this.pending = [];
+        this.pendingBytes = 0;
+        this.dropping = nl === -1;
+        this.onTooLong?.();
+        continue;
+      }
+      if (nl === -1) {
+        // Copied: the caller may reuse `bytes`, as node:net does with its buffers.
+        this.pending.push(part.slice());
+        this.pendingBytes += part.length;
+        continue;
+      }
+
+      const lineBytes = this.pending.length > 0 ? concat([...this.pending, part]) : part;
+      this.pending = [];
+      this.pendingBytes = 0;
+      whole.push(lineBytes);
+      // Without "\n", and without "\r" before it.
+      let n = lineBytes.length - 1;
+      if (n > 0 && lineBytes[n - 1] === 13) n--;
+      const line = decoder.decode(lineBytes.subarray(0, n));
       if (line) this.onLine(line);
     }
+    return concat(whole);
   }
+}
+
+function concat(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
 }
 
 export interface IrcLine {

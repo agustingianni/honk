@@ -71,6 +71,7 @@ test("a line listener that throws does not stop the data for irc-client-ts", asy
       if (line === "BOOM") throw new Error("cannot handle it");
     },
     (line, err) => errors.push(`${line}: ${(err as Error).message}`),
+    () => {},
   );
 
   const conn = await runtime.connect({ hostname: "127.0.0.1", port });
@@ -80,6 +81,46 @@ test("a line listener that throws does not stop the data for irc-client-ts", asy
     await until(() => seen.length === 3);
     expect(seen).toEqual(["one", "BOOM", "three"]);
     expect(errors).toEqual(["BOOM: cannot handle it"]);
+  } finally {
+    conn.close();
+  }
+});
+
+test("irc-client-ts does not get a line that is too long", async () => {
+  const port = await serve(`one\r\n${"x".repeat(100_000)}\r\ntwo\r\n`);
+  const seen: string[] = [];
+  let tooLong = 0;
+  const runtime = createNodeRuntime(
+    undefined,
+    (line) => seen.push(line),
+    () => {},
+    () => tooLong++,
+  );
+
+  const conn = await runtime.connect({ hostname: "127.0.0.1", port });
+  try {
+    expect(await readUntil(conn, "two\r\n")).toBe("one\r\ntwo\r\n");
+    expect(seen).toEqual(["one", "two"]);
+    expect(tooLong).toBe(1);
+  } finally {
+    conn.close();
+  }
+});
+
+test("an onTooLong that throws does not stop the data for irc-client-ts", async () => {
+  const port = await serve(`${"x".repeat(100_000)}\r\ntwo\r\n`);
+  const runtime = createNodeRuntime(
+    undefined,
+    () => {},
+    () => {},
+    () => {
+      throw new Error("cannot report it");
+    },
+  );
+
+  const conn = await runtime.connect({ hostname: "127.0.0.1", port });
+  try {
+    expect(await readUntil(conn, "two\r\n")).toBe("two\r\n");
   } finally {
     conn.close();
   }

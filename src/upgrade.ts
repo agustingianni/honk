@@ -17,6 +17,7 @@ import {
   renameSync,
   rmSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -25,6 +26,8 @@ import { TARGET, VERSION } from "./version.ts";
 
 export const REPO = "agustingianni/honk";
 const INSTALL_COMMAND = "curl -fsSL https://agustingianni.github.io/honk/install.sh | sh";
+/** A download that sends no data for this long fails. */
+const IDLE_TIMEOUT_MS = 30_000;
 
 /** An error with a message for the user, printed without a stack trace. */
 export class UpgradeError extends Error {}
@@ -41,6 +44,11 @@ export interface UpgradeOptions {
   receiptPath: string;
   /** "https://github.com". Tests pass a local server. */
   githubUrl: string;
+  /**
+   * Each request fails when no data arrives for this long. It is not a limit on
+   * the whole download, so a slow download that keeps sending goes on.
+   */
+  idleTimeoutMs: number;
   verifyAttestation: (file: string) => Promise<AttestationResult>;
   log: (line: string) => void;
 }
@@ -87,7 +95,8 @@ export async function latestRelease(githubUrl: string, signal?: AbortSignal): Pr
   try {
     res = await fetch(pageUrl, { method: "HEAD", redirect: "manual", signal });
   } catch (err) {
-    throw new UpgradeError(`could not find the latest release (${pageUrl}: ${networkReason(err)})`);
+    const reason = failureReason(err, signal);
+    throw new UpgradeError(`could not find the latest release (${pageUrl}: ${reason})`);
   }
   const location = res.headers.get("location");
   if (res.status < 300 || res.status >= 400 || !location) {
@@ -151,15 +160,47 @@ function networkReason(err: unknown): string {
   return text.replace(/ For more information, pass `verbose: true`[\s\S]*$/, "");
 }
 
-async function fetchOk(url: string): Promise<Response> {
-  let res: Response;
-  try {
-    res = await fetch(url);
-  } catch (err) {
-    throw new UpgradeError(`download failed: ${url}: ${networkReason(err)}`);
+/** The text of a network error, or the abort reason when `signal` caused it. */
+function failureReason(err: unknown, signal?: AbortSignal): string {
+  // An aborted fetch() rejects with the signal's reason, but say it either way.
+  return networkReason(signal?.aborted ? signal.reason : err);
+}
+
+/**
+ * Aborts a request when no data arrives for `ms`. Each chunk that arrives
+ * restarts the timer, so it covers a server that never answers and a download
+ * that stops halfway without closing the connection.
+ */
+class IdleTimeout {
+  private readonly controller = new AbortController();
+  readonly signal = this.controller.signal;
+  private readonly reason: Error;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly ms: number) {
+    const seconds = ms / 1000;
+    this.reason = new Error(`no data for ${seconds} second${seconds === 1 ? "" : "s"}`);
+    this.restart();
   }
-  if (!res.ok) throw new UpgradeError(`download failed: ${url} answered ${res.status}`);
-  return res;
+
+  restart(): void {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.controller.abort(this.reason), this.ms);
+  }
+
+  stop(): void {
+    clearTimeout(this.timer);
+  }
+}
+
+/** Runs `fn` with an IdleTimeout of `ms`, and stops the timer when `fn` ends. */
+async function withIdleTimeout<T>(ms: number, fn: (idle: IdleTimeout) => Promise<T>): Promise<T> {
+  const idle = new IdleTimeout(ms);
+  try {
+    return await fn(idle);
+  } finally {
+    idle.stop();
+  }
 }
 
 /**
@@ -185,17 +226,64 @@ export function checkLength(url: string, res: Response, received: number) {
   }
 }
 
+/**
+ * Downloads `url` and passes each chunk of the body to `onChunk`. It fails when
+ * no data arrives for `idleMs`. An error that `onChunk` throws passes through
+ * as is.
+ */
+function download(
+  url: string,
+  idleMs: number,
+  onChunk: (chunk: Uint8Array) => void | Promise<void>,
+): Promise<void> {
+  return withIdleTimeout(idleMs, async (idle) => {
+    const failed = (err: unknown) =>
+      new UpgradeError(`download failed: ${url}: ${failureReason(err, idle.signal)}`);
+    let res: Response;
+    try {
+      res = await fetch(url, { signal: idle.signal });
+    } catch (err) {
+      throw failed(err);
+    }
+    // The headers are data too: the wait for the first body chunk starts now.
+    idle.restart();
+    if (!res.ok) {
+      res.body?.cancel().catch(() => {});
+      throw new UpgradeError(`download failed: ${url} answered ${res.status}`);
+    }
+    let received = 0;
+    const reader = res.body?.getReader();
+    while (reader) {
+      let next: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        next = await reader.read();
+      } catch (err) {
+        throw failed(err);
+      }
+      if (next.done) break;
+      received += next.value.length;
+      // A slow disk is not a network stall: the timer waits while the chunk is written.
+      idle.stop();
+      try {
+        await onChunk(next.value);
+      } catch (err) {
+        // Close the connection too, not only the file.
+        reader.cancel().catch(() => {});
+        throw err;
+      }
+      idle.restart();
+    }
+    checkLength(url, res, received);
+  });
+}
+
 /** Downloads a small text file, such as SHA256SUMS. */
-async function downloadText(url: string): Promise<string> {
-  const res = await fetchOk(url);
-  let bytes: Uint8Array;
-  try {
-    bytes = new Uint8Array(await res.arrayBuffer());
-  } catch (err) {
-    throw new UpgradeError(`download failed: ${url}: ${networkReason(err)}`);
-  }
-  checkLength(url, res, bytes.length);
-  return new TextDecoder().decode(bytes);
+async function downloadText(url: string, idleMs: number): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  await download(url, idleMs, (chunk) => {
+    chunks.push(chunk);
+  });
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 function cannotWrite(path: string, err: unknown): UpgradeError {
@@ -207,22 +295,29 @@ function cannotWrite(path: string, err: unknown): UpgradeError {
 }
 
 /**
- * Downloads `url` into the file `path`. Bun.write streams the body to the file.
- * With Bun 1.3.10 it never returned on the release download from GitHub
- * (oven-sh/bun#13237). It works with Bun 1.4.5, which the release needs.
+ * Downloads `url` into the file `path`. It writes each chunk itself instead of
+ * using Bun.write(path, res), because Bun.write reports no progress, and the
+ * idle timer needs to see each chunk arrive.
  */
-async function downloadFile(url: string, path: string): Promise<void> {
-  const res = await fetchOk(url);
-  let written: number;
+async function downloadFile(url: string, path: string, idleMs: number): Promise<void> {
+  const toCannotWrite = (err: unknown): never => {
+    throw cannotWrite(path, err);
+  };
+  const file = await open(path, "w").catch(toCannotWrite);
   try {
-    written = await Bun.write(path, res);
+    await download(url, idleMs, async (chunk) => {
+      // One write() may write only part of the chunk.
+      for (let done = 0; done < chunk.length; ) {
+        done += (await file.write(chunk, done).catch(toCannotWrite)).bytesWritten;
+      }
+    });
   } catch (err) {
-    // A file system error names its system call, such as "open" or "write".
-    // A network error has none.
-    if ((err as NodeJS.ErrnoException).syscall) throw cannotWrite(path, err);
-    throw new UpgradeError(`download failed: ${url}: ${networkReason(err)}`);
+    // The first error is the one to report, not one from closing.
+    await file.close().catch(() => {});
+    throw err;
   }
-  checkLength(url, res, written);
+  // close() can report a write that failed late, such as on a full disk.
+  await file.close().catch(toCannotWrite);
 }
 
 /** Checks the attestation with gh, like install.sh does. Skips it when gh is missing or logged out. */
@@ -259,7 +354,9 @@ export async function upgrade(o: UpgradeOptions): Promise<void> {
   }
 
   o.log("checking for a new release");
-  const latest = await latestRelease(o.githubUrl);
+  const latest = await withIdleTimeout(o.idleTimeoutMs, (idle) =>
+    latestRelease(o.githubUrl, idle.signal),
+  );
   // NaN (a tag we cannot compare) is not <= 0, so a different tag still upgrades.
   if (compareVersions(latest, o.version) <= 0) {
     o.log(`honk ${o.version} is up to date (the latest release is ${latest})`);
@@ -272,7 +369,7 @@ export async function upgrade(o: UpgradeOptions): Promise<void> {
   const base = `${o.githubUrl}/${REPO}/releases/download/${encodeURIComponent(latest)}`;
 
   // The small file first, so a release without this asset fails before the big download.
-  const sums = await downloadText(`${base}/SHA256SUMS`);
+  const sums = await downloadText(`${base}/SHA256SUMS`, o.idleTimeoutMs);
   const expected = checksumFor(sums, asset);
   if (!expected) throw new UpgradeError(`the ${latest} SHA256SUMS has no entry for ${asset}`);
 
@@ -283,7 +380,7 @@ export async function upgrade(o: UpgradeOptions): Promise<void> {
   const tmp = join(dir, `.honk.new-${process.pid}`);
   try {
     o.log(`downloading ${asset} ${latest}`);
-    await downloadFile(`${base}/${asset}`, gz);
+    await downloadFile(`${base}/${asset}`, gz, o.idleTimeoutMs);
 
     const actual = await sha256OfFile(gz);
     if (actual !== expected) {
@@ -323,6 +420,7 @@ export async function runUpgrade(): Promise<number> {
       execPath: process.execPath,
       receiptPath: defaultReceiptPath(),
       githubUrl: "https://github.com",
+      idleTimeoutMs: IDLE_TIMEOUT_MS,
       verifyAttestation: verifyAttestationWithGh,
       log: (line) => console.log(`honk: ${line}`),
     });

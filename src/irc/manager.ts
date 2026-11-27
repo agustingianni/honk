@@ -56,7 +56,7 @@ import {
   whoisLines,
   type Endpoint,
 } from "./replies.ts";
-import { commandOf, parseLine, timestampParam } from "./ircLine.ts";
+import { commandOf, MAX_LINE_BYTES, parseLine, timestampParam } from "./ircLine.ts";
 import {
   isAfterMarker,
   isMarkedRead,
@@ -66,7 +66,7 @@ import {
   READ_MARKER_CAP,
   unreadAfter,
 } from "./readMarker.ts";
-import { createNodeRuntime, describeEventError, describeLineError } from "./runtime.ts";
+import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
 
 /** Messages kept per buffer from live traffic. */
 const MAX_MESSAGES = 500;
@@ -875,17 +875,14 @@ export class IrcManager {
     // one kind, such as each NAMES reply, would otherwise push everything else out of
     // *status.
     const reported = new Set<string>();
-    const reportBug = ({ key, text }: { key: string; text: string }) => {
+    const reportBug = neverThrow(({ key, text }: { key: string; text: string }) => {
       if (this.clients.get(serverId) !== client) return;
       if (reported.has(key) || reported.size >= MAX_BUG_REPORTS) return;
-      try {
-        this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
-        // Only now: if showing the report threw, the next one may still get through.
-        reported.add(key);
-      } catch {
-        // Showing the report failed too. Drop it: the connection must go on.
-      }
-    };
+      this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
+      // Only now: if showing the report threw, the next one may still get through.
+      reported.add(key);
+    });
+    let reportedTooLong = false;
     (client as unknown as { runtime: ReturnType<typeof createNodeRuntime> }).runtime =
       createNodeRuntime(
         abort.signal,
@@ -895,6 +892,19 @@ export class IrcManager {
         // A bug in honk, not in the server: say so, show the line, and keep going.
         // irc-client-ts still reads the line.
         (line, err) => reportBug(describeLineError(line, err)),
+        // Once per connection: a broken server may send many.
+        () => {
+          if (this.clients.get(serverId) !== client || reportedTooLong) return;
+          reportedTooLong = true;
+          this.pushMessage(
+            serverId,
+            STATUS_BUFFER,
+            makeMessage(
+              "system",
+              `The server sent a line longer than ${MAX_LINE_BYTES} bytes. honk dropped it, and drops any more like it.`,
+            ),
+          );
+        },
       );
 
     // Request IRCv3 draft/chathistory when advertised by server/bouncer (e.g. soju)
