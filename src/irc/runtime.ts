@@ -11,13 +11,6 @@ type LineListener = (line: string) => void;
 /** Called with a line, and what the LineListener threw for it. */
 type LineErrorListener = (line: string, err: unknown) => void;
 
-/**
- * Calls `onLine` for each line, and gives what it throws to `onLineError`.
- *
- * The lines are split inside the socket's "data" listener. Since Bun 1.4.3, as in
- * Node, an error thrown there goes to uncaughtException, which would end honk. It
- * would also skip the rest of the chunk, so irc-client-ts would lose those bytes.
- */
 /** The longest part of a line that a report shows. An IRC message is 512 bytes. */
 const MAX_LINE_IN_REPORT = 512;
 
@@ -67,6 +60,13 @@ function describeError(err: unknown): { reason: string; where: string } {
   return { reason, where: frame ? `, ${frame}` : "" };
 }
 
+/**
+ * Calls `onLine` for each line, and gives what it throws to `onLineError`.
+ *
+ * The lines are split inside the socket's "data" listener. Since Bun 1.4.3, as in
+ * Node, an error thrown there goes to uncaughtException, which would end honk. It
+ * would also skip the rest of the chunk, so irc-client-ts would lose those bytes.
+ */
 export function guardLines(onLine: LineListener, onLineError: LineErrorListener): LineListener {
   return (line) => {
     try {

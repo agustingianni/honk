@@ -75,7 +75,7 @@ const MAX_MESSAGES_WITH_HISTORY = 5000;
 /** A paste with more lines than this is refused, so a wrong paste can't flood a channel. */
 const MAX_PASTE_LINES = 10;
 /** Reports of a bug in honk's line handling, per connection. See createNodeRuntime. */
-const MAX_LINE_ERROR_REPORTS = 5;
+const MAX_BUG_REPORTS = 5;
 
 /** In the demo: how long someone takes to answer you, and the gap between ambient lines. */
 const DEMO_REPLY_DELAY_MS = 1_200;
@@ -416,6 +416,31 @@ function beforeEmit(
  */
 function beforeSend(client: Client, hook: (...args: unknown[]) => void): void {
   beforeCall(client, "send", hook);
+}
+
+/**
+ * Replaces a client method with `hook`, which gets the method and the arguments, through
+ * irc-client-ts's own hooks.
+ */
+function hookCall(
+  client: Client,
+  key: "emit",
+  hook: (fn: (...args: unknown[]) => unknown, ...args: unknown[]) => unknown,
+): void {
+  (
+    client as unknown as {
+      hooks: { hookCall(key: string, hook: (fn: (...args: unknown[]) => unknown, ...args: unknown[]) => unknown): void };
+    }
+  ).hooks.hookCall(key, hook);
+}
+
+/**
+ * The event name for a bug report. The "raw" listener hears every raw:<command> event,
+ * so say which command it was.
+ */
+function eventName(event: string, payload: unknown): string {
+  const command = (payload as { command?: unknown } | null)?.command;
+  return event === "raw" && typeof command === "string" ? `raw (${command})` : event;
 }
 
 /** Runs `hook` before each call of a client method, through irc-client-ts's own hooks. */
@@ -869,9 +894,10 @@ export class IrcManager {
     const reported = new Set<string>();
     const reportBug = ({ key, text }: { key: string; text: string }) => {
       if (this.clients.get(serverId) !== client) return;
-      if (reported.has(key) || reported.size >= MAX_LINE_ERROR_REPORTS) return;
-      reported.add(key);
+      if (reported.has(key) || reported.size >= MAX_BUG_REPORTS) return;
       this.pushMessage(serverId, STATUS_BUFFER, makeMessage("system", text));
+      // Only now: if showing the report threw, the next one may still get through.
+      reported.add(key);
     };
     (client as unknown as { runtime: ReturnType<typeof createNodeRuntime> }).runtime =
       createNodeRuntime(
@@ -1018,20 +1044,23 @@ export class IrcManager {
     client: Client,
     reportBug: (report: { key: string; text: string }) => void,
   ): void {
+    const report = (event: string, payload: unknown, err: unknown) => {
+      try {
+        reportBug(describeEventError(eventName(event, payload), err));
+      } catch {
+        // Reporting the error failed too. Drop it: the connection must go on.
+      }
+    };
     const guard =
       <T>(event: string, listener: (payload: T) => void) =>
       (payload: T) => {
         try {
           listener(payload);
         } catch (err) {
-          try {
-            reportBug(describeEventError(event, err));
-          } catch {
-            // Reporting the error failed too. Drop it: the connection must go on.
-          }
+          report(event, payload, err);
         }
       };
-    // client.on, with the listener guarded.
+    // client.on, with the listener guarded, so the other listeners of the event still run.
     const on = ((event: string, listener: (payload: unknown) => void) =>
       client.on(event as never, guard(event, listener))) as Client["on"];
     const isStale = () => this.clients.get(serverId) !== client;
@@ -1062,7 +1091,22 @@ export class IrcManager {
         priorChannels.set(payload, channelsWithNick(server, normalizeNick(source?.name)));
       }
     };
-    beforeEmit(client, (event, payload) => guard(event, (p) => notePayload(event, p))(payload));
+    beforeEmit(client, (event, payload) => {
+      try {
+        notePayload(event, payload);
+      } catch (err) {
+        report(event, payload, err);
+      }
+    });
+    // Also catches what a listener of irc-client-ts's own plugins (nicklist, cap, ...)
+    // throws. One event fails, and the read loop goes on.
+    hookCall(client, "emit", (emit, event, payload) => {
+      try {
+        return emit(event, payload);
+      } catch (err) {
+        report(String(event), payload, err);
+      }
+    });
 
     on("error", (err) => {
       if (isStale()) return;
