@@ -10,7 +10,7 @@ describe("isMouseInput", () => {
     ["the wheel, down, with shift", "\x1b[<69;10;5M"],
     ["a click after a motion report in one read", "\x1b[<35;9;5M\x1b[<0;10;5M"],
   ])("%s counts", (_name, data) => {
-    expect(isMouseInput(data)).toBe(true);
+    expect(isMouseInput(Buffer.from(data, "latin1"))).toBe(true);
   });
 
   test.each([
@@ -21,10 +21,6 @@ describe("isMouseInput", () => {
     ["a color reply", "\x1b]11;rgb:1e1e/1e1e/2e2e\x07"],
     ["a pixel size reply", "\x1b[4;800;1200t"],
   ])("%s does not count", (_name, data) => {
-    expect(isMouseInput(data)).toBe(false);
-  });
-
-  test("takes the bytes as they come from stdin", () => {
-    expect(isMouseInput(Buffer.from("\x1b[<64;10;5M"))).toBe(true);
+    expect(isMouseInput(Buffer.from(data, "latin1"))).toBe(false);
   });
 });

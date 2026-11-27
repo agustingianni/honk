@@ -106,10 +106,9 @@ if (!g.__ircHot) {
   });
   const root = createRoot(renderer);
 
-  // You count as reading the buffer on screen shortly after your last input, unless
-  // the window lost focus. See ReadMarkerTracker.isReading. Input is a key, a paste,
-  // or a mouse report (see terminalInput.ts), also one a scrollbar keeps to itself.
-  // These listeners run before honk handles the key or click.
+  // Whether you are at the terminal: see ReadMarkerTracker.isReading. Mouse reports
+  // come from the raw input (see terminalInput.ts), since a scrollbar keeps its clicks
+  // to itself. These listeners run before honk handles the key or click.
   renderer.on("focus", () => manager.setFocused(true));
   renderer.on("blur", () => manager.setFocused(false));
   renderer.keyInput.on("keypress", () => manager.noteInput());

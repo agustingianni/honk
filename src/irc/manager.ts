@@ -2272,12 +2272,12 @@ export class IrcManager {
     const isActive =
       this.active?.serverId === serverId && this.active.buffer === bufferName;
     // A history line is unread if it is newer than your read marker, or if it came
-    // while the connection was down. You are watching the buffer on screen while you
-    // are reading (see ReadMarkerTracker.isReading); a line there is read at once only
-    // if the buffer has no badge. See markedRead.
+    // while the connection was down. You see a line in the buffer on screen while you
+    // are reading (see ReadMarkerTracker.isReading); it is read at once only if the
+    // buffer has no badge. See markedRead.
     const afterMarker = isAfterMarker(marker, message);
-    const watching = isActive && this.readMarkerTracker.isReading();
-    const readAtOnce = watching && !hasBadge(buf);
+    const seen = isActive && this.readMarkerTracker.isReading();
+    const readAtOnce = seen && !hasBadge(buf);
     const countsAsUnread =
       !readAtOnce && isReadableLine(message) && (!message.isHistory || afterMarker || missed);
     // History you have not read gets the divider even when you see it come in.
@@ -2318,7 +2318,7 @@ export class IrcManager {
       kind: message.kind,
       from: message.from ?? "",
       text: message.text,
-      seen: watching,
+      seen,
     };
     if (!message.isHistory && !message.isSelf) {
       for (const listener of this.mentionListeners) listener(event);
@@ -2365,15 +2365,12 @@ export class IrcManager {
     return nicks.some((nick) => nick !== undefined && mentionsNick(message.text, nick, mapping));
   }
 
-  /**
-   * Tells honk whether the terminal window has focus. While it doesn't, the buffer on
-   * screen is not being read, so honk does not move its read marker.
-   */
+  /** Tells honk whether the terminal window has focus. See ReadMarkerTracker.isReading. */
   setFocused(focused: boolean): void {
     this.readMarkerTracker.setFocused(focused);
   }
 
-  /** Tells honk you used the terminal: a key, a click, or the scroll wheel. */
+  /** Tells honk you gave input. See ReadMarkerTracker.isReading for what counts. */
   noteInput(): void {
     this.readMarkerTracker.noteInput();
   }

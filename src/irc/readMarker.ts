@@ -121,7 +121,7 @@ export function unreadAfter(
  * lines, or flipping through buffers, sends one. Tests pass a shorter one.
  */
 export const MARK_READ_DELAY_MS = 1_000;
-/** How long after your last input (a key, a click, the wheel, focus coming back) you count as reading. */
+/** How long after your last input you count as reading. See ReadMarkerTracker.isReading. */
 export const PRESENT_AFTER_INPUT_MS = 2 * 60_000;
 
 export interface ReadMarkerCallbacks {
@@ -165,9 +165,9 @@ export interface ReadMarkerCallbacks {
  *   //            send("libera", "#honk", <time of its newest line>)
  */
 export class ReadMarkerTracker {
-  /** What the terminal last said about focus. "unknown" until it says anything. See isReading. */
-  private focus: "unknown" | "focused" | "blurred" = "unknown";
-  /** When you last used the terminal (ms). See noteInput. */
+  /** True after the terminal said the window lost focus, until it gets focus back. */
+  private blurred = false;
+  /** When you last gave input (ms). See isReading. */
   private lastInputAt = 0;
   /** Waits before sending MARKREAD for the buffer on screen. See schedule. */
   private timer: unknown = null;
@@ -199,18 +199,16 @@ export class ReadMarkerTracker {
   }
 
   /**
-   * The terminal window got or lost focus. While it doesn't have focus, the buffer on
-   * screen is not being read, so its marker doesn't move. Getting focus counts as
-   * input: you just came to the window.
+   * The terminal window got or lost focus. Getting focus counts as input. See isReading.
    */
   setFocused(focused: boolean): void {
     const wasReading = this.isReading();
-    this.focus = focused ? "focused" : "blurred";
+    this.blurred = !focused;
     if (focused) this.lastInputAt = this.clock.now();
     if (!wasReading && this.isReading()) this.startReading();
   }
 
-  /** You used the terminal: a key, a click, or the scroll wheel. */
+  /** You gave input. See isReading for what counts. */
   noteInput(): void {
     const wasReading = this.isReading();
     this.lastInputAt = this.clock.now();
@@ -281,14 +279,16 @@ export class ReadMarkerTracker {
   }
 
   /**
-   * Whether you are reading the buffer on screen: the window has not lost focus, and
-   * you used the terminal in the last PRESENT_AFTER_INPUT_MS. Focus alone is not
-   * enough, so a focused honk on a locked screen doesn't mark everything read
-   * overnight. A terminal that never reports focus (tmux without focus-events) is
-   * judged by the input alone.
+   * Whether you are reading the buffer on screen, that is, whether you are at the
+   * terminal: the window has not lost focus, and you gave input in the last
+   * PRESENT_AFTER_INPUT_MS. Input is a key, a paste, a click, a drag, a wheel turn,
+   * or focus coming back (see src/index.tsx). Focus alone is not enough, so a focused
+   * honk on a locked screen doesn't mark everything read overnight. A terminal that
+   * never reports focus (tmux without focus-events) is judged by the input alone.
+   * Notifications use the same answer (MentionEvent.seen).
    */
   isReading(): boolean {
-    if (this.focus === "blurred") return false;
+    if (this.blurred) return false;
     return this.clock.now() - this.lastInputAt < PRESENT_AFTER_INPUT_MS;
   }
 

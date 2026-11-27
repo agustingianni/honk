@@ -484,24 +484,17 @@ describe("a mention in the channel on screen", () => {
     return seen;
   }
 
-  test("counts as seen while you read the channel", async () => {
+  test.each([
+    ["is seen while the window has focus", true],
+    ["is not seen while the window has no focus", false],
+  ])("%s", async (_name, focused) => {
     const seen = mentions();
     await connect();
-    m.setFocused(true);
+    m.setFocused(focused);
     m.setActive("alpha", "#honk");
     irc.say("alice", "#honk", "goose: you there?");
     await until(() => seen.length === 1);
-    expect(seen).toEqual([true]);
-  });
-
-  test("is not seen while the window has no focus", async () => {
-    const seen = mentions();
-    await connect();
-    m.setFocused(false);
-    m.setActive("alpha", "#honk");
-    irc.say("alice", "#honk", "goose: you there?");
-    await until(() => seen.length === 1);
-    expect(seen).toEqual([false]);
+    expect(seen).toEqual([focused]);
   });
 
   test("is not seen in a terminal without focus reporting and no recent input", async () => {
