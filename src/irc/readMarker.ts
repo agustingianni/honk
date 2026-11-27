@@ -137,6 +137,12 @@ export interface ReadMarkerCallbacks {
   send(serverId: string, buffer: string, time: number): void;
   /** The server's casemapping, which decides which buffer names are one. See nameKey. */
   casemapping(serverId: string): Casemapping;
+  /**
+   * `buffer` now counts as read: honk clears its badge here. Called each time honk
+   * would send MARKREAD for it, also when it can't send one (see newestTime), so honk's
+   * badge and your other clients agree.
+   */
+  markedRead(serverId: string, buffer: string): void;
 }
 
 /**
@@ -151,10 +157,12 @@ export interface ReadMarkerCallbacks {
  *   See startReading for when reading starts.
  * - It never sends a marker at or before one the server said or honk already sent on
  *   this connection.
+ * - Each time it would send, it calls markedRead first, even when it can't send.
  *
  *   tracker.setFocused(true);
  *   tracker.onActiveChanged(null);   // #honk is on screen
- *   // 1 s later: send("libera", "#honk", <time of its newest line>)
+ *   // 1 s later: markedRead("libera", "#honk")
+ *   //            send("libera", "#honk", <time of its newest line>)
  */
 export class ReadMarkerTracker {
   /** What the terminal last said about focus. "unknown" until it says anything. See isReading. */
@@ -278,7 +286,7 @@ export class ReadMarkerTracker {
    * never said, a key pressed in the last few minutes stands in for focus, so a honk
    * left open in a detached tmux doesn't mark everything read overnight.
    */
-  private isReading(): boolean {
+  isReading(): boolean {
     if (this.focus !== "unknown") return this.focus === "focused";
     return this.clock.now() - this.lastKeyAt < PRESENT_AFTER_KEY_MS;
   }
@@ -312,6 +320,7 @@ export class ReadMarkerTracker {
    */
   private send(serverId: string, buffer: string): void {
     if (!this.isReading()) return;
+    this.callbacks.markedRead(serverId, buffer);
     const time = this.callbacks.newestTime(serverId, buffer);
     if (time === undefined) return;
     const key = this.key(serverId, buffer);

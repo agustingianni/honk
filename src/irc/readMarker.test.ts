@@ -168,9 +168,9 @@ test("the channel on screen gets the divider and moves the marker", async () => 
   m.setActive("alpha", "#honk");
   await until(() => buffer("#honk")!.messages.some((x) => x.text === "not read either"));
   expect(textOf("#honk", buffer("#honk")!.firstUnreadId)).toBe("goose: are you there?");
-  expect(buffer("#honk")!.unread).toBe(0);
 
   const sent = await irc.waitFor(isMarkRead("#honk"), 3000);
+  expect(buffer("#honk")!.unread).toBe(0);
   const newest = buffer("#honk")!.messages.findLast((x) => x.text === "not read either")!;
   expect(sent.params[1]).toBe(timestampParam(newest.timestamp.getTime()));
   expect(irc.readMarker("#honk")).toBe(newest.timestamp.getTime());
@@ -229,6 +229,7 @@ test("without focus, the channel on screen is not marked read", async () => {
 
 test("a live line in the channel on screen gets no divider", async () => {
   await connect();
+  m.setFocused(true);
   m.setActive("alpha", "#honk");
   irc.say("alice", "#honk", "live, while you watch");
   await until(() => buffer("#honk")!.messages.some((x) => x.text === "live, while you watch"));
@@ -344,4 +345,102 @@ describe("a server that refuses MARKREAD", () => {
     expect(errors("#honk")).toEqual([]);
     expect(errors(STATUS_BUFFER)).toHaveLength(2);
   }, 15_000);
+});
+
+describe("a badge clears only when the buffer counts as read", () => {
+  /** #honk on screen with focus, and five lines in #bun, the 2nd one a mention. */
+  async function fiveUnreadInBun(): Promise<void> {
+    await connect();
+    m.setFocused(true);
+    m.setActive("alpha", "#honk");
+    for (const text of ["one", "goose: two", "three", "four", "five"]) {
+      irc.say("alice", "#bun", text);
+      // A new ms for each line, so a marker can fall between two of them.
+      await Bun.sleep(2);
+    }
+    await until(() => buffer("#bun")!.unread === 5);
+  }
+  const timeOf = (text: string) =>
+    buffer("#bun")!.messages.find((x) => x.text === text)!.timestamp.getTime();
+
+  test("flipping past a channel keeps its badge, mention and divider", async () => {
+    await fiveUnreadInBun();
+    m.setActive("alpha", "#bun");
+    m.setActive("alpha", "#honk");
+    expect(await sendsMarkRead("#bun", DELAY * 2)).toBe(false);
+    expect(buffer("#bun")).toMatchObject({ unread: 5, hasMention: true });
+    expect(textOf("#bun", buffer("#bun")!.firstUnreadId)).toBe("one");
+  });
+
+  test("staying on a channel for the delay clears its badge as MARKREAD goes out", async () => {
+    await fiveUnreadInBun();
+    m.setActive("alpha", "#bun");
+    expect(buffer("#bun")!.unread).toBe(5);
+    await irc.waitFor(isMarkRead("#bun"), 2000);
+    expect(buffer("#bun")).toMatchObject({ unread: 0, hasMention: false });
+    // The divider stays while you read, and goes when you leave.
+    expect(textOf("#bun", buffer("#bun")!.firstUnreadId)).toBe("one");
+    m.setActive("alpha", "#honk");
+    await until(() => buffer("#bun")!.firstUnreadId === undefined);
+  });
+
+  test("after a flip past, a marker from another client only lowers the count", async () => {
+    await fiveUnreadInBun();
+    m.setActive("alpha", "#bun");
+    m.setActive("alpha", "#honk");
+    irc.setReadMarker("#bun", timeOf("goose: two"));
+    await until(() => buffer("#bun")!.unread === 3);
+    expect(buffer("#bun")!.hasMention).toBe(false);
+    expect(textOf("#bun", buffer("#bun")!.firstUnreadId)).toBe("three");
+
+    irc.setReadMarker("#bun", timeOf("five"));
+    await until(() => buffer("#bun")!.unread === 0);
+  });
+
+  test("on a server without draft/read-marker, the badge clears after the same delay", async () => {
+    irc.readMarkerCap = false;
+    await fiveUnreadInBun();
+    m.setActive("alpha", "#bun");
+    m.setActive("alpha", "#honk");
+    await Bun.sleep(DELAY * 2);
+    expect(buffer("#bun")!.unread).toBe(5);
+
+    m.setActive("alpha", "#bun");
+    await until(() => buffer("#bun")!.unread === 0, DELAY * 5);
+  });
+
+  test("without focus, a channel you switch to keeps its badge until you are back", async () => {
+    await fiveUnreadInBun();
+    m.setFocused(false);
+    m.setActive("alpha", "#bun");
+    await Bun.sleep(DELAY * 2);
+    expect(buffer("#bun")!.unread).toBe(5);
+
+    m.setFocused(true);
+    await Bun.sleep(DELAY / 2);
+    expect(buffer("#bun")!.unread).toBe(5);
+    await until(() => buffer("#bun")!.unread === 0, DELAY * 5);
+  });
+
+  test("a line that comes while you are on a channel with a badge counts too", async () => {
+    await fiveUnreadInBun();
+    m.setActive("alpha", "#bun");
+    irc.say("alice", "#bun", "six");
+    await until(() => buffer("#bun")!.unread === 6);
+    m.setActive("alpha", "#honk");
+    expect(buffer("#bun")!.unread).toBe(6);
+  });
+
+  test("lines that come into the channel on screen while you are away stay unread", async () => {
+    await connect();
+    m.setFocused(true);
+    m.setActive("alpha", "#bun");
+    await Bun.sleep(DELAY * 1.5);
+    m.setFocused(false);
+    for (const text of ["a", "b", "c"]) irc.say("alice", "#bun", text);
+    await until(() => buffer("#bun")!.unread === 3);
+    m.setActive("alpha", "#honk");
+    expect(buffer("#bun")!.unread).toBe(3);
+    expect(textOf("#bun", buffer("#bun")!.firstUnreadId)).toBe("a");
+  });
 });

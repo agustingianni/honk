@@ -185,6 +185,8 @@ export class FakeIrcd {
    * before a client connects: CAP LS reads it.
    */
   labeledResponse = true;
+  /** Offer draft/read-marker. Set it before a client connects: CAP LS reads it. */
+  readMarkerCap = true;
   /** MARKREAD from clients is dropped without a reply while this is true, like a lost line. */
   ignoreMarkRead = false;
   /** MARKREAD from clients gets "FAIL MARKREAD INTERNAL_ERROR" while this is true, like a soju database error. */
@@ -799,7 +801,11 @@ export class FakeIrcd {
 
   /** The capabilities CAP LS offers. */
   private caps(): string[] {
-    return this.labeledResponse ? CAPS : CAPS.filter((x) => x !== "labeled-response");
+    return CAPS.filter(
+      (x) =>
+        (this.labeledResponse || x !== "labeled-response") &&
+        (this.readMarkerCap || x !== "draft/read-marker"),
+    );
   }
 
   private onCap(c: Client, params: string[]): void {

@@ -573,6 +573,7 @@ export class IrcManager {
           if (client) requestMarkRead(client, bufferName, time);
         },
         casemapping: (serverId) => this.casemapping(serverId),
+        markedRead: (serverId, bufferName) => this.markedRead(serverId, bufferName),
       },
       { delayMs: options.markReadDelayMs },
     );
@@ -2263,10 +2264,13 @@ export class IrcManager {
     const isActive =
       this.active?.serverId === serverId && this.active.buffer === bufferName;
     // A history line is unread if it is newer than your read marker, or if it came
-    // while the connection was down.
+    // while the connection was down. In the buffer on screen, a line is unread while
+    // you are not reading, or while the buffer still has a badge: it counts as read
+    // only with the lines before it. See markedRead.
     const afterMarker = isAfterMarker(marker, message);
+    const seen = isActive && this.readMarkerTracker.isReading() && buf.unread === 0;
     const countsAsUnread =
-      !isActive && isReadableLine(message) && (!message.isHistory || afterMarker || missed);
+      !seen && isReadableLine(message) && (!message.isHistory || afterMarker || missed);
     // The buffer on screen gets the divider for history you have not read, but no badge.
     // History can arrive out of order, so the divider goes on the oldest unread line.
     let movesDivider = countsAsUnread || (isActive && afterMarker && message.isHistory === true);
@@ -2408,6 +2412,26 @@ export class IrcManager {
     }, MISSED_REPORT_DELAY_MS);
   }
 
+  /**
+   * You read `bufferName`: ReadMarkerTracker says so when it would send MARKREAD for it.
+   * Its badge clears now, not when you switch to it, so a buffer you only flipped past
+   * keeps its badge, the same as on your other clients. The divider stays while you
+   * read; setActive clears it when you leave.
+   */
+  private markedRead(serverId: string, bufferName: string): void {
+    const server = this.servers.get(serverId);
+    const buf = server?.buffers[bufferName];
+    if (!server || !buf || !this.hasBadge(serverId, bufferName)) return;
+    server.buffers = { ...server.buffers, [bufferName]: { ...buf, unread: 0, hasMention: false } };
+    this.emit();
+  }
+
+  /** True if the buffer still shows as unread: a count, or the mention mark. */
+  private hasBadge(serverId: string, bufferName: string): boolean {
+    const buf = this.servers.get(serverId)?.buffers[bufferName];
+    return buf !== undefined && (buf.unread > 0 || buf.hasMention);
+  }
+
   private clearUnreadDivider(serverId: string, bufferName: string): void {
     const server = this.servers.get(serverId);
     const buf = server?.buffers[bufferName];
@@ -2423,23 +2447,18 @@ export class IrcManager {
     const server = this.servers.get(serverId);
     if (!server) return;
     const bufferName = this.bufferKey(serverId, name);
-    const buf = server.buffers[bufferName];
-    if (!buf) return;
+    if (!server.buffers[bufferName]) return;
 
     const leaving =
       this.active?.serverId !== serverId || this.active.buffer !== bufferName
         ? this.active
         : null;
-    // Clear the unread divider on the buffer we are leaving
-    if (leaving) this.clearUnreadDivider(leaving.serverId, leaving.buffer);
-
     this.active = { serverId, buffer: bufferName };
+    // The tracker may count the buffer you leave as read (markedRead) first. If it
+    // did, its divider goes. A buffer you flipped past keeps its badge and divider.
     this.readMarkerTracker.onActiveChanged(leaving);
-    if (buf.unread > 0 || buf.hasMention) {
-      server.buffers = {
-        ...server.buffers,
-        [bufferName]: { ...buf, unread: 0, hasMention: false },
-      };
+    if (leaving && !this.hasBadge(leaving.serverId, leaving.buffer)) {
+      this.clearUnreadDivider(leaving.serverId, leaving.buffer);
     }
     this.emit();
   }
