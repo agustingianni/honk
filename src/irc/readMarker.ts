@@ -146,8 +146,9 @@ export interface ReadMarkerCallbacks {
  *   never reports focus, you pressed a key in the last PRESENT_AFTER_KEY_MS.
  * - It waits `delayMs` after a new line, and new lines don't push the time back, so a
  *   busy channel is marked once per delay.
- * - A buffer switch starts the wait over. The buffer you leave is marked at once if it
- *   was on screen for at least `delayMs`, and not at all if you only flipped past it.
+ * - A buffer switch starts the wait over. The buffer you leave is marked at once if you
+ *   read it for at least `delayMs`, and not at all if you only flipped past it.
+ *   See startReading for when reading starts.
  * - It never sends a marker at or before one the server said or honk already sent on
  *   this connection.
  *
@@ -162,8 +163,10 @@ export class ReadMarkerTracker {
   private lastKeyAt = 0;
   /** Waits before sending MARKREAD for the buffer on screen. See schedule. */
   private timer: unknown = null;
-  /** When the buffer on screen became active (ms). See onActiveChanged. */
-  private activeSince = 0;
+  /**
+   * When you started reading the buffer on screen (ms). See startReading.
+   */
+  private readingSince = 0;
   /**
    * Per server, how far you have read each buffer (ms), by buffer name folded with the
    * server's casemapping (see key), as the server last said in a MARKREAD. Kept across
@@ -192,8 +195,9 @@ export class ReadMarkerTracker {
    * screen is not being read, so its marker doesn't move.
    */
   setFocused(focused: boolean): void {
+    const wasReading = this.isReading();
     this.focus = focused ? "focused" : "blurred";
-    if (focused) this.schedule();
+    if (!wasReading && this.isReading()) this.startReading();
   }
 
   /**
@@ -201,8 +205,9 @@ export class ReadMarkerTracker {
    * for one) gives no other sign that you are there.
    */
   noteKeyPress(): void {
+    const wasReading = this.isReading();
     this.lastKeyAt = this.clock.now();
-    if (this.focus === "unknown") this.schedule();
+    if (!wasReading && this.isReading()) this.startReading();
   }
 
   /** A line went into the buffer on screen. */
@@ -215,15 +220,16 @@ export class ReadMarkerTracker {
    * before, when the switch went to a different one, and null otherwise.
    */
   onActiveChanged(leaving: ActiveBuffer | null): void {
-    if (leaving) {
-      // Its last lines were on screen long enough to read: mark them now. A buffer you
-      // only flipped past is not marked. The timer starts over for the new buffer.
-      const now = this.clock.now();
-      if (now - this.activeSince >= this.delayMs) this.send(leaving.serverId, leaving.buffer);
-      this.stop();
-      this.activeSince = now;
+    if (!leaving) {
+      this.schedule();
+      return;
     }
-    this.schedule();
+    // You read its last lines long enough: mark them now. A buffer you only flipped
+    // past is not marked.
+    if (this.clock.now() - this.readingSince >= this.delayMs) {
+      this.send(leaving.serverId, leaving.buffer);
+    }
+    this.startReading();
   }
 
   /** A new connection to the server registered: send again what the old one may have lost. */
@@ -256,7 +262,7 @@ export class ReadMarkerTracker {
     this.sentMarkers.delete(serverId);
   }
 
-  /** Cancels the timer: on a buffer switch, and when honk shuts down. */
+  /** Cancels the timer: when reading starts over, and when honk shuts down. */
   stop(): void {
     if (this.timer !== null) this.clock.clearTimeout(this.timer);
     this.timer = null;
@@ -275,6 +281,19 @@ export class ReadMarkerTracker {
   private isReading(): boolean {
     if (this.focus !== "unknown") return this.focus === "focused";
     return this.clock.now() - this.lastKeyAt < PRESENT_AFTER_KEY_MS;
+  }
+
+  /**
+   * You started reading the buffer on screen: you switched to it, focus came back, or
+   * you pressed a key after a time without one. It counts as read only once you have
+   * read it for `delayMs` since then, so the lines that came while you were away are
+   * not marked when you come back and switch away at once. A timer set before starts
+   * over too.
+   */
+  private startReading(): void {
+    this.readingSince = this.clock.now();
+    this.stop();
+    this.schedule();
   }
 
   /** Sends MARKREAD for the buffer on screen after the delay, unless a send is already waiting. */

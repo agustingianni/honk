@@ -115,6 +115,83 @@ describe("ReadMarkerTracker", () => {
     expect(sent).toEqual([["libera", "#honk", 100]]);
   });
 
+  test("coming back and switching at once does not mark the lines that came while away", () => {
+    const { markers, advance, show, line, sent } = setup();
+    markers.setFocused(true);
+    show("#bun");
+    advance(DELAY * 2);
+    markers.setFocused(false);
+    line("#bun", 300);
+    advance(DELAY * 3);
+    markers.setFocused(true);
+    advance(DELAY / 2);
+    show("#honk");
+    expect(sent).toEqual([["libera", "#bun", 200]]);
+  });
+
+  test("coming back, the buffer on screen is marked only after a full delay", () => {
+    const { markers, advance, show, line, sent } = setup();
+    markers.setFocused(true);
+    show("#bun");
+    advance(DELAY * 2);
+    markers.setFocused(false);
+    line("#bun", 300);
+    advance(DELAY / 2);
+    markers.setFocused(true);
+    // The timer the line set while you were away would fire here.
+    advance(DELAY / 2);
+    expect(sent).toEqual([["libera", "#bun", 200]]);
+    advance(DELAY / 2);
+    expect(sent).toEqual([
+      ["libera", "#bun", 200],
+      ["libera", "#bun", 300],
+    ]);
+
+    line("#bun", 301);
+    show("#honk");
+    expect(sent.at(-1)).toEqual(["libera", "#bun", 301]);
+  });
+
+  test("a focus event while already focused does not restart the time", () => {
+    const { markers, advance, show, line, sent } = setup();
+    markers.setFocused(true);
+    show("#bun");
+    advance(DELAY * 2);
+    line("#bun", 300);
+    markers.setFocused(true);
+    show("#honk");
+    expect(sent).toEqual([
+      ["libera", "#bun", 200],
+      ["libera", "#bun", 300],
+    ]);
+  });
+
+  test("with focus unknown, a key press after a time away and a switch at once marks nothing", () => {
+    const { markers, advance, show, line, sent } = setup();
+    markers.noteKeyPress();
+    show("#bun");
+    advance(DELAY * 2);
+    advance(PRESENT_AFTER_KEY_MS);
+    line("#bun", 300);
+    markers.noteKeyPress();
+    show("#honk");
+    expect(sent).toEqual([["libera", "#bun", 200]]);
+  });
+
+  test("with focus unknown, a key press while reading does not restart the time", () => {
+    const { markers, advance, show, line, sent } = setup();
+    markers.noteKeyPress();
+    show("#bun");
+    advance(DELAY * 2);
+    line("#bun", 300);
+    markers.noteKeyPress();
+    show("#honk");
+    expect(sent).toEqual([
+      ["libera", "#bun", 200],
+      ["libera", "#bun", 300],
+    ]);
+  });
+
   test("with focus unknown, a key press in the last 2 minutes counts as reading", () => {
     const { markers, advance, show, line, sent } = setup();
     show("#honk");
