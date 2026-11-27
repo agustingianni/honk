@@ -108,8 +108,6 @@ const CAPS = [
 ];
 /** Mode letters and prefixes, highest first, as sent in 005 PREFIX. */
 const PREFIXES = "@+";
-/** How long registration waits, as a real server's lookups do. See tryRegister. */
-const REGISTER_DELAY_MS = 30;
 const FILLER_NICKS = ["alice", "bob", "carol"];
 
 const lower = (s: string) => s.toLowerCase();
@@ -184,6 +182,8 @@ export class FakeIrcd {
   ignoreMarkRead = false;
   /** MARKREAD from clients gets "FAIL MARKREAD INTERNAL_ERROR" while this is true, like a soju database error. */
   failMarkRead = false;
+  /** CAP gets 421 (unknown command) while this is true, like a server from before IRCv3. */
+  rejectCap = false;
 
   private server: Server | null = null;
   /**
@@ -759,8 +759,12 @@ export class FakeIrcd {
       case "MARKREAD":
         return this.onMarkRead(c, params);
       default:
-        return this.reply(c, "421", `${command} :Unknown command`);
+        return this.unknownCommand(c, command);
     }
+  }
+
+  private unknownCommand(c: Client, command: string): void {
+    this.reply(c, "421", `${command} :Unknown command`);
   }
 
   /** The capabilities CAP LS offers. */
@@ -769,6 +773,7 @@ export class FakeIrcd {
   }
 
   private onCap(c: Client, params: string[]): void {
+    if (this.rejectCap) return this.unknownCommand(c, "CAP");
     const sub = (params[0] ?? "").toUpperCase();
     const me = c.registered ? c.nick! : "*";
     if (sub === "LS") {
@@ -847,18 +852,11 @@ export class FakeIrcd {
   }
 
   /**
-   * Finishes registration once NICK and USER are in and CAP negotiation is over. Like a
-   * real server doing its ident and DNS lookups, it waits a little first: a client may send
-   * NICK and USER before CAP LS (irc-client-ts does without a password), and the CAP LS
-   * must still hold registration.
+   * Registers the client as soon as NICK and USER are in and CAP negotiation is over, like
+   * soju and Ergo. A CAP LS that comes after NICK and USER is too late to hold it.
    */
   private tryRegister(c: Client): void {
     if (c.registered || !c.nick || !c.user || c.capNegotiating) return;
-    setTimeout(() => this.finishRegister(c), REGISTER_DELAY_MS);
-  }
-
-  private finishRegister(c: Client): void {
-    if (c.registered || !c.nick || !c.user || c.capNegotiating || !this.clients.has(c)) return;
     c.registered = true;
     this.reply(c, "001", `:Welcome to ${this.network}, ${c.nick}`);
     this.reply(c, "002", `:Your host is ${SERVER_NAME}, running fakeircd`);

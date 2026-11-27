@@ -26,12 +26,15 @@
   "dependencies": {
     "@opentui/core": "0.9.8",
     "@opentui/react": "0.9.8",
-    "irc-client-ts": "^0.23.1",
+    "irc-client-ts": "0.23.1",
     "react": "^19.2.0"
   },
   "devDependencies": {
     "@types/bun": "1.4.5",
     "@types/react": "^19.2.0",
     "typescript": "^5.9.0"
+  },
+  "patchedDependencies": {
+    "irc-client-ts@0.23.1": "patches/irc-client-ts@0.23.1.patch"
   }
 }
