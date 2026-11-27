@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bu
 import { FakeIrcd } from "../../dev/fakeircd/server.ts";
 import { until } from "../../dev/fakeircd/testing.ts";
 import { ECHO_WAIT_MS, EchoTracker, MAX_WAITING_ECHOES, type SentPart } from "./echo.ts";
+import { fakeClock } from "../fakeClock.ts";
 import { IrcManager } from "./manager.ts";
 
 /** A plain message part. */
@@ -51,10 +52,10 @@ describe("EchoTracker", () => {
   });
 
   test("stops waiting after ECHO_WAIT_MS", () => {
-    let now = 0;
-    const t = new EchoTracker(() => now);
+    const clock = fakeClock();
+    const t = new EchoTracker(clock);
     t.add("s", "#a", "m1", [msg("hi")]);
-    now = ECHO_WAIT_MS + 1;
+    clock.advance(ECHO_WAIT_MS + 1);
     expect(t.take("s", "#a", msg("hi"))).toBeUndefined();
   });
 

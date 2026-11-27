@@ -8,6 +8,7 @@ import {
   Notifier,
   stripIrcFormatting,
 } from "./notify.ts";
+import { fakeClock } from "./fakeClock.ts";
 
 function event(overrides: Partial<MentionEvent> = {}): MentionEvent {
   return {
@@ -25,15 +26,15 @@ function event(overrides: Partial<MentionEvent> = {}): MentionEvent {
 /** A Notifier with a fake clock that records what it sends. */
 function setup(sendResult = true) {
   const sent: { message: string; title: string }[] = [];
-  let time = 1_000_000;
+  const clock = fakeClock(1_000_000);
   const notifier = new Notifier(
     (message, title) => {
       sent.push({ message, title });
       return sendResult;
     },
-    () => time,
+    clock,
   );
-  return { notifier, sent, advance: (ms: number) => (time += ms) };
+  return { notifier, sent, advance: clock.advance };
 }
 
 describe("stripIrcFormatting", () => {
