@@ -76,7 +76,7 @@ describe("bundled themes", () => {
         expect(worst, `${label} on ${surface}`).toBeGreaterThanOrEqual(min);
       }
       // Muted text (timestamps, hints) is weaker than secondary text (the nicklist).
-      expect(contrast(t.fgMuted, t.bgBase), "fgMuted than fgSecondary").toBeLessThan(
+      expect(contrast(t.fgMuted, t.bgBase), "fgMuted weaker than fgSecondary").toBeLessThan(
         contrast(t.fgSecondary, t.bgBase),
       );
       expect(contrast(t.bgSidebar, t.bgBase)).toBeGreaterThanOrEqual(MIN_PANEL_CONTRAST);
@@ -144,6 +144,14 @@ describe("schemeToTheme", () => {
     const t = schemeToTheme(r.scheme);
     expect(t.bgSidebar).toBe(mix("#1e1e2e", "#000000", 0.15));
     expect(t.red).toBe("#f38ba8");
+  });
+
+  test("muted text is weaker than secondary text when base03 is brighter than base04", () => {
+    const r = checkScheme(scheme16({ ...PALETTE16, base03: "#909090", base04: "#707070" }));
+    if (!r.ok) throw new Error(r.problems.join("; "));
+    const t = schemeToTheme(r.scheme);
+    expect(t.fgSecondary).toBe("#707070");
+    expect(contrast(t.fgMuted, t.bgBase)).toBeLessThan(contrast(t.fgSecondary, t.bgBase));
   });
 
   test("ignores base24 backgrounds far from base00", () => {
