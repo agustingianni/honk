@@ -6,7 +6,7 @@ import {
 } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { IrcManager } from "./irc/manager.ts";
-import { STATUS_BUFFER } from "./irc/names.ts";
+import { DEFAULT_CASEMAPPING, STATUS_BUFFER } from "./irc/names.ts";
 import { withActionUsed } from "./state.ts";
 import { applyTheme, theme, ThemeVersion } from "./theme.ts";
 import type { ThemeEntry } from "./themes/index.ts";
@@ -234,6 +234,7 @@ export function App({
             <Nicklist
               users={activeBuffer!.users}
               myNick={activeServer?.nick ?? ""}
+              casemapping={activeServer?.casemapping ?? DEFAULT_CASEMAPPING}
               onSelectUser={selectUser}
             />
           )}

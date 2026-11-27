@@ -23,6 +23,7 @@ function server(id: string, buffers: BufferState[]): ServerState {
     config: { id, host: "127.0.0.1", nick: "goose" },
     status: "connected",
     nick: "goose",
+    casemapping: "rfc1459",
     tls: false,
     buffers: Object.fromEntries(buffers.map((b) => [b.name, b])),
     bufferOrder: buffers.map((b) => b.name),

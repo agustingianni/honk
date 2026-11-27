@@ -89,25 +89,27 @@ describe("dmTargets", () => {
   });
 
   test("lists the nicks and leaves out channels", () => {
-    expect(dmTargets([target("alice"), target("#honk"), target("bob")], ["goose"])).toEqual([
-      "alice",
-      "bob",
-    ]);
+    const lines = [target("alice"), target("#honk"), target("bob")];
+    expect(dmTargets(lines, ["goose"], "rfc1459")).toEqual(["alice", "bob"]);
   });
 
   test("leaves out your own nicks, old and new", () => {
-    expect(dmTargets([target("Goose"), target("goose_"), target("alice")], ["goose", "goose_"])).toEqual([
-      "alice",
-    ]);
+    const lines = [target("Goose"), target("goose_"), target("alice")];
+    expect(dmTargets(lines, ["goose", "goose_"], "rfc1459")).toEqual(["alice"]);
   });
 
   test("also reads lines from a parser that names the command", () => {
     const line = { command: "CHATHISTORY", params: ["TARGETS", "alice", "timestamp=x"] };
-    expect(dmTargets([line], ["goose"])).toEqual(["alice"]);
+    expect(dmTargets([line], ["goose"], "rfc1459")).toEqual(["alice"]);
   });
 
-  test("lists a nick once", () => {
-    expect(dmTargets([target("alice"), target("Alice")], ["goose"])).toEqual(["alice"]);
+  test("lists a nick once, as the server's casemapping folds it", () => {
+    expect(dmTargets([target("alice"), target("Alice")], ["goose"], "rfc1459")).toEqual(["alice"]);
+    expect(dmTargets([target("bob^"), target("Bob~")], ["goose"], "rfc1459")).toEqual(["bob^"]);
+    expect(dmTargets([target("bob^"), target("Bob~")], ["goose"], "ascii")).toEqual([
+      "bob^",
+      "Bob~",
+    ]);
   });
 
   test("ignores other lines", () => {
@@ -119,6 +121,7 @@ describe("dmTargets", () => {
           { command: undefined, params: ["TARGETS"] },
         ],
         ["goose"],
+        "rfc1459",
       ),
     ).toEqual([]);
   });

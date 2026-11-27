@@ -1,3 +1,5 @@
+import type { Casemapping } from "./irc/names.ts";
+
 export type AuthMethod = "sasl" | "saslExternal" | "NickServ";
 
 export interface ServerConfig {
@@ -113,6 +115,11 @@ export interface ServerState {
   status: ConnectionStatus;
   reconnectInfo?: ReconnectInfo;
   nick: string;
+  /**
+   * Which names the server sees as the same, from CASEMAPPING. The default until the
+   * server says, and kept across reconnects. Compare names with it (see nameKey).
+   */
+  casemapping: Casemapping;
   tls: boolean;
   buffers: Record<string, BufferState>;
   bufferOrder: string[];

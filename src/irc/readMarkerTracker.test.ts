@@ -6,14 +6,17 @@ import {
 } from "./readMarker.ts";
 import { fakeClock } from "../fakeClock.ts";
 import type { ActiveBuffer } from "../types.ts";
+import type { Casemapping } from "./names.ts";
 
 const DELAY = MARK_READ_DELAY_MS;
 
 /**
  * A tracker with one server, "libera". `newest` is the newest line's time per buffer,
  * which a test moves forward to stand for a new line. `sent` collects each MARKREAD.
+ * `casemappings` sets a server's casemapping; a server not in it uses rfc1459.
  */
 function setup() {
+  const casemappings = new Map<string, Casemapping>();
   const clock = fakeClock(1_000_000);
   let onScreen: ActiveBuffer | null = null;
   const newest = new Map<string, number>([
@@ -26,6 +29,7 @@ function setup() {
       onScreen: () => onScreen,
       newestTime: (_serverId, buffer) => newest.get(buffer),
       send: (serverId, buffer, time) => sent.push([serverId, buffer, time]),
+      casemapping: (serverId) => casemappings.get(serverId) ?? "rfc1459",
     },
     { delayMs: DELAY, clock },
   );
@@ -40,7 +44,16 @@ function setup() {
     newest.set(buffer, time);
     markers.onNewLine();
   };
-  return { markers, advance: clock.advance, active: clock.active, show, line, sent, newest };
+  return {
+    markers,
+    advance: clock.advance,
+    active: clock.active,
+    show,
+    line,
+    sent,
+    newest,
+    casemappings,
+  };
 }
 
 describe("ReadMarkerTracker", () => {
@@ -147,13 +160,31 @@ describe("ReadMarkerTracker", () => {
     ]);
   });
 
-  test("onServerMarker says whether the marker moved forward, by name in any case", () => {
+  test("onServerMarker says whether the marker moved forward, by name as the server folds it", () => {
     const { markers } = setup();
-    expect(markers.onServerMarker("libera", "#Honk", 100)).toBe(true);
-    expect(markers.onServerMarker("libera", "#honk", 100)).toBe(false);
-    expect(markers.onServerMarker("libera", "#honk", 90)).toBe(false);
-    expect(markers.serverMarker("libera", "#HONK")).toBe(100);
-    expect(markers.serverMarker("other", "#honk")).toBeUndefined();
+    expect(markers.onServerMarker("libera", "#Honk[", 100)).toBe(true);
+    expect(markers.onServerMarker("libera", "#honk{", 100)).toBe(false);
+    expect(markers.onServerMarker("libera", "#honk{", 90)).toBe(false);
+    expect(markers.serverMarker("libera", "#HONK[")).toBe(100);
+    expect(markers.serverMarker("other", "#honk[")).toBeUndefined();
+  });
+
+  test("on an ascii server, #honk[ and #honk{ have their own markers", () => {
+    const { markers, casemappings } = setup();
+    casemappings.set("libera", "ascii");
+    expect(markers.onServerMarker("libera", "#Honk[", 100)).toBe(true);
+    expect(markers.serverMarker("libera", "#honk[")).toBe(100);
+    expect(markers.serverMarker("libera", "#honk{")).toBeUndefined();
+  });
+
+  test("a marker the server said under another spelling is not sent again", () => {
+    const { markers, advance, show, sent, newest } = setup();
+    markers.setFocused(true);
+    newest.set("#HONK[", 100);
+    markers.onServerMarker("libera", "#honk{", 100);
+    show("#HONK[");
+    advance(DELAY);
+    expect(sent).toEqual([]);
   });
 
   test("a buffer that cannot be marked sends nothing", () => {

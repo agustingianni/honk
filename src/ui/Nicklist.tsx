@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { type Casemapping, sameNick } from "../irc/names.ts";
 import { nickColor, prefixColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
@@ -7,6 +8,8 @@ import { HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
 interface NicklistProps {
   users: BufferState["users"];
   myNick: string;
+  /** The server's casemapping, to find your own nick in the list. */
+  casemapping: Casemapping;
   onSelectUser: (nick: string) => void;
 }
 
@@ -14,10 +17,10 @@ interface NicklistProps {
 export const Nicklist = memo(function Nicklist({
   users,
   myNick,
+  casemapping,
   onSelectUser,
 }: NicklistProps) {
   const themeVersion = useThemeVersion();
-  const myLower = myNick.toLowerCase();
 
   return (
     <box
@@ -55,7 +58,7 @@ export const Nicklist = memo(function Nicklist({
                 key={u.nick}
                 nick={u.nick}
                 prefix={u.prefix}
-                isSelf={u.nick.toLowerCase() === myLower}
+                isSelf={sameNick(u.nick, myNick, casemapping)}
                 onSelectUser={onSelectUser}
                 themeVersion={themeVersion}
               />

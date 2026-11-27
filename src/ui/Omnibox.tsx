@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { nickColor, theme, useThemeVersion } from "../theme.ts";
 import type { ThemeEntry } from "../themes/index.ts";
 import { findSlashCommand, needsArgs, SLASH_COMMANDS, syntax } from "../irc/commands.ts";
-import { sameNick } from "../irc/names.ts";
+import { type Casemapping, DEFAULT_CASEMAPPING, nameKey, sameNick } from "../irc/names.ts";
 import type { ActiveBuffer, ServerState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
 import { bufferDisplayName, cellWidth, truncate, unreadBadge } from "./display.ts";
@@ -97,6 +97,8 @@ export function rankActions<T extends Pick<OmniboxItem, "id" | "label" | "detail
 interface KnownUser {
   serverId: string;
   serverName: string;
+  /** The server's casemapping, to compare this nick with others. */
+  casemapping: Casemapping;
   nick: string;
   /** An open DM buffer with this user. */
   hasDm: boolean;
@@ -111,14 +113,20 @@ function collectUsers(servers: ServerState[]): KnownUser[] {
       if (!buf) continue;
       const nicks = buf.kind === "dm" ? [buf.name] : buf.users.map((u) => u.nick);
       for (const nick of nicks) {
-        if (sameNick(nick, s.nick)) continue;
-        const key = `${s.id}:${nick.toLowerCase()}`;
+        if (sameNick(nick, s.nick, s.casemapping)) continue;
+        const key = `${s.id}:${nameKey(nick, s.casemapping)}`;
         const known = users.get(key);
         if (known) {
           if (buf.kind === "dm") known.hasDm = true;
           continue;
         }
-        users.set(key, { serverId: s.id, serverName: s.name, nick, hasDm: buf.kind === "dm" });
+        users.set(key, {
+          serverId: s.id,
+          serverName: s.name,
+          casemapping: s.casemapping,
+          nick,
+          hasDm: buf.kind === "dm",
+        });
       }
     }
   }
@@ -227,7 +235,7 @@ export function quickOpenRows(q: string, ctx: QuickOpenContext): OmniboxItem[] {
         score: match.score,
         isUser: true,
         item: {
-          id: `user-${u.serverId}:${u.nick.toLowerCase()}`,
+          id: `user-${u.serverId}:${nameKey(u.nick, u.casemapping)}`,
           label,
           highlights: labelHighlights(match, label.length),
           labelColor: nickColor(u.nick),
@@ -550,20 +558,23 @@ export function Omnibox({
       // Recent speakers in the buffer you are in, newest first.
       const recentSpeakers = new Map<string, number>();
       const activeBuf = active ? activeServer?.buffers[active.buffer] : undefined;
+      const activeKey = (nick: string) =>
+        nameKey(nick, activeServer?.casemapping ?? DEFAULT_CASEMAPPING);
       const msgs = activeBuf?.messages ?? [];
       for (let i = msgs.length - 1; i >= Math.max(0, msgs.length - RECENT_SPEAKER_SCAN); i--) {
-        const from = msgs[i]!.from?.toLowerCase();
-        if (from && !recentSpeakers.has(from)) recentSpeakers.set(from, recentSpeakers.size);
+        const from = msgs[i]!.from;
+        const key = from && activeKey(from);
+        if (key && !recentSpeakers.has(key)) recentSpeakers.set(key, recentSpeakers.size);
       }
 
       const here =
         activeBuf?.kind === "channel"
-          ? new Set(activeBuf.users.map((u) => u.nick.toLowerCase()))
+          ? new Set(activeBuf.users.map((u) => activeKey(u.nick)))
           : new Set<string>();
       const inThisDm = (u: KnownUser) =>
         activeBuf?.kind === "dm" &&
         u.serverId === active?.serverId &&
-        sameNick(u.nick, activeBuf.name);
+        sameNick(u.nick, activeBuf.name, u.casemapping);
 
       const known = collectUsers(servers);
       const users = known
@@ -574,18 +585,22 @@ export function Omnibox({
           if (!q) {
             // People you talk with first: open DMs, then who spoke here lately,
             // then the rest of this channel. The DM you are in goes last.
-            const lower = u.nick.toLowerCase();
+            const key = nameKey(u.nick, u.casemapping);
             const sameServer = u.serverId === active?.serverId;
             if (inThisDm(u)) {
               score -= 10_000;
             } else if (u.hasDm) {
-              const dmKey = `${u.serverId}:${lower}`;
-              const recIdx = recentKeys.findIndex((k) => k.toLowerCase() === dmKey);
+              // A recent key is "<server id>:<buffer name>".
+              const prefix = `${u.serverId}:`;
+              const recIdx = recentKeys.findIndex(
+                (k) =>
+                  k.startsWith(prefix) && sameNick(k.slice(prefix.length), u.nick, u.casemapping),
+              );
               score += 3000 - (recIdx === -1 ? 50 : recIdx);
             }
-            const spoke = sameServer ? recentSpeakers.get(lower) : undefined;
+            const spoke = sameServer ? recentSpeakers.get(key) : undefined;
             if (spoke !== undefined) score += 2000 - spoke;
-            else if (sameServer && here.has(lower)) score += 1000;
+            else if (sameServer && here.has(key)) score += 1000;
           }
           return [{ u, score, match }];
         })
@@ -598,7 +613,7 @@ export function Omnibox({
 
       const list = users.map(
         ({ u, match }): OmniboxItem => ({
-          id: `user-${u.serverId}:${u.nick.toLowerCase()}`,
+          id: `user-${u.serverId}:${nameKey(u.nick, u.casemapping)}`,
           label: u.nick,
           highlights: labelHighlights(match, u.nick.length),
           labelColor: nickColor(u.nick),
@@ -613,10 +628,12 @@ export function Omnibox({
       // in "@dave alpha", so "@dave" stays on the dave you know.
       const [nick = "", serverWord = ""] = q.split(/\s+/);
       // One pass over the users: the servers where this nick is known.
-      const knownOn = new Set(known.filter((u) => sameNick(u.nick, nick)).map((u) => u.serverId));
+      const knownOn = new Set(
+        known.filter((u) => sameNick(u.nick, nick, u.casemapping)).map((u) => u.serverId),
+      );
       if (nick && (knownOn.size === 0 || serverWord)) {
         for (const s of connectedServers(servers, activeServer, serverWord)) {
-          if (sameNick(nick, s.nick) || knownOn.has(s.id)) continue;
+          if (sameNick(nick, s.nick, s.casemapping) || knownOn.has(s.id)) continue;
           result.items.push({
             id: `dm-new-${s.id}:${nick}`,
             label: `Message ${nick}`,
@@ -646,7 +663,7 @@ export function Omnibox({
     const [chan = "", serverWord = ""] = q.split(/\s+/);
     if (channelOnly && chan.length > 1) {
       for (const s of connectedServers(servers, activeServer, serverWord)) {
-        if (s.bufferOrder.some((b) => sameNick(b, chan))) continue;
+        if (s.bufferOrder.some((b) => sameNick(b, chan, s.casemapping))) continue;
         result.items.push({
           id: `join-${s.id}:${chan}`,
           label: `+ Join ${chan}`,

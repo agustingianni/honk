@@ -15,7 +15,7 @@
  */
 
 import { systemClock, type Clock } from "../clock.ts";
-import { sameNick } from "./names.ts";
+import { type Casemapping, sameNick } from "./names.ts";
 
 /** How long to wait for the PONG. Long enough for a slow link, short enough to notice a dead one. */
 export const DELIVERY_TIMEOUT_MS = 15_000;
@@ -107,12 +107,13 @@ export class DeliveryTracker {
    * The server refused a line to `bufferName` (such as 404 "Cannot send to channel").
    * It answers in order, so the refusal is for the oldest line to that buffer still
    * waiting. Returns that line and stops tracking it, so the PONG after it can't mark
-   * it delivered. Its PING stays, to keep confirming the lines around it.
+   * it delivered. Its PING stays, to keep confirming the lines around it. `mapping` is
+   * the server's casemapping, which decides which buffer names are the same.
    */
-  reject(serverId: string, bufferName: string): SentLine | undefined {
+  reject(serverId: string, bufferName: string, mapping: Casemapping): SentLine | undefined {
     const probe = this.pending
       .get(serverId)
-      ?.find((p) => sameNick(p.line?.bufferName, bufferName));
+      ?.find((p) => sameNick(p.line?.bufferName, bufferName, mapping));
     const line = probe?.line;
     if (probe) probe.line = undefined;
     return line;

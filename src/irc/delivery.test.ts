@@ -122,9 +122,9 @@ describe("DeliveryTracker", () => {
     send("libera", "1", "#quiet");
     send("libera", "2", "#honk");
     send("libera", "3", "#quiet");
-    expect(tracker.reject("libera", "#QUIET")).toEqual(line("1", "#quiet"));
+    expect(tracker.reject("libera", "#QUIET", "rfc1459")).toEqual(line("1", "#quiet"));
     tracker.pong("libera", "honk-3");
     expect(delivered).toEqual([["libera", [line("2"), line("3", "#quiet")]]]);
-    expect(tracker.reject("libera", "#quiet")).toBeUndefined();
+    expect(tracker.reject("libera", "#quiet", "rfc1459")).toBeUndefined();
   });
 });
