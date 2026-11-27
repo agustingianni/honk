@@ -28,12 +28,13 @@ function isFuzzyMatch(query: string, target: string): boolean {
 function rankCandidates(
   query: string,
   candidates: string[],
-  recentRank: (candidate: string) => number = () => Number.POSITIVE_INFINITY,
+  /** Recent speakers first, by candidate. */
+  recentOrder?: Map<string, number>,
 ): string[] {
   const sortBucket = (arr: string[]) =>
     arr.sort((a, b) => {
-      const ra = recentRank(a);
-      const rb = recentRank(b);
+      const ra = recentOrder?.get(a) ?? Number.POSITIVE_INFINITY;
+      const rb = recentOrder?.get(b) ?? Number.POSITIVE_INFINITY;
       if (ra !== rb) return ra - rb;
       return a.localeCompare(b);
     });
@@ -114,11 +115,13 @@ export function getCompletions(
     }
   }
 
-  const matches = rankCandidates(
-    token,
-    [...nickMap.values()],
-    (nick) => recentOrder.get(key(nick)) ?? Number.POSITIVE_INFINITY,
-  );
+  // Ranks by the nick as offered, so the sort does not fold names again.
+  const rankOf = new Map<string, number>();
+  for (const [k, nick] of nickMap) {
+    const rank = recentOrder.get(k);
+    if (rank !== undefined) rankOf.set(nick, rank);
+  }
+  const matches = rankCandidates(token, [...nickMap.values()], rankOf);
   const suffix = before === "" ? ": " : " ";
   return matches.map((nick) => `${before}${nick}${suffix}`);
 }

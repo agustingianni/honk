@@ -11,71 +11,71 @@ const msg = (text: string): SentPart => ({ kind: "message", text });
 describe("EchoTracker", () => {
   test("takes the oldest waiting part with the same text and buffer", () => {
     const t = new EchoTracker();
-    t.add("s", "#a", "rfc1459", "m1", [msg("hi")]);
-    t.add("s", "#b", "rfc1459", "m2", [msg("hi")]);
-    t.add("s", "#a", "rfc1459", "m3", [msg("hi")]);
-    expect(t.take("s", "#A", "rfc1459", msg("hi"))).toBe("m1");
-    expect(t.take("s", "#a", "rfc1459", msg("hi"))).toBe("m3");
-    expect(t.take("s", "#a", "rfc1459", msg("hi"))).toBeUndefined();
+    t.add("s", "#a", "m1", [msg("hi")]);
+    t.add("s", "#b", "m2", [msg("hi")]);
+    t.add("s", "#a", "m3", [msg("hi")]);
+    expect(t.take("s", "#a", msg("hi"))).toBe("m1");
+    expect(t.take("s", "#a", msg("hi"))).toBe("m3");
+    expect(t.take("s", "#a", msg("hi"))).toBeUndefined();
   });
 
   test("an action matches an action, not a message", () => {
     const t = new EchoTracker();
-    t.add("s", "#a", "rfc1459", "m1", [{ kind: "action", text: "waves" }]);
-    expect(t.take("s", "#a", "rfc1459", msg("waves"))).toBeUndefined();
-    expect(t.take("s", "#a", "rfc1459", { kind: "action", text: "waves" })).toBe("m1");
+    t.add("s", "#a", "m1", [{ kind: "action", text: "waves" }]);
+    expect(t.take("s", "#a", msg("waves"))).toBeUndefined();
+    expect(t.take("s", "#a", { kind: "action", text: "waves" })).toBe("m1");
   });
 
   test("only the first part of a split line takes over the line shown", () => {
     const t = new EchoTracker();
-    t.add("s", "#a", "rfc1459", "m1", [msg("one"), msg("two")]);
-    expect(t.take("s", "#a", "rfc1459", msg("two"))).toBeUndefined();
-    expect(t.take("s", "#a", "rfc1459", msg("one"))).toBe("m1");
+    t.add("s", "#a", "m1", [msg("one"), msg("two")]);
+    expect(t.take("s", "#a", msg("two"))).toBeUndefined();
+    expect(t.take("s", "#a", msg("one"))).toBe("m1");
     // "two" was taken: it no longer waits.
-    t.add("s", "#a", "rfc1459", "m2", [msg("x")]);
-    expect(t.take("s", "#a", "rfc1459", msg("two"))).toBeUndefined();
+    t.add("s", "#a", "m2", [msg("x")]);
+    expect(t.take("s", "#a", msg("two"))).toBeUndefined();
   });
 
   test("keeps at most MAX_WAITING_ECHOES, dropping the oldest", () => {
     const t = new EchoTracker();
     for (let i = 0; i <= MAX_WAITING_ECHOES; i++) {
-      t.add("s", "#a", "rfc1459", `m${i}`, [msg(`line ${i}`)]);
+      t.add("s", "#a", `m${i}`, [msg(`line ${i}`)]);
     }
-    expect(t.take("s", "#a", "rfc1459", msg("line 0"))).toBeUndefined();
-    expect(t.take("s", "#a", "rfc1459", msg("line 1"))).toBe("m1");
+    expect(t.take("s", "#a", msg("line 0"))).toBeUndefined();
+    expect(t.take("s", "#a", msg("line 1"))).toBe("m1");
   });
 
   test("matches without formatting and spaces at the ends", () => {
     const t = new EchoTracker();
-    t.add("s", "#a", "rfc1459", "m1", [msg("\x0304red\x03 ")]);
-    t.add("s", "#a", "rfc1459", "m2", [msg(" ok")]);
-    expect(t.take("s", "#a", "rfc1459", msg("red"))).toBe("m1");
-    expect(t.take("s", "#a", "rfc1459", msg("ok"))).toBe("m2");
+    t.add("s", "#a", "m1", [msg("\x0304red\x03 ")]);
+    t.add("s", "#a", "m2", [msg(" ok")]);
+    expect(t.take("s", "#a", msg("red"))).toBe("m1");
+    expect(t.take("s", "#a", msg("ok"))).toBe("m2");
   });
 
   test("stops waiting after ECHO_WAIT_MS", () => {
     const clock = fakeClock();
     const t = new EchoTracker(clock);
-    t.add("s", "#a", "rfc1459", "m1", [msg("hi")]);
+    t.add("s", "#a", "m1", [msg("hi")]);
     clock.advance(ECHO_WAIT_MS + 1);
-    expect(t.take("s", "#a", "rfc1459", msg("hi"))).toBeUndefined();
+    expect(t.take("s", "#a", msg("hi"))).toBeUndefined();
   });
 
   test("forget stops waiting for one line", () => {
     const t = new EchoTracker();
-    t.add("s", "#a", "rfc1459", "m1", [msg("hi"), msg("there")]);
-    t.add("s", "#a", "rfc1459", "m2", [msg("hi")]);
+    t.add("s", "#a", "m1", [msg("hi"), msg("there")]);
+    t.add("s", "#a", "m2", [msg("hi")]);
     t.forget("s", "m1");
-    expect(t.take("s", "#a", "rfc1459", msg("hi"))).toBe("m2");
-    t.add("s", "#a", "rfc1459", "m3", [msg("x")]);
-    expect(t.take("s", "#a", "rfc1459", msg("there"))).toBeUndefined();
+    expect(t.take("s", "#a", msg("hi"))).toBe("m2");
+    t.add("s", "#a", "m3", [msg("x")]);
+    expect(t.take("s", "#a", msg("there"))).toBeUndefined();
   });
 
   test("forgets a server's lines when its connection closes", () => {
     const t = new EchoTracker();
-    t.add("s", "#a", "rfc1459", "m1", [msg("hi")]);
+    t.add("s", "#a", "m1", [msg("hi")]);
     t.drop("s");
-    expect(t.take("s", "#a", "rfc1459", msg("hi"))).toBeUndefined();
+    expect(t.take("s", "#a", msg("hi"))).toBeUndefined();
   });
 });
 

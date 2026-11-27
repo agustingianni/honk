@@ -3,7 +3,7 @@ import { useKeyboard, usePaste, useRenderer } from "@opentui/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   type Casemapping,
-  DEFAULT_CASEMAPPING,
+  casemappingOf,
   isUserSender,
   nameKey,
   sameNick,
@@ -283,6 +283,7 @@ export function ChatPane({
   const [inputValue, setInputValue] = useState("");
   // Off with "mouse": false or --no-mouse. Then a click never reaches honk.
   const mouse = useRenderer().useMouse;
+  const casemapping = casemappingOf(server);
 
   // Tab completion state
   const completionRef = useRef<{ matches: string[]; index: number } | null>(null);
@@ -326,7 +327,7 @@ export function ChatPane({
         messages: buffer?.messages ?? [],
         channels,
         myNick: server?.nick ?? "",
-        casemapping: server?.casemapping ?? DEFAULT_CASEMAPPING,
+        casemapping,
       });
 
       if (matches.length > 0) {
@@ -427,7 +428,6 @@ export function ChatPane({
   // the first hover after the user list changes, not on every join and part.
   const users = buffer?.users ?? NO_USERS;
   const myNick = server?.nick ?? "";
-  const casemapping = server?.casemapping ?? DEFAULT_CASEMAPPING;
   const nicksRef = useRef<{
     users: NickEntry[];
     myNick: string;

@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { type Casemapping, sameNick } from "../irc/names.ts";
+import { type Casemapping, nameKey } from "../irc/names.ts";
 import { nickColor, prefixColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
@@ -21,6 +21,7 @@ export const Nicklist = memo(function Nicklist({
   onSelectUser,
 }: NicklistProps) {
   const themeVersion = useThemeVersion();
+  const myKey = nameKey(myNick, casemapping);
 
   return (
     <box
@@ -58,7 +59,7 @@ export const Nicklist = memo(function Nicklist({
                 key={u.nick}
                 nick={u.nick}
                 prefix={u.prefix}
-                isSelf={sameNick(u.nick, myNick, casemapping)}
+                isSelf={nameKey(u.nick, casemapping) === myKey}
                 onSelectUser={onSelectUser}
                 themeVersion={themeVersion}
               />

@@ -68,13 +68,31 @@ export function parseCasemapping(value: string | undefined): Casemapping {
   }
 }
 
-const lowerOf = (c: string) => String.fromCharCode(c.charCodeAt(0) + 32);
+/**
+ * Adds 32 to every byte from A (0x41) to `last`, the way servers fold. Returns `name`
+ * itself when it has no such byte, which is the common case, so no new string is made.
+ */
+function foldBytes(name: string, last: number): string {
+  let i = 0;
+  while (i < name.length) {
+    const c = name.charCodeAt(i);
+    if (c >= 0x41 && c <= last) break;
+    i++;
+  }
+  if (i === name.length) return name;
+  let out = name.slice(0, i);
+  for (; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    out += String.fromCharCode(c >= 0x41 && c <= last ? c + 32 : c);
+  }
+  return out;
+}
 
 /** How each mapping folds a name. See Casemapping. */
 const FOLD: Record<Casemapping, (name: string) => string> = {
-  ascii: (name) => name.replace(/[A-Z]/g, lowerOf),
-  "rfc1459-strict": (name) => name.replace(/[A-Z[\\\]]/g, lowerOf),
-  rfc1459: (name) => name.replace(/[A-Z[\\\]^]/g, lowerOf),
+  ascii: (name) => foldBytes(name, 0x5a), // Z
+  "rfc1459-strict": (name) => foldBytes(name, 0x5d), // ]
+  rfc1459: (name) => foldBytes(name, 0x5e), // ^
   // Close to PRECIS, not exactly it. PRECIS maps full-width forms, lowercases, and
   // normalizes with NFC. NFKC also maps full-width forms; most other characters it
   // changes are ones a PRECIS name may not hold.
@@ -89,6 +107,11 @@ const FOLD: Record<Casemapping, (name: string) => string> = {
  */
 export function nameKey(name: string, mapping: Casemapping): string {
   return FOLD[mapping](name);
+}
+
+/** The server's casemapping, or the default when there is no server. */
+export function casemappingOf(server?: { casemapping: Casemapping }): Casemapping {
+  return server?.casemapping ?? DEFAULT_CASEMAPPING;
 }
 
 /** True when the server sees two nicks (or channel names) as one. See nameKey. */

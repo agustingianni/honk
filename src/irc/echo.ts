@@ -20,7 +20,6 @@
 
 import { stripIrcFormatting } from "../notify.ts";
 import { systemClock, type Clock } from "../clock.ts";
-import { type Casemapping, nameKey } from "./names.ts";
 
 /** Parts kept per server, so lines that never match can't pile up. */
 export const MAX_WAITING_ECHOES = 200;
@@ -37,6 +36,7 @@ export interface SentPart {
 }
 
 interface Waiting extends SentPart {
+  /** The buffer name, folded (see nameKey). */
   buffer: string;
   /** The id of the line honk showed when you sent it. */
   messageId: string;
@@ -57,21 +57,15 @@ export class EchoTracker {
   constructor(private readonly clock: Clock = systemClock) {}
 
   /**
-   * Call after sending a line, with each PRIVMSG it was sent as. `mapping` is the
-   * server's casemapping, which decides which buffer names are the same.
+   * Call after sending a line, with each PRIVMSG it was sent as. `bufferKey` is the
+   * buffer's name folded with the server's casemapping (see nameKey).
    */
-  add(
-    serverId: string,
-    buffer: string,
-    mapping: Casemapping,
-    messageId: string,
-    parts: SentPart[],
-  ): void {
+  add(serverId: string, bufferKey: string, messageId: string, parts: SentPart[]): void {
     const list = this.current(serverId);
     const sentAt = this.clock.now();
     parts.forEach(({ kind, text }, i) =>
       list.push({
-        buffer: nameKey(buffer, mapping),
+        buffer: bufferKey,
         kind,
         text: comparable(text),
         messageId,
@@ -87,16 +81,12 @@ export class EchoTracker {
    * Takes the oldest waiting part that this echo matches. Returns the id of the line
    * shown if it is the line's first part; the echo of a later part is a new line.
    */
-  take(
-    serverId: string,
-    buffer: string,
-    mapping: Casemapping,
-    echo: SentPart,
-  ): string | undefined {
+  take(serverId: string, bufferKey: string, echo: SentPart): string | undefined {
     const list = this.current(serverId);
-    const key = nameKey(buffer, mapping);
     const want = comparable(echo.text);
-    const i = list.findIndex((w) => w.buffer === key && w.kind === echo.kind && w.text === want);
+    const i = list.findIndex(
+      (w) => w.buffer === bufferKey && w.kind === echo.kind && w.text === want,
+    );
     const [w] = i === -1 ? [] : list.splice(i, 1);
     this.set(serverId, list);
     return w?.first ? w.messageId : undefined;
