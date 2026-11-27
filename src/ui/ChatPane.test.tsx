@@ -263,6 +263,7 @@ describe("names in messages", () => {
       text: "a long line that wraps onto the next screen line, where bob is",
     },
     { ...message(4), from: "me", isSelf: true, delivery: "failed", text: "ok bob" },
+    { ...message(5), from: "carol", text: "x\u202E\u2066 y alice z" },
   ];
 
   async function setup() {
@@ -291,8 +292,9 @@ describe("names in messages", () => {
       await click("alice"); // the sender of an action
       await click("BOB"); // nicks match without case
       await click("bob is"); // on the second line of a wrapped message
+      await click("y alice", 0, 3); // after characters that take no cell
       // "BOB" opens the DM under the nick as the user list spells it.
-      expect(clicked).toEqual(["dm bob", "join #rust", "dm alice", "dm bob", "dm bob"]);
+      expect(clicked).toEqual(["dm bob", "join #rust", "dm alice", "dm bob", "dm bob", "dm alice"]);
     } finally {
       destroy();
     }
