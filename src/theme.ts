@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { nameKey } from "./irc/names.ts";
 import { builtinThemes, DEFAULT_THEME_ID, type Theme } from "./themes/index.ts";
 
 // The colors in use. Components read this object directly. applyTheme copies
@@ -27,7 +28,10 @@ export function useThemeVersion(): number {
 
 export function nickColor(nick: string): string {
   let hash = 2166136261;
-  const lower = nick.toLowerCase();
+  // Folded with rfc1459 and then lowercased, whatever the server's casemapping, so one
+  // nick spelled two ways ("Alice^", "alice~", "Ärger", "ärger") keeps one color. This
+  // folds more than some servers do, and two different nicks sharing a color is harmless.
+  const lower = nameKey(nick, "rfc1459").toLowerCase();
   for (let i = 0; i < lower.length; i++) {
     hash ^= lower.charCodeAt(i);
     hash = Math.imul(hash, 16777619);

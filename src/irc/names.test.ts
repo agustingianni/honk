@@ -34,7 +34,13 @@ describe("nameKey", () => {
     expect(nameKey("Alice^", "ascii")).toBe("alice^");
   });
 
-  test("no mapping folds letters outside A-Z, as no server does", () => {
+  test("rfc8265 folds letters outside A-Z and width forms too", () => {
+    expect(nameKey("Ärger", "rfc8265")).toBe(nameKey("ärger", "rfc8265"));
+    expect(nameKey("ＡＢＣ", "rfc8265")).toBe("abc");
+    expect(nameKey("#FOO[", "rfc8265")).toBe("#foo[");
+  });
+
+  test("the byte mappings fold no letter outside A-Z", () => {
     expect(nameKey("#CAFÉ", "rfc1459")).toBe("#cafÉ");
     expect(nameKey("#CAFÉ", "ascii")).toBe("#cafÉ");
   });
@@ -61,8 +67,18 @@ describe("parseCasemapping", () => {
     expect(DEFAULT_CASEMAPPING).toBe("rfc1459");
   });
 
+  test("reads the older spelling strict-rfc1459, and any case", () => {
+    expect(parseCasemapping("strict-rfc1459")).toBe("rfc1459-strict");
+    expect(parseCasemapping("RFC1459")).toBe("rfc1459");
+    expect(parseCasemapping("Ascii")).toBe("ascii");
+  });
+
+  test("reads PRECIS as rfc8265, also under its older name rfc7613", () => {
+    expect(parseCasemapping("rfc8265")).toBe("rfc8265");
+    expect(parseCasemapping("rfc7613")).toBe("rfc8265");
+  });
+
   test("an unknown mapping folds as ascii", () => {
-    expect(parseCasemapping("rfc7613")).toBe("ascii");
-    expect(parseCasemapping("precis")).toBe("ascii");
+    expect(parseCasemapping("made-up")).toBe("ascii");
   });
 });

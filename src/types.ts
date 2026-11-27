@@ -116,8 +116,8 @@ export interface ServerState {
   reconnectInfo?: ReconnectInfo;
   nick: string;
   /**
-   * Which names the server sees as the same, from CASEMAPPING. The default until the
-   * server says, and kept across reconnects. Compare names with it (see nameKey).
+   * Which names the server sees as the same, from CASEMAPPING. Each connection starts
+   * at the default and takes the server's 005 value. Compare names with it (see nameKey).
    */
   casemapping: Casemapping;
   tls: boolean;

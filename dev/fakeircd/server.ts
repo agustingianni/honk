@@ -22,7 +22,7 @@ import {
   parseTimestampParam,
   timestampParam,
 } from "../../src/irc/ircLine.ts";
-import { type Casemapping, nameKey } from "../../src/irc/names.ts";
+import { type Casemapping, DEFAULT_CASEMAPPING, nameKey } from "../../src/irc/names.ts";
 
 export interface FakeIrcdOptions {
   /** 0 picks a free port. Default 0. */
@@ -39,8 +39,11 @@ export interface FakeIrcdOptions {
   log?: (line: string) => void;
   /** Wait this long after a TCP connect before answering anything. Default 0. */
   acceptDelayMs?: number;
-  /** The CASEMAPPING= in 005, which also decides which names are the same here. Default "ascii". */
-  casemapping?: Casemapping;
+  /**
+   * The CASEMAPPING= in 005, which also decides which names are the same here. null
+   * sends none, and names fold as rfc1459, as the spec says. Default "ascii".
+   */
+  casemapping?: Casemapping | null;
 }
 
 export interface ClientInfo {
@@ -154,7 +157,8 @@ function makeCert(): { cert: string; key: string; certPath: string; dir: string 
 
 export class FakeIrcd {
   readonly network: string;
-  readonly casemapping: Casemapping;
+  /** See FakeIrcdOptions.casemapping. Tests may change it; new clients see the change. */
+  casemapping: Casemapping | null;
   readonly host: string;
   /** The port it listens on (useful with `port: 0`). */
   port = 0;
@@ -223,7 +227,7 @@ export class FakeIrcd {
 
   /** A nick or channel name folded with this server's CASEMAPPING, for use as a map key. */
   private lower(name: string): string {
-    return nameKey(name, this.casemapping);
+    return nameKey(name, this.casemapping ?? DEFAULT_CASEMAPPING);
   }
 
   private constructor(opts: FakeIrcdOptions) {
@@ -875,7 +879,11 @@ export class FakeIrcd {
     this.reply(
       c,
       "005",
-      `NETWORK=${this.network} CASEMAPPING=${this.casemapping} CHANTYPES=# PREFIX=(ov)${PREFIXES} CHATHISTORY=200 :are supported by this server`,
+      [
+        `NETWORK=${this.network}`,
+        ...(this.casemapping ? [`CASEMAPPING=${this.casemapping}`] : []),
+        `CHANTYPES=# PREFIX=(ov)${PREFIXES} CHATHISTORY=200 :are supported by this server`,
+      ].join(" "),
     );
     this.reply(c, "375", `:- ${SERVER_NAME} Message of the day -`);
     this.reply(c, "372", `:- This is ${this.network}, a fake IRC server for testing honk.`);

@@ -15,8 +15,8 @@ afterEach(async () => {
   m = undefined;
 });
 
-/** honk connected to a FakeIrcd that sends `casemapping` in 005, in #foo[. */
-async function connect(casemapping: Casemapping) {
+/** honk connected to a FakeIrcd that sends `casemapping` in 005 (null: none), in #foo[. */
+async function connect(casemapping: Casemapping | null, nick = "goose") {
   irc = await FakeIrcd.start({ casemapping });
   const manager = new IrcManager();
   m = manager;
@@ -26,15 +26,16 @@ async function connect(casemapping: Casemapping) {
     host: "127.0.0.1",
     port: irc.port,
     tls: false,
-    nick: "goose",
+    nick,
     channels: ["#foo["],
     autoConnect: false,
   });
   await manager.connectServer("net");
   const server = () => manager.getSnapshot().servers.find((s) => s.id === "net")!;
   await until(() => Boolean(server().buffers["#foo["]));
-  const texts = (buffer: string) => server().buffers[buffer]?.messages.map((x) => x.text) ?? [];
-  return { fake: irc, server, texts };
+  const lines = (buffer: string) => server().buffers[buffer]?.messages ?? [];
+  const texts = (buffer: string) => lines(buffer).map((x) => x.text);
+  return { fake: irc, manager, server, lines, texts };
 }
 
 test("on an rfc1459 server, #foo[ and #FOO{ are one Buffer", async () => {
@@ -79,4 +80,39 @@ test("on an rfc1459-strict server, Alice^ and alice~ are two DMs", async () => {
     ["Alice^", ["one"]],
     ["alice~", ["two"]],
   ]);
+});
+
+test("on an rfc8265 server, Ärger and ärger write in one DM", async () => {
+  const { fake, server, texts } = await connect("rfc8265");
+  fake.sendRaw(":Ärger!a@fake.host PRIVMSG $NICK :one");
+  await until(() => texts("Ärger").includes("one"));
+  fake.sendRaw(":ärger!a@fake.host PRIVMSG $NICK :two");
+  await until(() => texts("ärger").includes("two"));
+  expect(dms(server)).toEqual([["ärger", ["one", "two"]]]);
+});
+
+test("a mention matches your nick as the server folds it", async () => {
+  const { fake, lines } = await connect("rfc1459", "goose[m]");
+  fake.sendRaw(":alice!a@fake.host PRIVMSG #foo[ :GOOSE{M}: ping");
+  await until(() => lines("#foo[").some((x) => x.text.endsWith("ping")));
+  expect(lines("#foo[").at(-1)?.isMention).toBe(true);
+});
+
+test("on an ascii server, goose{m} is not a mention of goose[m]", async () => {
+  const { fake, lines } = await connect("ascii", "goose[m]");
+  fake.sendRaw(":alice!a@fake.host PRIVMSG #foo[ :goose{m}: ping");
+  await until(() => lines("#foo[").some((x) => x.text.endsWith("ping")));
+  expect(lines("#foo[").at(-1)?.isMention).toBeFalsy();
+});
+
+test("with no CASEMAPPING a server gets rfc1459, even after one that sent ascii", async () => {
+  const { fake, manager, server } = await connect("ascii");
+  expect(server().casemapping).toBe("ascii");
+  fake.casemapping = null;
+  manager.runCommandOn("net", "/disconnect");
+  await until(() => server().status === "disconnected");
+  manager.runCommandOn("net", "/connect");
+  await until(() => server().status === "connected");
+  await until(() => fake.clientList().some((c) => c.channels.includes("#foo[")));
+  expect(server().casemapping).toBe("rfc1459");
 });
