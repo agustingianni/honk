@@ -136,8 +136,8 @@ honk --demo
 ```
 
 Flags: `--server host[:port]`, `--port`, `--nick`, `--channel` (can repeat),
-`--password` (uses SASL), `--sasl`, `--no-tls`, `--config path`, `--demo`,
-`--version` (or `-v`), `--help` (or `-h`).
+`--password` (uses SASL), `--sasl`, `--no-tls`, `--config path`, `--theme`,
+`--no-mouse`, `--demo`, `--version` (or `-v`), `--help` (or `-h`).
 TLS is on by default. Type `/help` inside the client for the commands.
 
 ### Keys
@@ -285,6 +285,32 @@ To add a theme, put any Base16 or Base24 scheme file from that collection in
 `~/.config/honk/themes/kanagawa.yaml` is `"theme": "kanagawa"`. honk skips a
 file whose text would be hard to read on its background, and says why in
 `*status`.
+
+### Mouse
+
+honk uses the mouse: you can click a channel, a nick, a link or an omnibox
+row, and scroll the chat with the wheel. While honk has the mouse, a plain drag
+does not select text in the terminal. Hold a key while you drag instead: Shift
+in most terminals, Option in iTerm2, or Fn in Terminal.app.
+
+To leave the mouse to the terminal, add this to the top level of the config
+file, or run `honk --no-mouse` for one run:
+
+```json
+{ "mouse": false, "servers": [] }
+```
+
+Then a plain drag selects text, the terminal's copy and search work, and tmux
+copy mode works on honk's pane. These stop working:
+
+- Clicking a channel in the sidebar, a nick in the user list, a row in the
+  omnibox, a nick, channel or link in the chat or the topic, and the "new
+  messages below" bar.
+- The hand pointer over things you can click.
+- Scrolling the chat with the wheel. Use PageUp and PageDown, or Shift+Up and
+  Shift+Down. Some terminals turn the wheel into Up and Down keys in
+  full-screen programs, so the wheel walks through the lines you sent instead.
+  Scroll back down to get your unsent text back.
 
 ### Emoji that break the layout
 

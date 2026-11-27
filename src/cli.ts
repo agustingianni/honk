@@ -40,6 +40,7 @@ Options:
   --no-tls                connect without TLS
   --config path           read this config file
   --theme name            use this color theme, such as nord
+  --no-mouse              leave the mouse to the terminal, to select text
   --demo                  the offline demo, with made-up networks and people
   -v, --version           print the version
   -h, --help              print this help

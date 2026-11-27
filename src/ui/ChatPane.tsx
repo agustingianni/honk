@@ -270,6 +270,8 @@ export function ChatPane({
   const inputRef = useRef<InputRenderable>(null);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
   const [inputValue, setInputValue] = useState("");
+  // Off with "mouse": false or --no-mouse. Then a click never reaches honk.
+  const mouse = useRenderer().useMouse;
 
   // Tab completion state
   const completionRef = useRef<{ matches: string[]; index: number } | null>(null);
@@ -560,7 +562,7 @@ export function ChatPane({
         >
           <text fg={theme.accent}>
             {newBelow} new {newBelow === 1 ? "message" : "messages"} below{" "}
-            <span fg={theme.fgMuted}>(PgDn or click to read)</span>
+            <span fg={theme.fgMuted}>{mouse ? "(PgDn or click to read)" : "(PgDn to read)"}</span>
           </text>
         </Clickable>
       )}
