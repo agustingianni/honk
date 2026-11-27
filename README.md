@@ -286,6 +286,21 @@ To add a theme, put any Base16 or Base24 scheme file from that collection in
 file whose text would be hard to read on its background, and says why in
 `*status`.
 
+### Emoji that break the layout
+
+Terminals do not agree on how many columns some emoji take. A family emoji
+such as 👨‍👩‍👧‍👦 takes 2 columns in Ghostty and 8 in Terminal.app. honk asks
+the terminal at startup and measures text the same way. If emoji still leave
+marks on the screen or push text out of line, tell honk to count each code
+point on its own:
+
+```sh
+OPENTUI_FORCE_WCWIDTH=1 honk
+```
+
+`OPENTUI_FORCE_UNICODE=1` does the opposite, for a terminal that keeps an
+emoji sequence together but that honk does not recognize.
+
 ## Website
 
 The website is the plain HTML in `site/`. A push to `main` that changes

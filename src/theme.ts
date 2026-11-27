@@ -13,9 +13,11 @@ export function applyTheme(next: Theme): void {
 }
 
 /**
- * Goes up by one each time App applies a theme. A component that skips
+ * Goes up by one each time App applies a theme, or when the renderer starts to
+ * measure text cells another way (see `setWidthMethod`). A component that skips
  * re-renders (memo) or caches colors (useMemo) reads it, so it renders again
- * with the new colors. Other components re-render with App anyway.
+ * with the new colors and cuts its text again. Other components re-render with
+ * App anyway.
  */
 export const ThemeVersion = createContext(0);
 

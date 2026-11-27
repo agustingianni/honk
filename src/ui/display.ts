@@ -1,3 +1,4 @@
+import { measureEditText, type WidthMethod } from "@opentui/core";
 import { theme } from "../theme.ts";
 import type { BufferState, ConnectionStatus } from "../types.ts";
 
@@ -7,8 +8,70 @@ import type { BufferState, ConnectionStatus } from "../types.ts";
  */
 export const HEADER_HEIGHT = 3;
 
+const graphemes = new Intl.Segmenter();
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+/** Control characters, except the tab: <text> draws a tab as 2 cells. */
+const CONTROLS = /^[\x00-\x08\x0a-\x1f\x7f-\x9f]+$/;
+/** Each grapheme the server sends adds an entry, so start over past this many. */
+const MAX_CACHED_WIDTHS = 4096;
+
+/**
+ * How the renderer counts the cells of a grapheme. It depends on the terminal:
+ * a ZWJ family emoji takes 2 cells with "unicode" (Ghostty, kitty, iTerm2) and 8
+ * with "wcwidth" (Terminal.app, Alacritty, tmux before 3.6). `App` sets it from
+ * the renderer.
+ */
+let widthMethod: WidthMethod = "unicode";
+const graphemeWidths = new Map<string, number>();
+
+/**
+ * Measures from now on as the renderer does with `method`. Returns true when the
+ * method changed, so text measured before must be measured again.
+ */
+export function setWidthMethod(method: WidthMethod): boolean {
+  if (method === widthMethod) return false;
+  widthMethod = method;
+  graphemeWidths.clear();
+  return true;
+}
+
+function graphemeWidth(grapheme: string): number {
+  let width = graphemeWidths.get(grapheme);
+  if (width === undefined) {
+    // <text> hides control characters, but measureEditText shows them as "^X".
+    width = CONTROLS.test(grapheme) ? 0 : measureEditText(grapheme, { widthMethod });
+    if (graphemeWidths.size >= MAX_CACHED_WIDTHS) graphemeWidths.clear();
+    graphemeWidths.set(grapheme, width);
+  }
+  return width;
+}
+
+/** The terminal cells that `str` takes, counted as the renderer counts them. */
+export function cellWidth(str: string): number {
+  if (PRINTABLE_ASCII.test(str)) return str.length;
+  let width = 0;
+  for (const { segment } of graphemes.segment(str)) width += graphemeWidth(segment);
+  return width;
+}
+
+/**
+ * Cuts `str` to at most `max` terminal cells, with "…" at the end when it cuts.
+ * It measures cells, not UTF-16 code units: "田中さん" is 4 code units and 8 cells.
+ * It cuts between graphemes, so an emoji with a skin tone or a ZWJ stays whole.
+ * When a wide character does not fit, the result can be one cell short of `max`.
+ */
 export function truncate(str: string, max: number): string {
-  return str.length > max ? `${str.slice(0, max - 1)}…` : str;
+  if (max <= 0) return "";
+  if (PRINTABLE_ASCII.test(str)) return str.length <= max ? str : `${str.slice(0, max - 1)}…`;
+  // Where the text ends if it gets cut: the most that fits before the "…".
+  let cutAt = -1;
+  let width = 0;
+  for (const { segment, index } of graphemes.segment(str)) {
+    width += graphemeWidth(segment);
+    if (cutAt < 0 && width > max - 1) cutAt = index;
+    if (width > max) return `${str.slice(0, cutAt)}…`;
+  }
+  return str;
 }
 
 export function statusIndicator(status: ConnectionStatus): { glyph: string; color: string } {
