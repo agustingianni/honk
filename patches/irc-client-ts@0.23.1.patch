@@ -1,0 +1,15 @@
+diff --git a/dist/plugins/registration.js b/dist/plugins/registration.js
+index a4dbd6994e7cb98807cf6763aa37e2c7fa824ec9..befb18e118d33a4513d68044570852fd3debe201 100644
+--- a/dist/plugins/registration.js
++++ b/dist/plugins/registration.js
+@@ -98,8 +98,9 @@ const plugin = createPlugin("registration", [cap, nick, register, privmsg])((cli
+             waitForSaslSuccess();
+         }
+         else if (!password) {
++            // CAP LS goes first: a server may register as soon as NICK and USER are in.
++            client.utils.negotiateCapabilities({ completeImmediately: true });
+             sendRegistration();
+-            return client.utils.negotiateCapabilities({ completeImmediately: true });
+         }
+         else if (authMethod === "NickServ") {
+             client.utils.negotiateCapabilities({ completeImmediately: true });

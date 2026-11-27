@@ -116,6 +116,9 @@ const routes: Record<string, (b: Body) => unknown> = {
   failmarkread: (b) => {
     irc.failMarkRead = b.fail === true;
   },
+  rejectcap: (b) => {
+    irc.rejectCap = b.reject === true;
+  },
   sasl: (b) => {
     irc.rejectSasl = b.reject === true;
   },

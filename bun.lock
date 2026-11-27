@@ -7,7 +7,7 @@
       "dependencies": {
         "@opentui/core": "0.9.8",
         "@opentui/react": "0.9.8",
-        "irc-client-ts": "^0.23.1",
+        "irc-client-ts": "0.23.1",
         "react": "^19.2.0",
       },
       "devDependencies": {
@@ -16,6 +16,9 @@
         "typescript": "^5.9.0",
       },
     },
+  },
+  "patchedDependencies": {
+    "irc-client-ts@0.23.1": "patches/irc-client-ts@0.23.1.patch",
   },
   "packages": {
     "@opentui/core": ["@opentui/core@0.9.8", "", { "dependencies": { "bun-ffi-structs": "0.3.1", "diff": "9.0.0", "string-width": "7.2.0" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.9.8", "@opentui/core-darwin-x64": "0.9.8", "@opentui/core-linux-arm64": "0.9.8", "@opentui/core-linux-arm64-musl": "0.9.8", "@opentui/core-linux-x64": "0.9.8", "@opentui/core-linux-x64-musl": "0.9.8", "@opentui/core-win32-arm64": "0.9.8", "@opentui/core-win32-x64": "0.9.8" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-UgCgT+YTFd1UqEV0POgqMKBUtY+gKeozry+WqFr7NT7KQduaX0xLOfZH5O/ZJibzAsoAnz8thta/W1N8txoYLA=="],

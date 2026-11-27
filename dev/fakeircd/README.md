@@ -78,6 +78,7 @@ curl $C/clients
 | `sasl` | `reject` | `{"reject":true}` makes SASL logins fail with 904 |
 | `failhistory` | `fail` | `{"fail":true}` makes CHATHISTORY answer with FAIL and no batch |
 | `failmarkread` | `fail` | `{"fail":true}` makes MARKREAD answer with `FAIL MARKREAD INTERNAL_ERROR` |
+| `rejectcap` | `reject` | `{"reject":true}` makes CAP answer with 421, like a server from before IRCv3 |
 | `delay` | `ms` | New connections wait this long before any answer |
 
 GET routes: `clients`, `channels`, and `received` (the last 200 lines clients sent).
