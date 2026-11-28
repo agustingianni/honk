@@ -52,6 +52,8 @@ interface HotState {
   saveRecentActions: (recent: Record<string, number>) => void;
   /** The Log that search reads, or why there is none. */
   logSearch: LogSearch;
+  /** The most cells the nick column takes, from the config. */
+  nickColumnMax: number;
 }
 
 const g = globalThis as unknown as { __ircHot?: HotState };
@@ -187,6 +189,7 @@ if (!g.__ircHot) {
     recentActions: loadState(statePath).recentActions,
     saveRecentActions,
     logSearch: opened.log ?? { off: opened.off },
+    nickColumnMax: config.nickColumnMax,
   };
   g.__ircHot = hot;
 }
@@ -205,6 +208,7 @@ hot.root.render(
     initialRecentActions={hot.recentActions}
     onRecentActionsChanged={hot.saveRecentActions}
     logSearch={hot.logSearch}
+    nickColumnMax={hot.nickColumnMax}
   />,
 );
 hot.renderer.requestRender();

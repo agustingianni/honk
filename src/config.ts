@@ -11,6 +11,13 @@ import { dirname, join, resolve } from "node:path";
 import { DEFAULT_LOG_SETTINGS, type LogSettings } from "./log/log.ts";
 import type { AppConfig, AuthMethod, ServerConfig } from "./types.ts";
 
+/** The nick column in the chat is never narrower than this. */
+export const NICK_COL_MIN = 8;
+/** The default for the "nickColumnMax" config key. */
+export const NICK_COL_MAX_DEFAULT = 16;
+/** The largest value the "nickColumnMax" config key takes. */
+const NICK_COL_MAX_LIMIT = 32;
+
 export function defaultNick(): string {
   return process.env.USER || "guest";
 }
@@ -128,6 +135,18 @@ function readConfigFile(path: string): AppConfig | null {
   if (ascii !== undefined && typeof ascii !== "boolean") {
     throw new ConfigError(`${path}: "ascii" must be true or false, not ${JSON.stringify(ascii)}`);
   }
+  const nickColumnMax = parsed.nickColumnMax ?? undefined;
+  if (
+    nickColumnMax !== undefined &&
+    (typeof nickColumnMax !== "number" ||
+      !Number.isInteger(nickColumnMax) ||
+      nickColumnMax < NICK_COL_MIN ||
+      nickColumnMax > NICK_COL_MAX_LIMIT)
+  ) {
+    throw new ConfigError(
+      `${path}: "nickColumnMax" must be a whole number from ${NICK_COL_MIN} to ${NICK_COL_MAX_LIMIT}, not ${JSON.stringify(nickColumnMax)}`,
+    );
+  }
   const servers = Array.isArray(parsed.servers) ? parsed.servers : [];
   const logs = readLogSettings(path, parsed.logs);
   for (const s of servers) {
@@ -140,6 +159,7 @@ function readConfigFile(path: string): AppConfig | null {
     theme,
     mouse,
     ascii,
+    nickColumnMax,
     logs,
     servers: servers.map((s, idx) => ({
       id: s.id || s.name || s.host || `server-${idx + 1}`,
@@ -161,7 +181,10 @@ function readConfigFile(path: string): AppConfig | null {
   };
 }
 
-export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
+/** The config, with the defaults filled in for the keys the UI needs. */
+export type LoadedConfig = AppConfig & { nickColumnMax: number };
+
+export function loadConfig(argv: string[] = process.argv.slice(2)): LoadedConfig {
   const flags = parseArgs(argv);
 
   // 1. Check explicit --config or default file locations
@@ -253,7 +276,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
     };
   }
 
-  return config;
+  return { ...config, nickColumnMax: config.nickColumnMax ?? NICK_COL_MAX_DEFAULT };
 }
 
 export function defaultConfigPath(): string {

@@ -3,7 +3,7 @@ import { useKeyboard } from "@opentui/react";
 import { useEffect, useMemo, useRef } from "react";
 import type { LogContext } from "../log/search.ts";
 import { theme } from "../theme.ts";
-import { Divider, MessageRow } from "./ChatPane.tsx";
+import { Divider, MessageRow, useNickColumn } from "./ChatPane.tsx";
 import { dayLabelBefore } from "./dayDivider.ts";
 import { HEADER_HEIGHT, scrollboxStyle } from "./display.ts";
 import { contextMessages } from "./logSearch.ts";
@@ -15,6 +15,8 @@ interface ContextViewProps {
   focused: boolean;
   /** Esc: back to the search results. */
   onBack: () => void;
+  /** The most cells the nick column takes, from the "nickColumnMax" config key. */
+  nickColumnMax: number;
 }
 
 
@@ -27,10 +29,12 @@ export function ContextView({
   paneWidth,
   focused,
   onBack,
+  nickColumnMax,
 }: ContextViewProps) {
   const scrollRef = useRef<ScrollBoxRenderable>(null);
   const messages = useMemo(() => contextMessages(context), [context]);
   const matchId = messages[context.match]?.id;
+  const nickWidth = useNickColumn(`${context.network}:${context.buffer}`, messages, nickColumnMax, paneWidth);
 
   // The hit starts a third of the way down, with the Lines before it above.
   useEffect(() => {
@@ -91,6 +95,7 @@ export function ContextView({
                   grouped={false}
                   highlightMentions={context.bufferKind === "channel"}
                   highlighted={idx === context.match}
+                  nickWidth={nickWidth}
                 />
               </box>
             );

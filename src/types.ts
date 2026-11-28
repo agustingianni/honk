@@ -43,6 +43,11 @@ export interface AppConfig {
    * honk decides from TERM. See src/ui/glyphs.ts.
    */
   ascii?: boolean;
+  /**
+   * The most cells the nick column in the chat takes. The column fits the
+   * longest nick in the buffer, from 8 cells up to this. 16 when unset.
+   */
+  nickColumnMax?: number;
   /** The Log of your chats on disk. See src/log/log.ts. */
   logs?: LogSettings;
   /**

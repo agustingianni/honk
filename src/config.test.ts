@@ -193,6 +193,24 @@ describe("the ascii setting", () => {
   });
 });
 
+describe("the nickColumnMax setting", () => {
+  test("comes from the file, and is 16 when missing", () => {
+    expect(load('{ "nickColumnMax": 20, "servers": [] }').nickColumnMax).toBe(20);
+    expect(load('{ "servers": [] }').nickColumnMax).toBe(16);
+    expect(load(null).nickColumnMax).toBe(16);
+  });
+
+  test("a value that is not a whole number from 8 to 32 is a ConfigError", () => {
+    for (const value of ['"20"', "7", "12.5", "33"]) {
+      const err = loadError(`{ "nickColumnMax": ${value}, "servers": [] }`);
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as Error).message).toEndWith(
+        `honk.json: "nickColumnMax" must be a whole number from 8 to 32, not ${value}`,
+      );
+    }
+  });
+});
+
 describe("the logs settings", () => {
   test("missing keys take the defaults", () => {
     expect(load('{ "servers": [] }').logs).toEqual({

@@ -14,10 +14,12 @@ import type { BufferState, ChatMessage, NickEntry, ServerState } from "../types.
 import { linkOpener } from "../openUrl.ts";
 import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
-import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
+import { cellWidth, HEADER_HEIGHT, noticeLabel, scrollboxStyle, truncate } from "./display.ts";
 import { clockTime, dayLabelBefore } from "./dayDivider.ts";
 import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
 import { glyphs } from "./glyphs.ts";
+import { NICK_COL_MAX_DEFAULT } from "../config.ts";
+import { nickColumnInPane, nickColumnWidth } from "./panelWidths.ts";
 
 interface ChatPaneProps {
   server: ServerState | undefined;
@@ -33,17 +35,16 @@ interface ChatPaneProps {
   onJoinChannel: (channel: string) => void;
   /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
   onOpenLink?: (href: string) => void;
+  /** The most cells the nick column takes, from the "nickColumnMax" config key. 16 when left out. */
+  nickColumnMax?: number;
 }
 
 /** Undefined over SSH and on platforms honk cannot open a browser on. */
 const openLink = linkOpener();
 
 const NO_USERS: NickEntry[] = [];
-const NICK_COL_WIDTH = 12;
-/** Time (5), a space, then the nick column. The message body starts after this. */
-const LABEL_COL_WIDTH = 5 + 1 + NICK_COL_WIDTH;
+const NO_MESSAGES: ChatMessage[] = [];
 const BLANK_TIME = "     ";
-const BLANK_NICK = " ".repeat(NICK_COL_WIDTH);
 const GROUP_WINDOW_MS = 5 * 60_000;
 /** Lines per mouse wheel notch. */
 const WHEEL_LINES = 3;
@@ -57,9 +58,26 @@ function isChatLine(m: ChatMessage): boolean {
 }
 
 
-/** Cuts a label to the nick column. The layout right-aligns it in the column. */
-function shortNick(nick: string): string {
-  return truncate(nick, NICK_COL_WIDTH);
+/**
+ * The cells of the nick column for `messages` in a chat pane `paneWidth` cells
+ * wide. It only grows while the same `key` (a buffer) is on screen, so the lines
+ * do not move left and right as people with long nicks come and go. A new key
+ * starts over.
+ */
+export function useNickColumn(
+  key: string,
+  messages: readonly ChatMessage[],
+  max: number,
+  paneWidth: number,
+): number {
+  // The theme version changes with the width method, and then nicks are measured again.
+  const themeVersion = useThemeVersion();
+  const fitted = useMemo(() => nickColumnWidth(messages, max), [messages, max, themeVersion]);
+  // State set during render, as React suggests for a value that depends on earlier renders.
+  const [seen, setSeen] = useState({ key, width: fitted });
+  const width = seen.key === key ? Math.max(seen.width, fitted) : fitted;
+  if (seen.key !== key || seen.width !== width) setSeen({ key, width });
+  return nickColumnInPane(width, paneWidth);
 }
 
 /**
@@ -86,7 +104,7 @@ export function Divider({ label, color, paneWidth }: { label: string; color: str
 }
 
 /**
- * One chat line: time, a 12-column label, the gutter, then the body.
+ * One chat line: time, the label in a column `nickWidth` cells wide, the gutter, then the body.
  * Memoized because message objects keep their identity across store updates,
  * so typing or a new line only renders the rows that changed.
  */
@@ -96,9 +114,12 @@ export const MessageRow = memo(function MessageRow({
   highlightMentions,
   names,
   highlighted = false,
+  nickWidth,
 }: {
   msg: ChatMessage;
   grouped: boolean;
+  /** The cells of the nick column. See useNickColumn. */
+  nickWidth: number;
   /** False in a DM: every line there is to you, so painting each one adds nothing. */
   highlightMentions: boolean;
   /** What a click on a name does. None in a Context view: there no name opens anything. */
@@ -130,7 +151,7 @@ export const MessageRow = memo(function MessageRow({
 
   switch (msg.kind) {
     case "message":
-      label = <strong>{shortNick(sender)}</strong>;
+      label = <strong>{truncate(sender, nickWidth)}</strong>;
       labelFg = senderColor;
       if (!msg.isSelf && isUserSender(sender)) clickableNick = sender;
       bg = mention ? theme.bgMention : theme.bgBase;
@@ -143,7 +164,7 @@ export const MessageRow = memo(function MessageRow({
       textFg = unconfirmed ? theme.fgMuted : theme.accentAlt;
       break;
     case "notice":
-      label = shortNick(`-${msg.from ?? "notice"}-`);
+      label = truncate(noticeLabel(msg.from), nickWidth);
       labelFg = theme.yellow;
       textFg = theme.yellow;
       break;
@@ -181,20 +202,21 @@ export const MessageRow = memo(function MessageRow({
       paddingRight={1}
       backgroundColor={bg}
     >
-      <box width={LABEL_COL_WIDTH} flexShrink={0} flexDirection="row">
+      {/* Time (5), a space, then the nick column. The message body starts after this. */}
+      <box width={5 + 1 + nickWidth} flexShrink={0} flexDirection="row">
         {grouped ? (
           <text>
             <span fg={theme.fgDim}>
-              {BLANK_TIME} {BLANK_NICK}
+              {BLANK_TIME} {" ".repeat(nickWidth)}
             </span>
           </text>
         ) : (
           <>
             <text fg={theme.fgMuted}>{clockTime(msg.timestamp)} </text>
             {/* Yoga right-aligns the nick, measuring cells as the terminal does. */}
-            <box width={NICK_COL_WIDTH} flexDirection="row" justifyContent="flex-end">
+            <box width={nickWidth} flexDirection="row" justifyContent="flex-end">
               {clickableNick && names ? (
-                <NickLabel nick={clickableNick} color={labelFg} onSelect={names.openNick} />
+                <NickLabel nick={clickableNick} width={nickWidth} color={labelFg} onSelect={names.openNick} />
               ) : (
                 <text fg={labelFg}>{label}</text>
               )}
@@ -246,15 +268,18 @@ export const MessageRow = memo(function MessageRow({
  */
 function NickLabel({
   nick,
+  width,
   color,
   onSelect,
 }: {
   nick: string;
+  /** The cells of the nick column: a longer nick is cut. */
+  width: number;
   color: string;
   onSelect: (nick: string) => void;
 }) {
   const renderer = useRenderer();
-  const shown = shortNick(nick);
+  const shown = truncate(nick, width);
   return (
     <Clickable
       onMouseUp={(event) => {
@@ -282,6 +307,7 @@ export function ChatPane({
   onSelectUser,
   onJoinChannel,
   onOpenLink = openLink,
+  nickColumnMax = NICK_COL_MAX_DEFAULT,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
@@ -403,8 +429,10 @@ export function ChatPane({
   // bottom, or null while the view is at the bottom.
   const bufferKey = `${server?.id ?? ""}:${buffer?.name ?? ""}`;
   const [lastSeenId, setLastSeenId] = useState<string | null>(null);
-  const messagesRef = useRef(buffer?.messages ?? []);
-  messagesRef.current = buffer?.messages ?? [];
+  const messages = buffer?.messages ?? NO_MESSAGES;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const nickWidth = useNickColumn(bufferKey, messages, nickColumnMax, paneWidth);
   useEffect(() => {
     setLastSeenId(null);
     const sb = scrollRef.current;
@@ -583,6 +611,7 @@ export function ChatPane({
                   grouped={grouped}
                   highlightMentions={buffer.kind === "channel"}
                   names={names}
+                  nickWidth={nickWidth}
                 />
               </box>
             );
