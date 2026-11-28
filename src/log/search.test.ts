@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -126,6 +127,31 @@ function texts(log: Log, text: string): string[] {
 }
 
 describe("Log.search", () => {
+  test("a search with words takes the Lines written last without sorting them all", () => {
+    const log = open();
+    // History written after a newer Line, as a fill after a restart writes it.
+    log.add("libera", rust, line("hello new", { time: T }));
+    log.add("libera", rust, line("hello filled", { time: T - MINUTE }));
+    log.add("libera", rust, line("hello last", { time: T + MINUTE }));
+    expect(texts(log, "hello")).toEqual(["hello last", "hello new", "hello filled"]);
+    const result = log.search(query("hello"), 2);
+    if ("error" in result) throw new Error(result.error);
+    // The 2 written last, shown newest first.
+    expect(result.hits.map((h) => h.time)).toEqual([T + MINUTE, T - MINUTE]);
+    expect(result.more).toBe(true);
+    // No sort of every match by time: SQLite stops at the limit.
+    log.flush();
+    const db = new Database(join(dir, "logs.db"), { readonly: true });
+    const plan = db
+      .query(
+        `EXPLAIN QUERY PLAN SELECT m.id FROM message_fts JOIN message m ON m.id = message_fts.rowid
+         WHERE message_fts MATCH '"hello"' ORDER BY message_fts.rowid DESC LIMIT 101`,
+      )
+      .all() as { detail: string }[];
+    db.close();
+    expect(plan.map((p) => p.detail).join("\n")).not.toContain("TEMP B-TREE");
+  });
+
   test("every word must match; newest first; formatting is left out", () => {
     const log = open();
     log.add("libera", rust, line("the \x02borrow\x02 checker", { time: T - 2 * MINUTE }));

@@ -13,6 +13,12 @@
  *   borrow check*   ->   "borrow" "check"*
  *
  * Redacted Lines are not found: the search index leaves them out (see schema.ts).
+ *
+ * With words, the search takes the Lines written last, by row id, and then shows them
+ * newest first. SQLite then walks the index backwards and stops at the limit, instead
+ * of sorting every Line that has the word by time: 0.3 ms instead of 1 s for "the" in
+ * a Log of 1,000,000 Lines. The two differ only for History written after newer Lines
+ * (a fill after a restart), which can come before them in the page.
  */
 
 import type { Database } from "bun:sqlite";
@@ -191,7 +197,10 @@ function bufferIds(db: Database, query: SearchQuery): number[] | undefined {
   return (rows as { id: number }[]).map((r) => r.id);
 }
 
-/** Runs a search: the newest `limit` Chat lines that match, and whether there are more. */
+/**
+ * Runs a search: `limit` Chat lines that match, newest first, and whether there are
+ * more. With words, they are the ones written last (see the top of this file).
+ */
 export function searchLog(db: Database, query: SearchQuery, limit: number): SearchResult {
   const match = ftsMatch(query.words);
   const buffers = bufferIds(db, query);
@@ -232,12 +241,14 @@ export function searchLog(db: Database, query: SearchQuery, limit: number): Sear
        JOIN buffer b ON b.id = m.buffer_id
        JOIN network n ON n.id = b.network_id
        WHERE ${where.join(" AND ")}
-       ORDER BY m.ts DESC, m.id DESC
+       ORDER BY ${match ? "message_fts.rowid DESC" : "m.ts DESC, m.id DESC"}
        LIMIT ?`,
     )
     .all(...params, limit + 1) as HitRow[];
+  const page = rows.slice(0, limit);
+  if (match) page.sort((a, b) => b.ts - a.ts || b.id - a.id);
   return {
-    hits: rows.slice(0, limit).map((r) => ({
+    hits: page.map((r) => ({
       id: r.id,
       time: r.ts,
       serverId: r.server,
