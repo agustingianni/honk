@@ -92,6 +92,8 @@ import { LogRecorder } from "./logRecorder.ts";
 const MAX_MESSAGES = 500;
 /** Hard cap once history (/history, CHATHISTORY playback) has grown a buffer past MAX_MESSAGES. */
 const MAX_MESSAGES_WITH_HISTORY = 5000;
+/** The id of the line at the top of a full Buffer starts with this. See loadOlder. */
+const FULL_NOTICE_ID = "full-";
 /** A paste with more lines than this is refused, so a wrong paste can't flood a channel. */
 const MAX_PASTE_LINES = 10;
 /**
@@ -2237,6 +2239,24 @@ export class IrcManager {
   }
 
   /**
+   * Puts a line at the top of a full Buffer: it holds no older Lines, but search finds
+   * them. Once: a Buffer that starts with it already is left alone.
+   */
+  private sayBufferFull(server: ServerState, name: string, buf: BufferState): void {
+    const oldest = buf.messages[0]!;
+    if (oldest.id.startsWith(FULL_NOTICE_ID)) return;
+    const made = makeMessage(
+      "system",
+      `honk holds ${MAX_MESSAGES_WITH_HISTORY} lines of ${name}. Search the log (Ctrl+F) for older ones.`,
+      { timestamp: oldest.timestamp },
+    );
+    const notice = { ...made, id: `${FULL_NOTICE_ID}${made.id}` };
+    const messages = [notice, ...buf.messages];
+    server.buffers = { ...server.buffers, [name]: { ...buf, messages, messageLimit: messages.length } };
+    this.emit();
+  }
+
+  /**
    * Up to `limit` Lines from the Log before the first of `messages`. A Line that did
    * not come from the Log (live, or History) has no row id, so the page includes the
    * Lines of its time, and the ones `messages` has already are dropped as Replays:
@@ -2277,7 +2297,10 @@ export class IrcManager {
     const oldest = buf?.messages[0];
     if (!this.log || !server || !buf || !oldest || buf.kind === "status") return 0;
     const room = Math.min(SCROLLBACK_LINES, MAX_MESSAGES_WITH_HISTORY - buf.messages.length);
-    if (room <= 0) return 0;
+    if (room <= 0) {
+      this.sayBufferFull(server, name, buf);
+      return 0;
+    }
     const older = this.olderFromLog(serverId, name, buf.messages, room);
     if (older.length === 0) return 0;
     const messages = [...older, ...buf.messages];

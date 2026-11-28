@@ -44,7 +44,7 @@ interface ChatPaneProps {
 const openLink = linkOpener();
 
 const NO_USERS: NickEntry[] = [];
-/** The renderable id of a message's row, to scroll to it. */
+/** The renderable id of the box that shows a Line, to scroll to it. */
 const rowId = (messageId: string) => `row-${messageId}`;
 const NICK_COL_WIDTH = 12;
 /** Time (5), a space, then the nick column. The message body starts after this. */

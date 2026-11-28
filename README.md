@@ -227,7 +227,8 @@ anything from `--demo`. Only you can read the file (mode 0600).
 
 Each channel and DM opens with its last 200 lines from the log, so the
 scrollback is still there after a restart. Scroll to the top of a buffer, with
-the mouse wheel or PageUp, to load 200 older lines at a time. A deleted message
+the mouse wheel or PageUp, to load 200 older lines at a time. A buffer holds
+up to 5000 lines; search (Ctrl+F) finds the older ones. A deleted message
 shows as `[message deleted by alice]`.
 
 After a reconnect, or when honk starts again, honk asks for the channel lines

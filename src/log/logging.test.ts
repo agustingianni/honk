@@ -406,3 +406,27 @@ test("loadOlder above a Line not from the Log keeps the Log's Lines of the same 
   await Promise.resolve();
   expect(shown(messages())).toEqual(["x", "y", "z"]);
 });
+
+test("a Buffer holds at most 5000 Lines, and then says that search finds the older ones", async () => {
+  const start = Date.parse("2026-11-01T10:00:00Z");
+  const { manager, server } = await connect({
+    noCaps: true,
+    seed: (seeding) => {
+      for (let i = 1; i <= 5100; i++) {
+        seeding.add("net", { name: "#honk", kind: "channel" }, {
+          kind: "message", nick: "alice", text: `old ${i}`, time: start + i * 1000, timeFromServer: true,
+        });
+      }
+    },
+  });
+  while (manager.loadOlder("net", "#honk") > 0);
+  await Promise.resolve();
+  const messages = server().buffers["#honk"]!.messages;
+  expect(messages[0]!.text).toBe("honk holds 5000 lines of #honk. Search the log (Ctrl+F) for older ones.");
+  expect(messages).toHaveLength(5001);
+  expect(messages[1]!.text).toBe("old 102");
+  // Once.
+  manager.loadOlder("net", "#honk");
+  await Promise.resolve();
+  expect(server().buffers["#honk"]!.messages).toHaveLength(5001);
+});
