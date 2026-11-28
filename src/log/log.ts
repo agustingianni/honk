@@ -151,6 +151,17 @@ const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The farthest apart a kept Line and History can be and still match (see replay.ts). */
 const MATCH_WINDOW_MS = 2000;
+/**
+ * The farthest ahead of honk's clock a server time may be and still count for the Sync
+ * marker. A broken server clock that sends 2099 would otherwise hold the marker there,
+ * and honk would never again ask for the History it misses.
+ */
+const MAX_AHEAD_MS = 60 * 60 * 1000;
+
+/** True if the server time `time` is too far ahead of honk's clock to trust. */
+export function tooFarAhead(time: number, now: number): boolean {
+  return time > now + MAX_AHEAD_MS;
+}
 
 interface NetworkSnapshot extends LogNetwork {
   serverId: string;
@@ -390,9 +401,11 @@ export class Log {
 
   /**
    * Moves the Sync marker of the Server's Network to `time`: History up to then is in
-   * the Log. It never moves back. Written with the Lines added before it.
+   * the Log. It never moves back. A `time` too far ahead of honk's clock is ignored
+   * (see MAX_AHEAD_MS). Written with the Lines added before it.
    */
   setSyncMarker(serverId: string, time: number): void {
+    if (tooFarAhead(time, this.clock.now())) return;
     this.push({ type: "sync", net: this.networkOf(serverId), time });
   }
 
