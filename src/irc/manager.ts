@@ -84,7 +84,7 @@ import {
 } from "./readMarker.ts";
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
 import type { Log } from "../log/log.ts";
-import { FILL_LIMIT, type Fill } from "../log/logSync.ts";
+import { FILL_LIMIT, type Fill, SYNC_FUZZ_MS } from "../log/logSync.ts";
 import { SCROLLBACK_LINES, storedMessages } from "../log/scrollback.ts";
 import { LogRecorder } from "./logRecorder.ts";
 
@@ -134,8 +134,13 @@ interface ServerControl {
   lastHeardAt?: number;
   /** The server time of the newest live line on this connection, in ms. See logSync.ts. */
   newestServerTime?: number;
-  /** Set when a registered connection is lost. See missed.ts. */
+  /**
+   * Set when a registered connection is lost, or at the start from the Log's Sync
+   * marker. See missed.ts.
+   */
   missed?: MissedWindow;
+  /** True once this connection asked who wrote to you while it was down (TARGETS). */
+  targetsAsked: boolean;
   /** Missed mentions found in history, waiting to be reported as one batch. */
   missedMentions: MentionEvent[];
   missedTimer: ReturnType<typeof setTimeout> | null;
@@ -173,6 +178,7 @@ function createControl(): ServerControl {
     stableTimer: null,
     missedMentions: [],
     missedTimer: null,
+    targetsAsked: false,
     pendingWhois: new Set(),
     historyRequests: [],
     awayShown: new Map(),
@@ -1292,6 +1298,7 @@ export class IrcManager {
         ctrl.connectTimer = null;
       }
       ctrl.registered = true;
+      ctrl.targetsAsked = false;
       // Each connection starts from the default, whatever an earlier one said: a server
       // that sends no CASEMAPPING uses rfc1459. The 005 lines that follow may change it.
       server.casemapping = DEFAULT_CASEMAPPING;
@@ -1327,18 +1334,6 @@ export class IrcManager {
           }
         }
       }
-
-      // Ask who sent you DMs while the connection was down. Channel history comes with
-      // the rejoin; DMs have no rejoin. The reply is handled in the batch_end below.
-      if (ctrl.missed && client.state.caps.enabled.has("draft/chathistory")) {
-        void client.send(
-          "CHATHISTORY" as never,
-          "TARGETS" as never,
-          timestampParam(ctrl.missed.since - MISSED_MARGIN_MS) as never,
-          timestampParam(Date.now()) as never,
-          "50" as never,
-        );
-      }
     });
 
     // The nicks that wrote to you while the connection was down. Load each DM from that
@@ -1348,23 +1343,29 @@ export class IrcManager {
       const server = live();
       const ctrl = this.controls.get(serverId);
       if (!server || !ctrl?.missed) return;
-      const nicks = dmTargets(
-        batch.params.messages,
-        [ctrl.missed.nick, server.nick],
-        this.casemapping(serverId),
-      );
-      if (nicks.length === 0) return;
-      const buffers = new Set(ctrl.missed.buffers);
+      const missed = ctrl.missed;
+      const named = dmTargets(batch.params.messages, [missed.nick, server.nick], this.casemapping(serverId));
+      // The list is a hint, not complete (ircv3-specifications#604), so the DMs open on
+      // screen ask too.
+      const nicks = [...named];
+      for (const name of server.bufferOrder) {
+        if (server.buffers[name]?.kind === "dm" && !nicks.some((n) => this.same(serverId, n, name))) {
+          nicks.push(name);
+        }
+      }
+      const buffers = new Set(missed.buffers);
       for (const nick of nicks) buffers.add(this.bufferKey(serverId, nick));
-      ctrl.missed = { ...ctrl.missed, buffers };
-      const since = timestampParam(ctrl.missed.since - MISSED_MARGIN_MS);
+      ctrl.missed = { ...missed, buffers };
+      const since = timestampParam(missed.since - MISSED_MARGIN_MS);
       const markers = client.state.caps.enabled.has(READ_MARKER_CAP);
       for (const nick of nicks) {
         // A DM has no JOIN to bring its marker, so ask for it. The server answers before
         // the history, so a line you read on another client isn't counted as missed.
         if (markers) requestMarkRead(client, nick);
-        requestHistory(client, "AFTER", nick, since, 50);
+        // The newest 50, as on a join. The Log asks for the rest. See logSync.ts.
+        requestHistory(client, "LATEST", nick, since, 50);
       }
+      this.logRecorder?.answeredTargets(serverId, nicks);
     });
 
     client.on("isupport:network", (msg) => {
@@ -1398,9 +1399,12 @@ export class IrcManager {
     });
     // A server that sends no CASEMAPPING has sent all its 005 lines by the end of the
     // MOTD, so the default stands.
+    // All 005 lines are in by then too, so the Log knows the Network and its Sync marker.
     for (const end of ["raw:rpl_endofmotd", "raw:err_nomotd"] as const) {
       client.on(end, () => {
-        if (live()) this.settleCasemapping(serverId);
+        if (!live()) return;
+        this.settleCasemapping(serverId);
+        this.askMissedDms(serverId, client);
       });
     }
 
@@ -1668,8 +1672,6 @@ export class IrcManager {
         const msgKind =
           cmd === "notice" ? "notice" : actionMatch ? "action" : "message";
         const text = actionMatch ? actionMatch[1]! : rawText;
-        logHistory?.add(target, { kind: msgKind, from, text, tags: raw.tags, self: isSelf });
-
         const bufferKey = this.bufferKey(serverId, target);
         let replays = batchReplays.get(bufferKey);
         if (!replays) batchReplays.set(bufferKey, (replays = new HistoryBatch()));
@@ -1686,6 +1688,9 @@ export class IrcManager {
           }),
           replays,
         );
+        // After the screen: a Buffer this opens loads the Log, and must not find this
+        // Line there already, or the screen drops it as a Replay without its badge.
+        logHistory?.add(target, { kind: msgKind, from, text, tags: raw.tags, self: isSelf });
       }
       // Asks for the History the Log misses, if any. See logSync.ts.
       logHistory?.end();
@@ -1903,6 +1908,8 @@ export class IrcManager {
           label,
           target === undefined ? undefined : this.key(serverId, target),
         );
+        // No reply to TARGETS comes now, so the Sync marker stops waiting for one.
+        if (msg.params[2]?.toUpperCase() === "TARGETS") this.logRecorder?.answeredTargets(serverId, []);
         const buffer = failed?.target ?? target;
         if (buffer !== undefined && this.hasBuffer(serverId, buffer)) where = buffer;
       }
@@ -2612,6 +2619,36 @@ export class IrcManager {
     if (!client || !ctrl.registered || !buf || buf.kind === "status") return undefined;
     if (!client.state.caps.enabled.has(READ_MARKER_CAP)) return undefined;
     return newestServerTime(buf.messages);
+  }
+
+  /**
+   * Asks who sent you DMs while the connection was down, or since the Log's Sync marker
+   * when honk was closed. Channel history comes with the join; DMs have no join. The
+   * reply is handled in the TARGETS batch_end. Once per connection: /motd ends with the
+   * same reply.
+   */
+  private askMissedDms(serverId: string, client: Client): void {
+    const ctrl = this.getControl(serverId);
+    const server = this.servers.get(serverId);
+    if (!server || ctrl.targetsAsked || !client.state.caps.enabled.has("draft/chathistory")) return;
+    ctrl.targetsAsked = true;
+    const logSince = this.logRecorder?.historySince(serverId);
+    // The first connection of this run: what you missed is what the Log misses. No
+    // channel counts as missed, the same as on any start.
+    if (!ctrl.missed && logSince !== undefined) {
+      ctrl.missed = { since: logSince + SYNC_FUZZ_MS, nick: server.nick, buffers: new Set() };
+    }
+    if (!ctrl.missed) return;
+    // From the earlier of the two, so a DM the Log misses is found too.
+    const from = Math.min(ctrl.missed.since - MISSED_MARGIN_MS, logSince ?? Infinity);
+    void client.send(
+      "CHATHISTORY" as never,
+      "TARGETS" as never,
+      timestampParam(from) as never,
+      timestampParam(Date.now()) as never,
+      "50" as never,
+    );
+    this.logRecorder?.askedTargets(serverId);
   }
 
   /** Remembers what honk knew when a registered connection is lost. See missed.ts. */

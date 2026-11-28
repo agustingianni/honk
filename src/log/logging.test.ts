@@ -425,3 +425,58 @@ test("a Buffer holds at most 5000 Lines, and then is marked full", async () => {
   expect(messages[0]!.text).toBe("old 102");
   expect(server().buffers["#honk"]!.scrollbackFull).toBe(true);
 });
+
+/** Quits honk after it synced up to now, as at the end of a run. See logSync.ts. */
+function quitSynced() {
+  log!.setSyncMarker("net", Date.now());
+  m!.disconnectAll();
+  log!.close();
+}
+
+test("a DM sent while honk was closed enters the Log once after the next start, and opens with a badge", async () => {
+  const { fake, rows, start } = await connect();
+  quitSynced();
+  fake.say("dave", "goose", "you there?");
+  await start();
+  const dm = () => m!.getSnapshot().servers[0]!.buffers["dave"];
+  await until(() => dm()?.messages.some((x) => x.text === "you there?") === true, 5000);
+
+  expect(rows().filter((r) => r.text === "you there?").map((r) => [r.buffer, r.mention])).toEqual([
+    ["dave", 1],
+  ]);
+  expect(dm()!.hasMention).toBe(true);
+});
+
+test("60 DMs while honk was closed: the Log fills the gap past the first 50, each Line once", async () => {
+  const { fake, texts, start } = await connect();
+  quitSynced();
+  for (let i = 1; i <= 60; i++) fake.say("dave", "goose", `dm ${i}`);
+  await start();
+  await until(() => texts().includes("dm 1"), 5000);
+
+  const all = Array.from({ length: 60 }, (_, i) => `dm ${i + 1}`).toSorted();
+  expect(texts().filter((t) => t.startsWith("dm ")).toSorted()).toEqual(all);
+  const onScreen = shown(m!.getSnapshot().servers[0]!.buffers["dave"]!.messages);
+  expect(onScreen.filter((t) => t.startsWith("dm ")).toSorted()).toEqual(all);
+});
+
+test("a DM open on screen gets the History it missed even when TARGETS leaves it out", async () => {
+  const { fake, manager, server, texts } = await connect();
+  fake.say("dave", "goose", "hi");
+  await until(() => texts().includes("hi"));
+  log!.setSyncMarker("net", Date.now());
+  manager.disconnectServer("net");
+  fake.say("dave", "goose", "while away");
+  fake.hiddenTargets.add("dave");
+  await manager.connectServer("net");
+  await until(() => texts().includes("while away"), 5000);
+
+  expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
+});
+
+test("on the first start, with no Sync marker, honk does not ask who wrote to you", async () => {
+  const { fake, server } = await connect();
+  fake.say("alice", "#honk", "a live line after the MOTD");
+  await until(() => shown(server().buffers["#honk"]!.messages).includes("a live line after the MOTD"));
+  expect(fake.received.some((l) => l.command === "CHATHISTORY" && l.params[0] === "TARGETS")).toBe(false);
+});

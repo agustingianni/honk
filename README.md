@@ -231,11 +231,11 @@ the mouse wheel or PageUp, to load 200 older lines at a time. A buffer holds
 up to 5000 lines; search (Ctrl+F) finds the older ones. A deleted message
 shows as `[message deleted by alice]`.
 
-After a reconnect, or when honk starts again, honk asks for the channel lines
-it missed, if the network or bouncer keeps chat history (such as Ergo or soju).
+After a reconnect, or when honk starts again, honk asks for the lines it
+missed, if the network or bouncer keeps chat history (such as Ergo or soju).
 It asks only for the lines after the last ones in the log, and adds each line
-to the log and the screen once. DMs you missed while honk was closed are not
-fetched yet.
+to the log and the screen once. That includes DMs sent to you while honk was
+closed: each one opens with a badge, as a mention.
 
 The settings go at the top level of the config file. These are the defaults:
 

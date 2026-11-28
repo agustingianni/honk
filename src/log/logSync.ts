@@ -9,6 +9,12 @@
  *   CHATHISTORY AFTER #honk timestamp=20:59:55 100   (a fill, for the Log and the
  *   screen; more pages until a page is empty or reaches 22:40)
  *
+ * DMs have no JOIN. At the start, honk asks the server who wrote to you since the marker
+ * (CHATHISTORY TARGETS), and each DM it names goes the same way as a channel:
+ *
+ *   CHATHISTORY TARGETS timestamp=20:59:55 timestamp=23:00 50   (the marker waits)
+ *   the reply names dave -> CHATHISTORY LATEST dave timestamp=20:59:55 50, then fills
+ *
  * The marker moves only once no gap waits to be filled. Then, while connected, honk
  * logs every live Line, so the marker follows the server time of the newest live Line.
  * It is the server's time, not honk's clock, because fills compare it with the times
@@ -65,6 +71,8 @@ interface ServerSync {
   registeredAt: number;
   /** Buffers whose gap is not filled yet, as nameKey. A fill keeps its Buffer here. */
   pending: Set<string>;
+  /** True while the reply to CHATHISTORY TARGETS has not come: it may name more gaps. */
+  awaitingTargets: boolean;
   synced: boolean;
   lastMarkAt: number;
 }
@@ -88,6 +96,7 @@ export class LogSync {
       markerRead: false,
       registeredAt: this.clock.now(),
       pending: new Set(),
+      awaitingTargets: false,
       synced: false,
       lastMarkAt: 0,
     });
@@ -129,6 +138,24 @@ export class LogSync {
     const s = this.servers.get(serverId);
     if (!s || s.synced || this.marker(serverId, s) === undefined) return;
     s.pending.add(target);
+  }
+
+  /** honk asked who wrote to you since the marker. The marker waits for the reply. */
+  askedTargets(serverId: string): void {
+    const s = this.servers.get(serverId);
+    if (!s || s.synced || this.marker(serverId, s) === undefined) return;
+    s.awaitingTargets = true;
+  }
+
+  /**
+   * The reply to CHATHISTORY TARGETS came, or a FAIL. Call `joined` for each DM it
+   * names first, so the marker waits for their gaps too.
+   */
+  answeredTargets(serverId: string): void {
+    const s = this.servers.get(serverId);
+    if (!s?.awaitingTargets) return;
+    s.awaitingTargets = false;
+    this.moveMarker(serverId);
   }
 
   /**
@@ -178,7 +205,7 @@ export class LogSync {
   moveMarker(serverId: string): void {
     const s = this.servers.get(serverId);
     const time = this.serverTime(serverId);
-    if (!s || time === undefined || s.pending.size > 0) return;
+    if (!s || time === undefined || s.pending.size > 0 || s.awaitingTargets) return;
     const now = this.clock.now();
     if (now - s.registeredAt < SETTLE_MS) return;
     if (s.synced && now - s.lastMarkAt < MARK_EVERY_MS) return;

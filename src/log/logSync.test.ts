@@ -130,3 +130,20 @@ test("a connection that never synced leaves the marker where it was", () => {
   sync.stop("libera");
   expect(log.syncMarker("libera")).toBe(T - 1000);
 });
+
+test("the marker waits for the reply to TARGETS, and then for the gap of each DM it names", () => {
+  log.setSyncMarker("libera", T - 3_600_000);
+  sync.start("libera");
+  sync.askedTargets("libera");
+  wait(SETTLE_MS);
+  sync.moveMarker("libera");
+  expect(log.syncMarker("libera")).toBe(T - 3_600_000);
+
+  // The reply names dave.
+  sync.joined("libera", "dave");
+  sync.answeredTargets("libera");
+  expect(log.syncMarker("libera")).toBe(T - 3_600_000);
+
+  expect(sync.batchEnded("libera", "dave", [T - 4_000_000, T - 10])).toEqual({ type: "done" });
+  expect(log.syncMarker("libera")).toBe(T + SETTLE_MS);
+});

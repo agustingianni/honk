@@ -129,6 +129,20 @@ export class LogRecorder {
     this.sync.joined(serverId, this.host.key(serverId, channel));
   }
 
+  /** honk asked who wrote to you (CHATHISTORY TARGETS). The Sync marker waits for the reply. */
+  askedTargets(serverId: string): void {
+    this.sync.askedTargets(serverId);
+  }
+
+  /**
+   * The reply to TARGETS came (`nicks`: the DMs honk asked the latest History of), or a
+   * FAIL (no nicks).
+   */
+  answeredTargets(serverId: string, nicks: readonly string[]): void {
+    for (const nick of nicks) this.joined(serverId, nick);
+    this.sync.answeredTargets(serverId);
+  }
+
   /** Adds a Line to the Log of Buffer `bufferName`, unless it is *status. */
   private add(serverId: string, bufferName: string, line: LogLine, batch?: HistoryBatch): void {
     if (this.host.isStatus(serverId, bufferName)) return;

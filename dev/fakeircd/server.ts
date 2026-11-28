@@ -178,6 +178,8 @@ export class FakeIrcd {
   private heldEchoes: (() => void)[] = [];
   /** Lowercase targets whose CHATHISTORY gets a FAIL and no batch, as failHistory does. */
   readonly failHistoryIn = new Set<string>();
+  /** Lowercase nicks that CHATHISTORY TARGETS leaves out, as a server may (ircv3-specifications#604). */
+  readonly hiddenTargets = new Set<string>();
   /** Lowercase targets whose CHATHISTORY gets no reply until releaseHistory(). */
   readonly holdHistoryIn = new Set<string>();
   private heldHistory: (() => void)[] = [];
@@ -1110,7 +1112,7 @@ export class FakeIrcd {
           continue;
         const other =
           this.lower(m.from) === me ? m.target : this.lower(m.target) === me ? m.from : null;
-        if (other) latest.set(other, m.time);
+        if (other && !this.hiddenTargets.has(this.lower(other))) latest.set(other, m.time);
       }
       const ref = `t${this.nextBatch++}`;
       this.send(c, `:${SERVER_NAME} BATCH +${ref} draft/chathistory-targets`, labelTag);
