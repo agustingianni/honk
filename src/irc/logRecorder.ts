@@ -124,9 +124,35 @@ export class LogRecorder {
     return this.sync.historySince(serverId);
   }
 
-  /** You joined `channel`, and honk asked for its latest History. */
-  joined(serverId: string, channel: string): void {
-    this.sync.joined(serverId, this.host.key(serverId, channel));
+  /**
+   * honk asked for the latest History of `target`: a channel you joined, or a DM that
+   * wrote to you while you were away.
+   */
+  askedLatest(serverId: string, target: string): void {
+    this.sync.askedLatest(serverId, this.host.key(serverId, target));
+  }
+
+  /** The server sent a FAIL instead of the History of `target`. See LogSync.historyFailed. */
+  historyFailed(serverId: string, target: string): void {
+    this.sync.historyFailed(serverId, this.host.key(serverId, target));
+  }
+
+  /** The Sync marker of the connection's Network, or undefined if it has none. */
+  syncMarker(serverId: string): number | undefined {
+    return this.sync.syncMarker(serverId);
+  }
+
+  /** honk asked who wrote to you (CHATHISTORY TARGETS). The Sync marker waits for the reply. */
+  askedTargets(serverId: string): void {
+    this.sync.askedTargets(serverId);
+  }
+
+  /**
+   * The reply to TARGETS came (`nicks`: the DMs honk asked the latest History of), or a
+   * FAIL (no nicks).
+   */
+  answeredTargets(serverId: string, nicks: readonly string[]): void {
+    this.sync.answeredTargets(serverId, nicks.map((nick) => this.host.key(serverId, nick)));
   }
 
   /** Adds a Line to the Log of Buffer `bufferName`, unless it is *status. */

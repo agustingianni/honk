@@ -35,7 +35,7 @@ function wait(ms: number) {
 
 test("a Network without a marker gets one once the joins have settled", () => {
   sync.start("libera");
-  sync.joined("libera", "#honk");
+  sync.askedLatest("libera", "#honk");
   expect(sync.batchEnded("libera", "#honk", [T - 60_000])).toEqual({ type: "done" });
   sync.moveMarker("libera");
   expect(log.syncMarker("libera")).toBeUndefined();
@@ -64,7 +64,7 @@ test("no live Line yet: the marker does not move", () => {
 test("after a gap, honk asks for the History between the marker and the screen's lines", () => {
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
-  sync.joined("libera", "#honk");
+  sync.askedLatest("libera", "#honk");
   const first = sync.batchEnded("libera", "#honk", [T - 600_000, T - 60_000]);
   const request = { after: T - 3_600_000 - SYNC_FUZZ_MS, until: T - 600_000, pages: 1 };
   expect(first).toEqual({ type: "next", request });
@@ -89,7 +89,7 @@ test("after a gap, honk asks for the History between the marker and the screen's
 test("no fill when the screen's History reaches back past the marker", () => {
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
-  sync.joined("libera", "#honk");
+  sync.askedLatest("libera", "#honk");
   expect(sync.batchEnded("libera", "#honk", [T - 4_000_000, T - 10])).toEqual({ type: "done" });
   expect(sync.batchEnded("libera", "#quiet", [])).toEqual({ type: "done" });
 });
@@ -97,7 +97,7 @@ test("no fill when the screen's History reaches back past the marker", () => {
 test("a fill gives up after MAX_FILL_PAGES pages, and the marker stays before the gap", () => {
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
-  sync.joined("libera", "#honk");
+  sync.askedLatest("libera", "#honk");
   sync.batchEnded("libera", "#honk", [T - 60_000]);
   const fill = { after: 0, until: T - 60_000, pages: MAX_FILL_PAGES };
   expect(sync.batchEnded("libera", "#honk", [T - 1_000_000], fill)).toEqual({ type: "gave-up" });
@@ -125,8 +125,49 @@ test("while connected, the marker moves at most every MARK_EVERY_MS, and at the 
 test("a connection that never synced leaves the marker where it was", () => {
   log.setSyncMarker("libera", T - 1000);
   sync.start("libera");
-  sync.joined("libera", "#honk");
+  sync.askedLatest("libera", "#honk");
   wait(SETTLE_MS);
   sync.stop("libera");
   expect(log.syncMarker("libera")).toBe(T - 1000);
+});
+
+test("the marker waits for the reply to TARGETS, and then for the gap of each DM it names", () => {
+  log.setSyncMarker("libera", T - 3_600_000);
+  sync.start("libera");
+  wait(SETTLE_MS - 1_000);
+  sync.askedTargets("libera");
+  wait(1_000);
+  sync.moveMarker("libera");
+  expect(log.syncMarker("libera")).toBe(T - 3_600_000);
+
+  // The reply names dave.
+  sync.answeredTargets("libera", ["dave"]);
+  expect(log.syncMarker("libera")).toBe(T - 3_600_000);
+
+  expect(sync.batchEnded("libera", "dave", [T - 4_000_000, T - 10])).toEqual({ type: "done" });
+  expect(log.syncMarker("libera")).toBe(T + SETTLE_MS);
+});
+
+test("a reply to TARGETS that never comes holds the marker for SETTLE_MS only", () => {
+  log.setSyncMarker("libera", T - 3_600_000);
+  sync.start("libera");
+  wait(SETTLE_MS - 1);
+  sync.askedTargets("libera");
+  wait(1);
+  sync.moveMarker("libera");
+  expect(log.syncMarker("libera")).toBe(T - 3_600_000);
+  wait(SETTLE_MS);
+  sync.moveMarker("libera");
+  expect(log.syncMarker("libera")).toBe(T + 2 * SETTLE_MS);
+});
+
+test("a FAIL instead of a DM's History stops its gap holding the marker", () => {
+  log.setSyncMarker("libera", T - 3_600_000);
+  sync.start("libera");
+  sync.askedLatest("libera", "nickserv");
+  wait(SETTLE_MS);
+  sync.moveMarker("libera");
+  expect(log.syncMarker("libera")).toBe(T - 3_600_000);
+  sync.historyFailed("libera", "nickserv");
+  expect(log.syncMarker("libera")).toBe(T + SETTLE_MS);
 });
