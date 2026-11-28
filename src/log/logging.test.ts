@@ -299,6 +299,29 @@ test("after a reconnect, a channel with a few Lines while away gets them with no
   expect(texts().filter((t) => t.startsWith("away ")).toSorted()).toEqual(["away 1", "away 2", "away 3"]);
 });
 
+test("a fill page that ends inside a millisecond does not skip the rest of it", async () => {
+  const { fake, manager, texts } = await connect();
+  fake.say("alice", "#honk", "before");
+  await until(() => texts().includes("before"));
+  const marker = Date.now();
+  log!.setSyncMarker("net", marker);
+  await whileAway(manager, () => {
+    // away 1..89, then away 90..110 in one millisecond, then away 111..160. The screen's
+    // 50 are 111..160; the first fill page ("before" and away 1..99) ends inside that
+    // millisecond, and the page after it must bring away 100..110.
+    const at = (i: number) => marker + 1000 + (i < 90 ? 0 : i <= 110 ? 1 : 2);
+    for (let i = 1; i <= 160; i++) {
+      fake.now = () => at(i);
+      fake.say("alice", "#honk", `away ${i}`);
+    }
+    // Your JOIN on the reconnect comes after them in time too.
+    fake.now = () => at(160) + 1;
+  });
+  await until(() => texts().includes("away 105"), HISTORY_WAIT_MS);
+  const away = texts().filter((t) => t.startsWith("away "));
+  expect(away.toSorted()).toEqual(Array.from({ length: 160 }, (_, i) => `away ${i + 1}`).toSorted());
+});
+
 test("a server without IRCv3: every live Line is logged with honk's time, and no History is asked", async () => {
   const { fake, rows, texts } = await connect({ noCaps: true });
   fake.say("alice", "#honk", "plain old irc");
