@@ -363,6 +363,41 @@ To add a theme, put any Base16 or Base24 scheme file from that collection in
 file whose text would be hard to read on its background, and says why in
 `*status`.
 
+### Timestamps
+
+Each chat line starts with the time it was sent, as `HH:mm` on a 24-hour
+clock. To show it another way, set `timestamps` at the top level of the config
+file, or use `--timestamps` for one run:
+
+```json
+{ "timestamps": "HH:mm:ss", "servers": [] }
+```
+
+| Value | Example |
+|---|---|
+| `"HH:mm"` (default) | `09:05` |
+| `"HH:mm:ss"` | `09:05:42` |
+| `"h:mm a"` | ` 9:05 AM` |
+| `"none"` | no time, so the messages get 6 more columns |
+
+If you write a format honk does not know, it uses `HH:mm` and lists the valid
+formats in `*status`. Log search (Ctrl+F) always shows `HH:mm`.
+
+### Nick column
+
+The nick column in the chat is as wide as the longest nick in the buffer, from
+8 columns up to 16, and never more than half of the chat. A longer nick is cut and ends with `…`. The column only
+grows while you look at a buffer, so the lines do not move when people leave.
+To let it grow wider, up to 32, or keep it narrower:
+
+```json
+{ "nickColumnMax": 20, "servers": [] }
+```
+
+The sidebar and the user list fit the names in them too. On a narrow terminal
+they get smaller, so the chat keeps at least 40 columns, and they hide when
+even that is not enough.
+
 ### Mouse
 
 honk uses the mouse: you can click a channel, a nick, a link or an omnibox

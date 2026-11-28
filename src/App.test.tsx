@@ -42,6 +42,7 @@ async function renderApp(logSearch: LogSearch, manager = welcome()) {
       initialRecentActions={{}}
       onRecentActionsChanged={() => {}}
       logSearch={logSearch}
+      nickColumnMax={16}
     />,
     { width: 100, height: 30 },
   );

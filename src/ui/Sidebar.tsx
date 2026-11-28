@@ -11,8 +11,11 @@ import {
   HEADER_HEIGHT,
 } from "./display.ts";
 import { glyphs } from "./glyphs.ts";
+import { bufferNameRoom, serverNameRoom } from "./panelWidths.ts";
 
 interface SidebarProps {
+  /** Cells, from sidebarWidth and panelLayout. */
+  width: number;
   servers: ServerState[];
   active: ActiveBuffer | null;
   onSelect: (serverId: string, buffer: string) => void;
@@ -20,6 +23,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  width,
   servers,
   active,
   onSelect,
@@ -28,7 +32,7 @@ export function Sidebar({
   return (
     <box
       flexDirection="column"
-      width={24}
+      width={width}
       height="100%"
       backgroundColor={theme.bgSidebar}
     >
@@ -72,7 +76,7 @@ export function Sidebar({
                 <text>
                   <span fg={st.color}>{st.glyph} </span>
                   <span fg={theme.fgBright}>
-                    <strong>{truncate(server.name, 19)}</strong>
+                    <strong>{truncate(server.name, serverNameRoom(width))}</strong>
                   </span>
                 </text>
               </Clickable>
@@ -84,7 +88,7 @@ export function Sidebar({
                 const isActive =
                   active?.serverId === server.id && active?.buffer === bufName;
                 const displayName = bufferDisplayName(buf);
-                const maxNameLen = buf.unread > 0 ? 13 : 18;
+                const maxNameLen = bufferNameRoom(width, buf.unread > 0);
 
                 return (
                   <Clickable

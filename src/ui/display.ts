@@ -118,6 +118,11 @@ export function bufferDisplayName(buf: BufferState): string {
   return buf.kind === "dm" ? `@${buf.name}` : buf.name;
 }
 
+/** The label of a notice in the nick column, such as "-NickServ-". */
+export function noticeLabel(from: string | undefined): string {
+  return `-${from ?? "notice"}-`;
+}
+
 export function unreadBadge(unread: number): string {
   return unread > 99 ? "99+" : String(unread);
 }

@@ -4,7 +4,7 @@ import {
   useRenderer,
   useTerminalDimensions,
 } from "@opentui/react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { searchCommand } from "./irc/commands.ts";
 import type { IrcManager } from "./irc/manager.ts";
 import { casemappingOf, STATUS_BUFFER } from "./irc/names.ts";
@@ -17,13 +17,17 @@ import { ContextView } from "./ui/ContextView.tsx";
 import { setWidthMethod } from "./ui/display.ts";
 import { Nicklist } from "./ui/Nicklist.tsx";
 import { Omnibox, recentKey } from "./ui/Omnibox.tsx";
+import {
+  NICKLIST_MIN,
+  nicklistWidth,
+  panelLayout,
+  panelsFit,
+  SIDEBAR_MIN,
+  sidebarWidth,
+} from "./ui/panelWidths.ts";
 import type { LogSearch } from "./ui/logSearch.ts";
 import { Sidebar } from "./ui/Sidebar.tsx";
 import { StatusBar } from "./ui/StatusBar.tsx";
-
-/** Narrower than this, the panel is hidden whatever its toggle says. */
-const SIDEBAR_MIN_WIDTH = 65;
-const NICKLIST_MIN_WIDTH = 90;
 
 interface AppProps {
   manager: IrcManager;
@@ -39,6 +43,8 @@ interface AppProps {
   onRecentActionsChanged: (recent: Record<string, number>) => void;
   /** The Log that search reads, or why there is none. */
   logSearch: LogSearch;
+  /** The most cells the nick column in the chat takes, from the config. */
+  nickColumnMax: number;
 }
 
 /**
@@ -66,6 +72,7 @@ export function App({
   initialRecentActions,
   onRecentActionsChanged,
   logSearch,
+  nickColumnMax,
 }: AppProps) {
   const renderer = useRenderer();
   const { width } = useTerminalDimensions();
@@ -260,14 +267,25 @@ export function App({
   const loadOlder = () =>
     activeServerId && activeBuffer ? manager.loadOlder(activeServerId, activeBuffer.name) : 0;
 
-  const sidebarFits = width >= SIDEBAR_MIN_WIDTH;
-  const nicklistFits = width >= NICKLIST_MIN_WIDTH;
-  const showSidebar = sidebarOpen && sidebarFits;
+  // The panels fit the names in them. The theme version changes when the width
+  // method does, and then names are measured again.
+  const wantedSidebar = useMemo(() => sidebarWidth(snapshot.servers), [snapshot.servers, themeVersion]);
+  const users = activeBuffer?.kind === "channel" ? activeBuffer.users : undefined;
+  const wantedNicklist = useMemo(() => (users ? nicklistWidth(users) : 0), [users, themeVersion]);
   // DMs and *status have no user list, so the panel would only show "No users".
-  const showNicklist =
-    nicklistOpen && nicklistFits && activeBuffer?.kind === "channel" && !context;
-  const chatWidth =
-    width - (showSidebar ? 24 : 0) - (showNicklist ? 20 : 0);
+  const nicklistWanted = nicklistOpen && users !== undefined && !context;
+  const layout = panelLayout(width, {
+    sidebar: sidebarOpen ? wantedSidebar : undefined,
+    nicklist: nicklistWanted ? wantedNicklist : undefined,
+  });
+  const showSidebar = layout.sidebar > 0;
+  const showNicklist = layout.nicklist > 0;
+  const chatWidth = layout.chat;
+  // For the status bar hints: whether a toggle would show the panel.
+  // The layout shrinks a panel down to its minimum before it hides it.
+  const sidebarFits = panelsFit(width, SIDEBAR_MIN);
+  const nicklistFits =
+    users !== undefined && panelsFit(width, NICKLIST_MIN, showSidebar ? SIDEBAR_MIN : 0);
 
   return (
     <ThemeVersion.Provider value={themeVersion}>
@@ -280,6 +298,7 @@ export function App({
         <box flexDirection="row" flexGrow={1} width="100%">
           {showSidebar && (
             <Sidebar
+              width={layout.sidebar}
               servers={snapshot.servers}
               active={snapshot.active}
               onSelect={selectBuffer}
@@ -295,6 +314,7 @@ export function App({
               focused={!omniboxOpen}
               paneWidth={chatWidth}
               onBack={closeContext}
+              nickColumnMax={nickColumnMax}
             />
           ) : (
           <ChatPane
@@ -307,11 +327,13 @@ export function App({
             onSelectUser={selectUser}
             onJoinChannel={joinChannel}
             onLoadOlder={loadOlder}
+            nickColumnMax={nickColumnMax}
           />
           )}
 
           {showNicklist && (
             <Nicklist
+              width={layout.nicklist}
               users={activeBuffer!.users}
               myNick={activeServer?.nick ?? ""}
               casemapping={casemappingOf(activeServer)}
@@ -324,7 +346,7 @@ export function App({
           server={activeServer}
           width={width}
           sidebarFits={sidebarFits}
-          nicklistFits={nicklistFits && activeBuffer?.kind === "channel"}
+          nicklistFits={nicklistFits}
           update={snapshot.update}
         />
 

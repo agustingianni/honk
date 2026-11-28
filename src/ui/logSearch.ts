@@ -4,8 +4,9 @@
 
 import type { Log } from "../log/log.ts";
 import type { SearchHit } from "../log/search.ts";
-import { clockTime, sameDay } from "./dayDivider.ts";
+import { sameDay } from "./dayDivider.ts";
 import { glyphs } from "./glyphs.ts";
+import { formatTime } from "./timeFormat.ts";
 
 /** The Log to search, or why there is none, such as "logs.enabled is false in the config". */
 export type LogSearch = Pick<Log, "search" | "context"> | { off: string };
@@ -17,7 +18,8 @@ const pad = (n: number) => String(n).padStart(2, "0");
 /** When a hit was written: "14:02" today, "Oct 1 14:02" this year, "2025-12-31" before. */
 export function hitTime(time: number, now: Date): string {
   const date = new Date(time);
-  const clock = clockTime(date);
+  // Always HH:mm, whatever the format of chat lines: the date goes beside it.
+  const clock = formatTime(date, "HH:mm");
   if (sameDay(date, now)) return clock;
   if (date.getFullYear() === now.getFullYear()) return `${SAME_YEAR.format(date)} ${clock}`;
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;

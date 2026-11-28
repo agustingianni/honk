@@ -4,8 +4,11 @@ import { nickColor, prefixColor, theme, useThemeVersion } from "../theme.ts";
 import type { BufferState } from "../types.ts";
 import { Clickable } from "./Clickable.tsx";
 import { HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
+import { nicklistHeader, nicklistNickRoom } from "./panelWidths.ts";
 
 interface NicklistProps {
+  /** Cells, from nicklistWidth and panelLayout. */
+  width: number;
   users: BufferState["users"];
   myNick: string;
   /** The server's casemapping, to find your own nick in the list. */
@@ -15,6 +18,7 @@ interface NicklistProps {
 
 /** Memoized: only re-renders when this buffer's user list, the nick, the handler or the theme changes. */
 export const Nicklist = memo(function Nicklist({
+  width,
   users,
   myNick,
   casemapping,
@@ -22,11 +26,12 @@ export const Nicklist = memo(function Nicklist({
 }: NicklistProps) {
   const themeVersion = useThemeVersion();
   const myKey = nameKey(myNick, casemapping);
+  const nickRoom = nicklistNickRoom(width);
 
   return (
     <box
       flexDirection="column"
-      width={20}
+      width={width}
       height="100%"
       backgroundColor={theme.bgNicklist}
     >
@@ -39,7 +44,7 @@ export const Nicklist = memo(function Nicklist({
         backgroundColor={theme.bgNicklist}
       >
         <text fg={theme.fgMuted}>
-          <strong>USERS ({users.length})</strong>
+          <strong>{nicklistHeader(users.length)}</strong>
         </text>
       </box>
 
@@ -58,6 +63,7 @@ export const Nicklist = memo(function Nicklist({
               <NickRow
                 key={u.nick}
                 nick={u.nick}
+                room={nickRoom}
                 prefix={u.prefix}
                 isSelf={nameKey(u.nick, casemapping) === myKey}
                 onSelectUser={onSelectUser}
@@ -73,6 +79,8 @@ export const Nicklist = memo(function Nicklist({
 
 interface NickRowProps {
   nick: string;
+  /** The cells the nick gets: a longer nick is cut. */
+  room: number;
   prefix: string;
   isSelf: boolean;
   onSelectUser: (nick: string) => void;
@@ -84,7 +92,7 @@ interface NickRowProps {
  * Memoized: a join or quit in a channel with thousands of users renders only
  * the rows that changed, not every row.
  */
-const NickRow = memo(function NickRow({ nick, prefix, isSelf, onSelectUser }: NickRowProps) {
+const NickRow = memo(function NickRow({ nick, room, prefix, isSelf, onSelectUser }: NickRowProps) {
   return (
     <Clickable
       height={1}
@@ -98,7 +106,7 @@ const NickRow = memo(function NickRow({ nick, prefix, isSelf, onSelectUser }: Ni
       <text>
         <span fg={prefixColor(prefix)}>{prefix ? prefix : " "}</span>
         <span fg={isSelf ? theme.accent : nickColor(nick)}>
-          {isSelf ? <strong>{truncate(nick, 16)}</strong> : truncate(nick, 16)}
+          {isSelf ? <strong>{truncate(nick, room)}</strong> : truncate(nick, room)}
         </span>
       </text>
     </Clickable>

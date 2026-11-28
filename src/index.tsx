@@ -10,6 +10,7 @@ import { chooseNotificationProtocol, parseNotificationSetting, readTmuxInfo } fr
 import { applyTheme } from "./theme.ts";
 import { applyGlyphs, wantsAscii } from "./ui/glyphs.ts";
 import type { LogSearch } from "./ui/logSearch.ts";
+import { applyTimeFormat, selectTimeFormat, type TimeFormat } from "./ui/timeFormat.ts";
 import { allThemes, loadUserThemes, selectTheme, type ThemeEntry } from "./themes/index.ts";
 import { defaultStatePath, loadState, saveState } from "./state.ts";
 import { isMouseInput } from "./terminalInput.ts";
@@ -46,12 +47,16 @@ interface HotState {
   themeId: string;
   /** Draw only ASCII. Kept here for the same reason, for src/ui/glyphs.ts. */
   ascii: boolean;
+  /** The time format of chat lines. Kept here too, for src/ui/timeFormat.ts. */
+  timeFormat: TimeFormat;
   saveTheme: (id: string) => void;
   /** The omnibox actions used last (see state.ts), kept here across hot reloads too. */
   recentActions: Record<string, number>;
   saveRecentActions: (recent: Record<string, number>) => void;
   /** The Log that search reads, or why there is none. */
   logSearch: LogSearch;
+  /** The most cells the nick column takes, from the config. */
+  nickColumnMax: number;
 }
 
 const g = globalThis as unknown as { __ircHot?: HotState };
@@ -96,6 +101,8 @@ if (!g.__ircHot) {
   const selected = selectTheme(config.theme, themes);
   const warnings = [...logNotices, ...userThemes.warnings];
   if (selected.warning) warnings.push(selected.warning);
+  const timeFormat = selectTimeFormat(config.timestamps);
+  if (timeFormat.warning) warnings.push(timeFormat.warning);
   // Inside tmux and zellij, OpenTUI can't see the terminal and would send no
   // notifications, so honk picks the sequence. See src/notifyProtocol.ts.
   const notifications = parseNotificationSetting(config.notifications);
@@ -183,10 +190,12 @@ if (!g.__ircHot) {
     themes,
     themeId: selected.entry.id,
     ascii: wantsAscii(config.ascii, process.env),
+    timeFormat: timeFormat.format,
     saveTheme,
     recentActions: loadState(statePath).recentActions,
     saveRecentActions,
     logSearch: opened.log ?? { off: opened.off },
+    nickColumnMax: config.nickColumnMax,
   };
   g.__ircHot = hot;
 }
@@ -195,6 +204,7 @@ const hot = g.__ircHot;
 hot.version += 1;
 applyTheme(hot.themes.find((t) => t.id === hot.themeId)!.theme);
 applyGlyphs(hot.ascii);
+applyTimeFormat(hot.timeFormat);
 hot.root.render(
   <App
     key={hot.version}
@@ -205,6 +215,7 @@ hot.root.render(
     initialRecentActions={hot.recentActions}
     onRecentActionsChanged={hot.saveRecentActions}
     logSearch={hot.logSearch}
+    nickColumnMax={hot.nickColumnMax}
   />,
 );
 hot.renderer.requestRender();

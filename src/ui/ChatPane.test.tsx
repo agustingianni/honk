@@ -5,6 +5,7 @@ import { TextAttributes, type MousePointerStyle } from "@opentui/core";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import { dayLabel } from "./dayDivider.ts";
+import { applyTimeFormat, DEFAULT_TIME_FORMAT } from "./timeFormat.ts";
 
 /** Noon today, so the buffer starts on today and gets no day divider. */
 function noonToday(): Date {
@@ -158,16 +159,106 @@ test("nicks with wide characters keep the message text in line", async () => {
   const screen = await renderLines({
     messages: nicks.map((from, i) => ({ ...message(i), from, text: `hello ${i}` })),
   });
-  // The time, then the nick right-aligned in its 12 cells, then the gutter.
-  const labels = screen
-    .filter((line) => line.includes("hello"))
-    .map((line) => line.slice(0, line.indexOf("│") + 1));
-  expect(labels).toEqual([
-    " 12:00         fern │",
-    " 12:00     田中さん │",
-    " 12:00          Zoë │",
-    " 12:00  田中さん田… │",
+  // The time, then the nick right-aligned in a column of at most 16 cells, then the gutter.
+  expect(labelsOf(screen)).toEqual([
+    " 12:00             fern │",
+    " 12:00         田中さん │",
+    " 12:00              Zoë │",
+    " 12:00  田中さん田中さ… │",
   ]);
+});
+
+/** The part of each "hello" line up to the gutter: the time and the nick column. */
+function labelsOf(screen: string[]): string[] {
+  return screen.filter((line) => line.includes("hello")).map((line) => line.slice(0, line.indexOf("│") + 1));
+}
+
+test("the nick column fits the longest nick, so a 14-character nick is not cut", async () => {
+  const nicks = ["fern", "fernando_cutss"];
+  const screen = await renderLines({
+    messages: nicks.map((from, i) => ({ ...message(i), from, text: `hello ${i}` })),
+  });
+  expect(labelsOf(screen)).toEqual([
+    " 12:00           fern │",
+    " 12:00 fernando_cutss │",
+  ]);
+});
+
+test("short nicks get a nick column of 8 cells", async () => {
+  const screen = await renderLines({ messages: [{ ...message(0), from: "al", text: "hello" }] });
+  expect(labelsOf(screen)).toEqual([" 12:00       al │"]);
+});
+
+test("the nick column grows when a longer nick speaks, and does not shrink when it leaves", async () => {
+  let setMessages: (messages: ChatMessage[]) => void = () => {};
+  const short = { ...message(0), from: "al", text: "hello 0" };
+  const long = { ...message(1), from: "fernando_cuts", text: "hello 1" };
+  function Pane() {
+    const [messages, set] = useState<ChatMessage[]>([short]);
+    setMessages = set;
+    const buffer: BufferState = {
+      name: "#honk",
+      kind: "channel",
+      topic: "",
+      messages,
+      users: [],
+      unread: 0,
+      hasMention: false,
+    };
+    return (
+      <ChatPane
+        server={undefined}
+        buffer={buffer}
+        inputFocused={false}
+        paneWidth={60}
+        onSubmit={() => {}}
+        onPasteLines={() => {}}
+        onSelectUser={() => {}}
+        onJoinChannel={() => {}}
+      />
+    );
+  }
+  const { renderOnce, captureCharFrame, renderer } = await testRender(<Pane />, { width: 60, height: 12 });
+  const screen = async () => {
+    await act(async () => {
+      await renderOnce();
+    });
+    return captureCharFrame().split("\n");
+  };
+  try {
+    expect(labelsOf(await screen())).toEqual([" 12:00       al │"]);
+    await act(async () => setMessages([short, long]));
+    expect(labelsOf(await screen())).toEqual([" 12:00            al │", " 12:00 fernando_cuts │"]);
+    // The long nick's line leaves the buffer; the lines do not move.
+    await act(async () => setMessages([short]));
+    expect(labelsOf(await screen())).toEqual([" 12:00            al │"]);
+  } finally {
+    act(() => renderer.destroy());
+  }
+});
+
+describe("timestamps", () => {
+  // Noon, in each format. A grouped line shows a blank time as wide as the time.
+  for (const [format, time] of [
+    ["HH:mm", "12:00 "],
+    ["HH:mm:ss", "12:00:00 "],
+    ["h:mm a", "12:00 PM "],
+    ["none", ""],
+  ] as const) {
+    test(`${format}: grouped lines line up with the line above`, async () => {
+      applyTimeFormat(format);
+      try {
+        const screen = await renderLines({ messages: [message(0), message(1)] });
+        const labels = screen
+          .filter((line) => line.includes("line "))
+          .map((line) => line.slice(0, line.indexOf("│") + 1));
+        const blank = " ".repeat(time.length);
+        expect(labels).toEqual([` ${time}    fern │`, ` ${blank}         │`]);
+      } finally {
+        applyTimeFormat(DEFAULT_TIME_FORMAT);
+      }
+    });
+  }
 });
 
 test("a wide channel name and topic fit the header", async () => {
