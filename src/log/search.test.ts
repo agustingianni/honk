@@ -126,6 +126,22 @@ function texts(log: Log, text: string): string[] {
 }
 
 describe("Log.search", () => {
+  test("the newest matches come first, also when History was written after newer Lines", () => {
+    const log = open();
+    log.add("libera", rust, line("hello a", { time: T }));
+    log.add("libera", rust, line("hello b", { time: T + 1000 }));
+    // A fill after a restart writes older History last.
+    for (let i = 3; i >= 1; i--) log.add("libera", rust, line(`hello fill ${i}`, { time: T - i * MINUTE }));
+    log.add("libera", rust, line("hello last", { time: T + MINUTE }));
+    const result = log.search(query("hello"), 2);
+    if ("error" in result) throw new Error(result.error);
+    expect(result.hits.map((h) => h.time)).toEqual([T + MINUTE, T + 1000]);
+    expect(result.more).toBe(true);
+    expect(texts(log, "hello")).toEqual([
+      "hello last", "hello b", "hello a", "hello fill 1", "hello fill 2", "hello fill 3",
+    ]);
+  });
+
   test("every word must match; newest first; formatting is left out", () => {
     const log = open();
     log.add("libera", rust, line("the \x02borrow\x02 checker", { time: T - 2 * MINUTE }));

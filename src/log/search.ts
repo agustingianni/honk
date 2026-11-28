@@ -13,6 +13,12 @@
  *   borrow check*   ->   "borrow" "check"*
  *
  * Redacted Lines are not found: the search index leaves them out (see schema.ts).
+ *
+ * A search with words does not sort every match by time: "the" matches half of a
+ * large Log, and that sort takes about a second. It takes the matches written last
+ * instead, which FTS5 finds by walking its index backwards, and then the ones written
+ * earlier that can still be newer. Those are few: History a fill wrote late. See
+ * `searchLog`.
  */
 
 import type { Database } from "bun:sqlite";
@@ -224,18 +230,22 @@ export function searchLog(db: Database, query: SearchQuery, limit: number): Sear
   const from = match
     ? "message_fts JOIN message m ON m.id = message_fts.rowid"
     : "message m";
-  const rows = db
-    .query(
-      `SELECT m.id, m.ts, m.kind, m.nick, ${marked} AS marked,
-              b.display AS buffer, n.config_id AS server, n.display AS network
-       FROM ${from}
-       JOIN buffer b ON b.id = m.buffer_id
-       JOIN network n ON n.id = b.network_id
-       WHERE ${where.join(" AND ")}
-       ORDER BY m.ts DESC, m.id DESC
-       LIMIT ?`,
-    )
-    .all(...params, limit + 1) as HitRow[];
+  const select = (more: string[], moreParams: number[], order: string) =>
+    db
+      .query(
+        `SELECT m.id, m.ts, m.kind, m.nick, ${marked} AS marked,
+                b.display AS buffer, n.config_id AS server, n.display AS network
+         FROM ${from}
+         JOIN buffer b ON b.id = m.buffer_id
+         JOIN network n ON n.id = b.network_id
+         WHERE ${[...where, ...more].join(" AND ")}
+         ORDER BY ${order}
+         LIMIT ?`,
+      )
+      .all(...params, ...moreParams, limit + 1) as HitRow[];
+  const rows = match
+    ? newestMatches(db, select, limit)
+    : select([], [], "m.ts DESC, m.id DESC");
   return {
     hits: rows.slice(0, limit).map((r) => ({
       id: r.id,
@@ -249,6 +259,38 @@ export function searchLog(db: Database, query: SearchQuery, limit: number): Sear
     })),
     more: rows.length > limit,
   };
+}
+
+/**
+ * The newest `limit` + 1 matches of a search with words, without sorting them all:
+ *
+ *   1. The `limit` + 1 matches written last (by row id). Fewer: they are all.
+ *   2. The newest `limit` + 1 are no older than the oldest of those (`floor`), so a
+ *      match not among them was written before them, and after the first Chat line
+ *      at `floor` or later. That range holds only what was written late, such as a
+ *      fill of History.
+ */
+function newestMatches(
+  db: Database,
+  select: (more: string[], params: number[], order: string) => HitRow[],
+  limit: number,
+): HitRow[] {
+  const byTime = (a: HitRow, b: HitRow) => b.ts - a.ts || b.id - a.id;
+  const last = select([], [], "message_fts.rowid DESC");
+  if (last.length <= limit) return last.sort(byTime);
+  const floor = Math.min(...last.map((r) => r.ts));
+  const before = last.at(-1)!.id;
+  const { first } = db
+    .query(`SELECT min(id) AS first FROM message WHERE kind IN (${sqlList(CHAT_KINDS)}) AND ts >= ?`)
+    .get(floor) as { first: number };
+  // Nothing was written late: the usual case.
+  if (first >= before) return last.sort(byTime);
+  const late = select(
+    ["message_fts.rowid >= ?", "message_fts.rowid < ?", "m.ts >= ?"],
+    [first, before, floor],
+    "m.ts DESC, m.id DESC",
+  );
+  return [...last, ...late].sort(byTime).slice(0, limit + 1);
 }
 
 /**
