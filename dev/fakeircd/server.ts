@@ -388,8 +388,7 @@ export class FakeIrcd {
     const ch = this.channels.get(this.lower(channel));
     const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
-    const event = `PART ${ch.name}${reason ? ` :${reason}` : ""}`;
-    this.channelEvent(ch, m.nick, event);
+    this.channelEvent(ch, m.nick, `PART ${ch.name}${reason ? ` :${reason}` : ""}`);
     ch.members.delete(this.lower(nick));
   }
 
@@ -400,8 +399,8 @@ export class FakeIrcd {
       this.dropClient(client, reason);
       return;
     }
-    const tags = this.storeEvent(nick, this.channelsOf(nick), `QUIT :${reason}`);
-    this.leaveAll(nick, `:${hostmask(nick)} QUIT :${reason}`, undefined, tags);
+    const event = `QUIT :${reason}`;
+    this.leaveAll(nick, `:${hostmask(nick)} ${event}`, undefined, this.storeEvent(nick, this.channelsOf(nick), event));
   }
 
   /** The names of the channels `nick` is in. */
@@ -413,8 +412,9 @@ export class FakeIrcd {
   renick(from: string, to: string): void {
     if (this.clientByNick(from))
       throw new Error(`fakeircd: ${from} is a client; it changes its own nick`);
-    const line = `:${hostmask(from)} NICK :${to}`;
-    const tags = this.storeEvent(from, this.channelsOf(from), `NICK :${to}`);
+    const event = `NICK :${to}`;
+    const line = `:${hostmask(from)} ${event}`;
+    const tags = this.storeEvent(from, this.channelsOf(from), event);
     const told = new Set<Client>();
     for (const ch of this.channels.values()) {
       const m = ch.members.get(this.lower(from));
@@ -430,8 +430,7 @@ export class FakeIrcd {
     const ch = this.channels.get(this.lower(channel));
     const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
-    const event = `KICK ${ch.name} ${m.nick} :${reason || by}`;
-    this.channelEvent(ch, by, event);
+    this.channelEvent(ch, by, `KICK ${ch.name} ${m.nick} :${reason || by}`);
     ch.members.delete(this.lower(nick));
   }
 
@@ -439,8 +438,7 @@ export class FakeIrcd {
     const ch = this.ensureChannel(channel);
     ch.topic = text;
     ch.topicBy = by;
-    const event = `TOPIC ${ch.name} :${text}`;
-    this.channelEvent(ch, by, event);
+    this.channelEvent(ch, by, `TOPIC ${ch.name} :${text}`);
   }
 
   /** Replaces the fake users of a channel, such as ["@alice", "dave"]. Clients stay. */

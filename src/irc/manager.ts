@@ -1576,7 +1576,7 @@ export class IrcManager {
       if (!buf) return;
       const who = msg.source?.name ?? "someone";
       buf.topic = msg.params.topic ?? "";
-      this.logRecorder?.event(serverId, msg.params.channel, msg, { kind: "topic", nick: who, text: buf.topic });
+      this.logRecorder?.event(serverId, msg.params.channel, msg, { kind: "topic", nick: normalizeNick(msg.source?.name) || who, text: buf.topic });
       this.pushMessage(
         serverId,
         msg.params.channel,

@@ -195,10 +195,8 @@ test("a line timed by honk's clock matches History less than 2 seconds away", ()
 
 test("two kicks by one nick in one second are two Events: the kicked nick tells them apart", () => {
   const { log } = open();
-  const kick = (subject: string, extra: Partial<LogLine> = {}) =>
-    line("alice", { kind: "kick", subject, ...extra });
-  log.add("libera", honk, kick("dave"));
-  log.add("libera", honk, kick("erin", { msgid: "k2", history: true }));
+  log.add("libera", honk, line("alice", { kind: "kick", subject: "dave" }));
+  log.add("libera", honk, line("alice", { kind: "kick", subject: "erin", msgid: "k2", history: true }));
   log.flush();
   expect(rows("SELECT subject, msgid FROM message ORDER BY id")).toEqual([
     { subject: "dave", msgid: null },

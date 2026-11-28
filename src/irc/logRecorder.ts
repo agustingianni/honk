@@ -17,6 +17,7 @@
 import { DEFAULT_CASEMAPPING, isChannelName, normalizeNick } from "./names.ts";
 import type { ChatMessage } from "../types.ts";
 import { lineTime, parseLine, tagsOf, type TimeTags } from "./ircLine.ts";
+import { isHistoryService } from "./readMarker.ts";
 import { HistoryBatch } from "./replay.ts";
 import type { SentLine } from "./delivery.ts";
 import type { Log, LogLine, LogNetwork } from "../log/log.ts";
@@ -110,15 +111,6 @@ function historyEvent(line: HistoryLine): { channel?: string; event: EventInput 
     default:
       return undefined;
   }
-}
-
-/**
- * True for an Ergo HistServ line: an Event played back as a PRIVMSG, for a client
- * without draft/event-playback. Its msgid is the Event's with "_" in front. Its text is
- * translated, so honk can't read the Event back out of it.
- */
-function isHistServLine(tags: Tags): boolean {
-  return tags?.msgid?.startsWith("_") === true;
 }
 
 /** One CHATHISTORY batch on its way to the Log. */
@@ -261,7 +253,7 @@ export class LogRecorder {
     const batches = new Map<string, HistoryBatch>();
     // The server times of its Lines, for the gap check.
     const times: number[] = [];
-    const noteTime = (line: LogLine) => {
+    const noteTime = (line: Pick<LogLine, "time" | "timeFromServer">) => {
       if (line.timeFromServer) times.push(line.time);
     };
     const addLine = (lineTarget: string, line: LogLine) => {
@@ -273,10 +265,11 @@ export class LogRecorder {
     };
     return {
       add: (lineTarget, input) => {
-        const line = this.chatLine(serverId, lineTarget, input);
-        // Still a Line of the batch for the gap check, but not a Chat line.
-        if (isHistServLine(input.tags)) noteTime(line);
-        else addLine(lineTarget, line);
+        // An Ergo HistServ line is an Event played back as a PRIVMSG, for a client without
+        // draft/event-playback. Its text is translated, so honk can't read the Event back
+        // out of it. It still counts for the gap check.
+        if (isHistoryService(input.from)) noteTime(logTime(input.tags));
+        else addLine(lineTarget, this.chatLine(serverId, lineTarget, input));
       },
       event: (raw) => {
         const found = historyEvent(raw);

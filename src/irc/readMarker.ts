@@ -45,15 +45,21 @@ export function parseMarkRead(
  */
 const HISTORY_SERVICE = "histserv";
 
+/** True if `nick` is Ergo's HistServ, whose lines are replayed Events, not chat. */
+export function isHistoryService(nick: string | undefined): boolean {
+  return nick?.toLowerCase() === HISTORY_SERVICE;
+}
+
 /**
  * Lines that can be unread: chat from someone else. Joins, notices, your own lines and
- * Ergo's HistServ replays are not. missed.ts uses the same rule.
+ * Ergo's HistServ replays are not. missed.ts uses the same rule, and the Log keeps no
+ * HistServ line (logRecorder.ts).
  */
 export function isReadableLine(message: ChatMessage): boolean {
   return (
     !message.isSelf &&
     (message.kind === "message" || message.kind === "action") &&
-    message.from?.toLowerCase() !== HISTORY_SERVICE
+    !isHistoryService(message.from)
   );
 }
 

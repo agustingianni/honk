@@ -90,8 +90,9 @@ export const LOCAL_CLOCK_WINDOW_MS = 2000;
  * fields are compared first.
  */
 function matches(kept: ReplayLine, line: ReplayLine, key: MatchKey): boolean {
-  if (kept.kind !== key.kind || (kept.from ?? "") !== key.from) return false;
-  if ((kept.subject ?? "") !== key.subject) return false;
+  if (kept.kind !== key.kind || (kept.from ?? "") !== key.from || (kept.subject ?? "") !== key.subject) {
+    return false;
+  }
   const sameTime =
     kept.timeFromServer && line.timeFromServer
       ? wholeSecond(kept.timestamp) === key.second

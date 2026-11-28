@@ -480,6 +480,18 @@ test.each([
   expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
 });
 
+/**
+ * Puts the Sync marker back to `start` and reconnects, so the History after it plays
+ * again. Waits until #honk has had `requests` History requests in all, and a moment more.
+ */
+async function replayHistory(fake: FakeIrcd, manager: IrcManager, start: number, requests: number) {
+  log!.setSyncMarker("net", start);
+  await whileAway(manager, () => {});
+  const asked = () => fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk");
+  await until(() => asked().length === requests, 5000);
+  await Bun.sleep(100);
+}
+
 /** Disconnects, lets `away` happen on the server, and connects again. */
 async function whileAway(manager: IrcManager, away: () => void) {
   manager.disconnectServer("net");
@@ -497,11 +509,7 @@ test("a JOIN in a History batch enters the Log once, and still once after the ba
   expect(joins().map((r) => [r.buffer, r.ts_server, r.msgid !== null])).toEqual([["#honk", 1, true]]);
 
   // The same History again: the marker is back before the JOIN.
-  log!.setSyncMarker("net", start);
-  await whileAway(manager, () => {});
-  const asked = () => fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk");
-  await until(() => asked().length === 3, 5000);
-  await Bun.sleep(100);
+  await replayHistory(fake, manager, start, 3);
   expect(joins()).toHaveLength(1);
 });
 
@@ -552,10 +560,6 @@ test("an Event seen live and then again in History is one Line", async () => {
   const dave = () => rows().filter((r) => r.nick === "dave").map((r) => r.kind);
   await until(() => dave().length === 2);
   // The marker is back before them, so the reconnect's History holds them again.
-  log!.setSyncMarker("net", start);
-  await whileAway(manager, () => {});
-  const asked = () => fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk");
-  await until(() => asked().length === 2, 5000);
-  await Bun.sleep(100);
+  await replayHistory(fake, manager, start, 2);
   expect(dave()).toEqual(["join", "part"]);
 });
