@@ -2,9 +2,7 @@ import { NICK_COL_MIN } from "../config.ts";
 import type { ChatMessage, NickEntry, ServerState } from "../types.ts";
 import { bufferDisplayName, cellWidth, noticeLabel, unreadBadge } from "./display.ts";
 import { glyphs } from "./glyphs.ts";
-
-/** The time (5 cells) and a space, before the nick column. */
-const TIME_COL = 5 + 1;
+import { chatTimeWidth } from "./timeFormat.ts";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -25,12 +23,12 @@ export function nickColumnWidth(messages: readonly ChatMessage[], max: number): 
 }
 
 /**
- * The nick column of `width` cells, made smaller when the time and the nick
- * would take more than half of a chat pane `paneWidth` cells wide, so the text
- * keeps room. Never less than NICK_COL_MIN.
+ * The nick column of `width` cells, made smaller when the time (in the format
+ * in use) and the nick would take more than half of a chat pane `paneWidth`
+ * cells wide, so the text keeps room. Never less than NICK_COL_MIN.
  */
 export function nickColumnInPane(width: number, paneWidth: number): number {
-  return clamp(Math.floor(paneWidth / 2) - TIME_COL, NICK_COL_MIN, width);
+  return clamp(Math.floor(paneWidth / 2) - chatTimeWidth(), NICK_COL_MIN, width);
 }
 
 export const SIDEBAR_MIN = 16;

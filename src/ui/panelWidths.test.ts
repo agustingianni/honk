@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
 import { truncate } from "./display.ts";
+import { applyTimeFormat, DEFAULT_TIME_FORMAT } from "./timeFormat.ts";
 import {
   bufferNameRoom,
   nickColumnInPane,
@@ -49,6 +50,20 @@ test("the nick column takes at most half of a narrow chat pane, and never less t
   // 6 cells of time and space, then the nick: 6 + 14 is half of 40.
   expect(nickColumnInPane(16, 40)).toBe(14);
   expect(nickColumnInPane(16, 10)).toBe(8);
+});
+
+test("the nick column leaves half of the pane with the time in the format in use", () => {
+  try {
+    // 9 cells of time and space: 9 + 11 is half of 40.
+    applyTimeFormat("HH:mm:ss");
+    expect(nickColumnInPane(16, 40)).toBe(11);
+    // No time: the nick column can take the whole half.
+    applyTimeFormat("none");
+    expect(nickColumnInPane(16, 40)).toBe(16);
+    expect(nickColumnInPane(30, 40)).toBe(20);
+  } finally {
+    applyTimeFormat(DEFAULT_TIME_FORMAT);
+  }
 });
 
 function server(name: string, buffers: Partial<BufferState>[] = []): ServerState {

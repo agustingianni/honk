@@ -193,6 +193,36 @@ describe("the ascii setting", () => {
   });
 });
 
+describe("the timestamps setting", () => {
+  test("comes from the file, and --timestamps wins for one run", () => {
+    for (const value of ["HH:mm", "HH:mm:ss", "h:mm a", "none"]) {
+      expect(load(`{ "timestamps": "${value}", "servers": [] }`).timestamps).toBe(value);
+    }
+    expect(load('{ "timestamps": "none" }', "--timestamps", "HH:mm:ss").timestamps).toBe("HH:mm:ss");
+    expect(load(null, "--timestamps", "h:mm a").timestamps).toBe("h:mm a");
+  });
+
+  test("is unset when the key is missing or null", () => {
+    expect(load('{ "servers": [] }').timestamps).toBeUndefined();
+    expect(load('{ "timestamps": null }').timestamps).toBeUndefined();
+    expect(load(null).timestamps).toBeUndefined();
+  });
+
+  test("an unknown format is kept, so honk can say so in *status", () => {
+    expect(load('{ "timestamps": "hh:mm" }').timestamps).toBe("hh:mm");
+  });
+
+  test("a value that is not a string is a ConfigError", () => {
+    for (const value of ["true", "24", '["HH:mm"]']) {
+      const err = loadError(`{ "timestamps": ${value}, "servers": [] }`);
+      expect(err).toBeInstanceOf(ConfigError);
+      expect((err as Error).message).toEndWith(
+        `honk.json: "timestamps" must be a format such as "HH:mm", not ${value}`,
+      );
+    }
+  });
+});
+
 describe("the nickColumnMax setting", () => {
   test("comes from the file, and is 16 when missing", () => {
     expect(load('{ "nickColumnMax": 20, "servers": [] }').nickColumnMax).toBe(20);

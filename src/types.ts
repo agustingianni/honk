@@ -48,6 +48,12 @@ export interface AppConfig {
    * longest nick in the buffer, from 8 cells up to this. 16 when unset.
    */
   nickColumnMax?: number;
+  /**
+   * The time on each chat line, such as "HH:mm:ss", in the config file or with
+   * --timestamps. An unknown format is kept so startup can warn about it. See
+   * src/ui/timeFormat.ts.
+   */
+  timestamps?: string;
   /** The Log of your chats on disk. See src/log/log.ts. */
   logs?: LogSettings;
   /**

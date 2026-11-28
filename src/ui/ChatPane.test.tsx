@@ -5,6 +5,7 @@ import { TextAttributes, type MousePointerStyle } from "@opentui/core";
 import type { BufferState, ChatMessage, ServerState } from "../types.ts";
 import { ChatPane } from "./ChatPane.tsx";
 import { dayLabel } from "./dayDivider.ts";
+import { applyTimeFormat, DEFAULT_TIME_FORMAT } from "./timeFormat.ts";
 
 /** Noon today, so the buffer starts on today and gets no day divider. */
 function noonToday(): Date {
@@ -233,6 +234,30 @@ test("the nick column grows when a longer nick speaks, and does not shrink when 
     expect(labelsOf(await screen())).toEqual([" 12:00            al │"]);
   } finally {
     act(() => renderer.destroy());
+  }
+});
+
+describe("timestamps", () => {
+  // Noon, in each format. A grouped line shows a blank time as wide as the time.
+  for (const [format, time] of [
+    ["HH:mm", "12:00 "],
+    ["HH:mm:ss", "12:00:00 "],
+    ["h:mm a", "12:00 PM "],
+    ["none", ""],
+  ] as const) {
+    test(`${format}: grouped lines line up with the line above`, async () => {
+      applyTimeFormat(format);
+      try {
+        const screen = await renderLines({ messages: [message(0), message(1)] });
+        const labels = screen
+          .filter((line) => line.includes("line "))
+          .map((line) => line.slice(0, line.indexOf("│") + 1));
+        const blank = " ".repeat(time.length);
+        expect(labels).toEqual([` ${time}    fern │`, ` ${blank}         │`]);
+      } finally {
+        applyTimeFormat(DEFAULT_TIME_FORMAT);
+      }
+    });
   }
 });
 
