@@ -32,18 +32,13 @@ afterEach(() => {
 const T = Date.parse("2026-11-27T21:35:07.412Z");
 const SECOND = Math.floor(T / 1000) * 1000;
 
-function open(
-  settings: Partial<LogSettings> = {},
-  pid = 1000,
-  isAlive: (pid: number) => boolean = () => false,
-) {
+function open(settings: Partial<LogSettings> = {}, pid = 1000) {
   const clock = fakeClock(T);
   /** What the Log said in *status after it opened. */
   const errors: string[] = [];
   const result = openLog(path, { ...DEFAULT_LOG_SETTINGS, ...settings }, {
     pid,
     clock,
-    isAlive,
     onError: (text) => errors.push(text),
   });
   if (result.log) opened.push(result.log);
@@ -412,7 +407,7 @@ test("a file without incremental vacuum does not try to free pages again and aga
 
 test("a second honk reads the file but does not write it", () => {
   const first = open({}, 1000);
-  const second = open({}, 2000, (pid) => pid === 1000);
+  const second = open({}, 2000);
   expect(second.notices).toEqual([
     "Another honk (pid 1000) writes the log, so this one does not write to it.",
   ]);
@@ -424,11 +419,15 @@ test("a second honk reads the file but does not write it", () => {
   expect(texts()).toEqual(["from the first"]);
 });
 
-test("the writer row of a process that is gone is taken over", () => {
-  open({}, 1000);
-  const second = open({}, 2000, () => false);
-  expect(second.log.writable).toBe(true);
-  expect(second.notices).toEqual([]);
+test("after a crash, the next honk writes, though another process has the old pid", () => {
+  open({}, 1000).log.close();
+  // The crashed honk left its row, and its lock went with it. pid 1 always runs.
+  const db = new Database(path);
+  db.run("INSERT INTO writer (id, pid, since) VALUES (1, 1, 0)");
+  db.close();
+  const next = open({}, 2000);
+  expect(next.log.writable).toBe(true);
+  expect(next.notices).toEqual([]);
 });
 
 test("the Sync marker is per Network and never moves back", () => {

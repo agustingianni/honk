@@ -96,11 +96,10 @@ afterEach(() => {
 const T = Date.parse("2026-11-27T21:35:07.412Z");
 const MINUTE = 60_000;
 
-function open(pid = 1000, isAlive: (pid: number) => boolean = () => false): Log {
+function open(pid = 1000): Log {
   const { log } = openLog(join(dir, "logs.db"), DEFAULT_LOG_SETTINGS, {
     pid,
     clock: fakeClock(T),
-    isAlive,
   });
   opened.push(log!);
   return log!;
@@ -255,7 +254,7 @@ describe("Log.search", () => {
     const writer = open(1000);
     writer.add("libera", rust, line("hello"));
     writer.flush();
-    const reader = open(2000, () => true);
+    const reader = open(2000);
     expect(reader.writable).toBe(false);
     expect(texts(reader, "hello")).toEqual(["hello"]);
   });
