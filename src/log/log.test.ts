@@ -38,13 +38,16 @@ function open(
   isAlive: (pid: number) => boolean = () => false,
 ) {
   const clock = fakeClock(T);
+  /** What the Log said in *status after it opened. */
+  const errors: string[] = [];
   const result = openLog(path, { ...DEFAULT_LOG_SETTINGS, ...settings }, {
     pid,
     clock,
     isAlive,
+    onError: (text) => errors.push(text),
   });
   if (result.log) opened.push(result.log);
-  return { ...result, off: "off" in result ? result.off : undefined, log: result.log!, clock };
+  return { ...result, off: "off" in result ? result.off : undefined, log: result.log!, clock, errors };
 }
 
 const line = (text: string, extra: Partial<LogLine> = {}): LogLine => ({
@@ -134,6 +137,46 @@ test("close writes the lines still waiting", () => {
   log.add("libera", honk, line("bye"));
   log.close();
   expect(texts()).toEqual(["bye"]);
+});
+
+test("lines wait while another program locks the file, and are written once it is free", () => {
+  const { log, clock, errors } = open();
+  const other = new Database(path);
+  other.run("BEGIN IMMEDIATE");
+  for (let i = 0; i < 150; i++) log.add("libera", honk, line(`n${i}`, { time: T + i }));
+  expect(errors).toEqual([
+    "could not write to the log: database is locked. honk keeps new lines and tries again.",
+  ]);
+  // Waiting for the next try, not trying again at each Line.
+  clock.advance(4999);
+  other.run("COMMIT");
+  other.close();
+  expect(texts()).toEqual([]);
+  clock.advance(1);
+  expect(texts()).toHaveLength(150);
+  expect(errors.at(-1)).toBe("honk writes the log again.");
+});
+
+test("a line that can't be stored is left out, and the others of its write are kept", () => {
+  const { log, errors } = open();
+  log.add("libera", honk, line("before"));
+  log.add("libera", honk, line("bad", { time: NaN }));
+  log.add("libera", honk, line("after", { time: T + 1 }));
+  log.flush();
+  expect(texts()).toEqual(["before", "after"]);
+  expect(errors).toEqual([
+    "could not write a line to the log: NOT NULL constraint failed: message.ts",
+  ]);
+});
+
+test("close does not throw when the file is locked", () => {
+  const { log } = open();
+  log.add("libera", honk, line("lost"));
+  const other = new Database(path);
+  other.run("BEGIN IMMEDIATE");
+  expect(() => log.close()).not.toThrow();
+  other.run("ROLLBACK");
+  other.close();
 });
 
 test("two identical lines in one second are both kept, and a Replay of them adds none", () => {

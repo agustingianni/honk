@@ -4,7 +4,9 @@
  *   $XDG_DATA_HOME/honk/logs.db, or ~/.local/share/honk/logs.db
  *
  * IrcManager hands each Line to `add` as it comes. Lines wait in memory and go to the
- * file in one transaction about once a second, or at 100 Lines, and at `close`.
+ * file in one transaction about once a second, or at 100 Lines, and at `close`. If
+ * another program locks the file or the disk is full, the Lines stay in memory (up to
+ * 10,000) and honk tries again every 5 seconds.
  *
  * Keys (ADR 0002): a Network is the Server `id` plus soju's BOUNCER_NETID ('' when there
  * is none). A Buffer is its name folded with the server's CASEMAPPING, so #Foo[ and
@@ -114,6 +116,15 @@ export function defaultLogPath(env: Record<string, string | undefined> = process
 /** How many Lines wait in memory before a write. */
 const FLUSH_LINES = 100;
 const FLUSH_MS = 1000;
+/** How long after a failed write the next try waits. */
+const RETRY_MS = 5000;
+/** The most Lines kept in memory while writes fail. The oldest go first. */
+const MAX_QUEUE = 10_000;
+/**
+ * Errors that may go away: another program locks the file, the disk is full, an I/O
+ * error. The Lines wait for the next try. Other errors come from one Line.
+ */
+const RETRYABLE = /^SQLITE_(BUSY|LOCKED|FULL|IOERR|CANTOPEN|READONLY)/;
 /** How many Lines one retention step deletes, so a long delete never stalls the screen. */
 const PRUNE_BATCH = 500;
 /**
@@ -254,6 +265,8 @@ export class Log {
   private readonly reportedErrors = new Set<string>();
   private queue: Op[] = [];
   private flushTimer: unknown;
+  /** The last write failed: the next one waits RETRY_MS, not for 100 Lines. */
+  private failing = false;
   private pruneTimer: unknown;
   private closed = false;
   private networks = new Map<string, NetworkSnapshot>();
@@ -395,10 +408,13 @@ export class Log {
     return Array.isArray(result) ? result : [];
   }
 
-  /** Runs a read after a flush. A failure (such as a busy file) comes back as an error. */
+  /**
+   * Runs a read after a flush, or right away while writes fail: the next try is on its
+   * timer. A failure (such as a busy file) comes back as an error.
+   */
   private read<T>(run: () => T): T | { error: string } {
     if (this.closed) return { error: "the log is closed" };
-    this.flush();
+    if (!this.failing) this.flush();
     try {
       return run();
     } catch (err) {
@@ -409,16 +425,26 @@ export class Log {
   private push(op: Op): void {
     if (!this.writable) return;
     this.queue.push(op);
-    if (this.queue.length >= FLUSH_LINES) this.flush();
-    else if (this.flushTimer === undefined) {
-      this.flushTimer = this.clock.setTimeout(() => {
-        this.flushTimer = undefined;
-        this.flush();
-      }, FLUSH_MS);
-    }
+    if (this.queue.length > MAX_QUEUE) this.queue.shift();
+    if (this.queue.length >= FLUSH_LINES && !this.failing) this.flush();
+    else this.scheduleFlush();
   }
 
-  /** Writes every waiting Line, in one transaction. */
+  private scheduleFlush(): void {
+    if (this.flushTimer !== undefined) return;
+    this.flushTimer = this.clock.setTimeout(
+      () => {
+        this.flushTimer = undefined;
+        this.flush();
+      },
+      this.failing ? RETRY_MS : FLUSH_MS,
+    );
+  }
+
+  /**
+   * Writes every waiting Line, in one transaction. If the file is busy or full, the
+   * Lines wait and honk tries again; a Line that can't be stored is left out.
+   */
   flush(): void {
     if (this.flushTimer !== undefined) {
       this.clock.clearTimeout(this.flushTimer);
@@ -428,6 +454,28 @@ export class Log {
     const ops = this.queue;
     this.queue = [];
     try {
+      this.write(ops);
+    } catch (err) {
+      if (!RETRYABLE.test((err as { code?: string }).code ?? "")) {
+        // Most likely one bad Line: write them one by one, and leave out the bad ones.
+        for (const op of ops) this.writeAlone(op);
+        return this.recovered();
+      }
+      this.queue = ops.concat(this.queue).slice(-MAX_QUEUE);
+      this.failing = true;
+      this.scheduleFlush();
+      this.report(
+        "write",
+        `could not write to the log: ${(err as Error).message}. honk keeps new lines and tries again.`,
+      );
+      return;
+    }
+    this.recovered();
+  }
+
+  /** Applies `ops` in one transaction. On a failure nothing is written. */
+  private write(ops: Op[]): void {
+    try {
       this.db.transaction(() => {
         for (const op of ops) this.apply(op);
       })();
@@ -435,8 +483,24 @@ export class Log {
       // The cached ids may name rows the rollback removed.
       this.networkIds = new WeakMap();
       this.bufferIds.clear();
-      this.report("write", `could not write to the log: ${(err as Error).message}`);
+      throw err;
     }
+  }
+
+  private writeAlone(op: Op): void {
+    try {
+      this.write([op]);
+    } catch (err) {
+      this.report("line", `could not write a line to the log: ${(err as Error).message}`);
+    }
+  }
+
+  /** A write worked. After failed ones, says so, and the next failure is reported again. */
+  private recovered(): void {
+    if (!this.failing) return;
+    this.failing = false;
+    this.reportedErrors.delete("write");
+    this.onError("honk writes the log again.");
   }
 
   private report(kind: string, text: string): void {
@@ -631,18 +695,23 @@ export class Log {
     return deleted;
   }
 
-  /** Writes what waits, gives up the writer row, and closes the file. */
+  /**
+   * Writes what waits, gives up the writer row, and closes the file. Never throws: it
+   * runs as honk exits, when a busy or missing file can only lose what waits.
+   */
   close(): void {
     if (this.closed) return;
     this.flush();
+    if (this.flushTimer !== undefined) this.clock.clearTimeout(this.flushTimer);
     if (this.pruneTimer !== undefined) this.clock.clearTimeout(this.pruneTimer);
     try {
       if (this.otherWriter === undefined) {
         this.db.query("DELETE FROM writer WHERE pid = ?").run(this.pid);
       }
-    } finally {
-      this.closed = true;
-      this.db.close();
+    } catch {
+      // The next honk takes over the row of a process that is gone.
     }
+    this.closed = true;
+    this.db.close();
   }
 }
