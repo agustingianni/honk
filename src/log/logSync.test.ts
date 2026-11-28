@@ -4,10 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeClock } from "../fakeClock.ts";
 import {
+  FILL_LIMIT,
+  type Fill,
   LATEST_LIMIT,
   LogSync,
   MARK_EVERY_MS,
   MAX_FILL_PAGES,
+  PAGE_OVERLAP_MS,
   SETTLE_MS,
   SYNC_FUZZ_MS,
 } from "./logSync.ts";
@@ -36,8 +39,21 @@ afterEach(() => {
 
 /** A full batch: as many Lines as honk asked for, at these server times. */
 const full = (...times: number[]) => ({ times, lines: LATEST_LIMIT });
+/** A full page of a fill: as many Lines as a fill asks for. */
+const fullPage = (...times: number[]) => ({ times, lines: FILL_LIMIT });
 /** A batch with fewer Lines than honk asked for. */
 const short = (...times: number[]) => ({ times, lines: times.length });
+
+/**
+ * Starts the connection of a Network whose marker is an hour old, and returns the fill
+ * the screen's batch started for #honk, with `over` in place of its fields.
+ */
+function startFill(over: Partial<Fill> = {}): Fill {
+  log.setSyncMarker("libera", T - 3_600_000);
+  sync.start("libera");
+  sync.askedLatest("libera", "#honk");
+  return { after: T - 3_605_000, until: T - 600_000, pages: 1, ...over };
+}
 
 /** Moves the clock, and a live Line arrives with the same server time. */
 function wait(ms: number) {
@@ -86,13 +102,14 @@ test("after a gap, honk asks for the History between the marker and the screen's
   sync.moveMarker("libera");
   expect(log.syncMarker("libera")).toBe(T - 3_600_000);
 
-  // A full page: ask for the next one, after its newest line.
-  const second = sync.batchEnded("libera", "#honk", full(T - 3_000_000, T - 2_000_000), request);
-  const next = { after: T - 2_000_000, until: T - 600_000, pages: 2 };
+  // A full page: ask for the next one, from just before its newest line, so the rest of
+  // that line's millisecond is not skipped.
+  const second = sync.batchEnded("libera", "#honk", fullPage(T - 3_000_000, T - 2_000_000), request);
+  const next = { after: T - 2_000_000 - PAGE_OVERLAP_MS, until: T - 600_000, pages: 2 };
   expect(second).toEqual({ type: "next", request: next });
 
-  // This page reaches the screen's lines: the gap is closed and the marker moves.
-  expect(sync.batchEnded("libera", "#honk", full(T - 700_000, T - 600_000), next)).toEqual({
+  // This page goes past the screen's oldest line: the gap is closed and the marker moves.
+  expect(sync.batchEnded("libera", "#honk", fullPage(T - 700_000, T - 500_000), next)).toEqual({
     type: "done",
   });
   expect(log.syncMarker("libera")).toBe(T + SETTLE_MS);
@@ -145,11 +162,46 @@ test("a fill gives up after MAX_FILL_PAGES pages, and the marker stays before th
   sync.askedLatest("libera", "#honk");
   sync.batchEnded("libera", "#honk", full(T - 60_000));
   const fill = { after: 0, until: T - 60_000, pages: MAX_FILL_PAGES };
-  expect(sync.batchEnded("libera", "#honk", full(T - 1_000_000), fill)).toEqual({ type: "gave-up" });
+  expect(sync.batchEnded("libera", "#honk", fullPage(T - 1_000_000), fill)).toEqual({ type: "gave-up" });
   wait(SETTLE_MS);
   sync.moveMarker("libera");
   sync.stop("libera");
   expect(log.syncMarker("libera")).toBe(T - 3_600_000);
+});
+
+test("an empty fill page ends the fill", () => {
+  const fill = startFill();
+  expect(sync.batchEnded("libera", "#honk", short(), fill)).toEqual({ type: "done" });
+});
+
+test("a fill page that is short but does not reach the screen's batch asks for more", () => {
+  // A server may cap its pages below FILL_LIMIT, so a short page is not the end.
+  const fill = startFill();
+  expect(sync.batchEnded("libera", "#honk", short(T - 3_000_000), fill).type).toBe("next");
+});
+
+test("a fill page with lines but no server times gives up, and the marker stays", () => {
+  const fill = startFill();
+  expect(sync.batchEnded("libera", "#honk", { times: [], lines: FILL_LIMIT }, fill)).toEqual({ type: "gave-up" });
+});
+
+test("a fill page that ends at the time of the screen's oldest Line asks for one more", () => {
+  // The page may be cut inside that millisecond: Lines of it can be in neither batch.
+  const fill = startFill();
+  expect(sync.batchEnded("libera", "#honk", fullPage(T - 3_000_000, T - 600_000), fill)).toEqual({
+    type: "next",
+    request: { after: T - 600_000 - PAGE_OVERLAP_MS, until: T - 600_000, pages: 2 },
+  });
+});
+
+test("a fill page with no Line newer than the page before goes on past that millisecond", () => {
+  // More than FILL_LIMIT Lines in one millisecond: asking with the overlap brings the
+  // same page, so the next one starts after it. Only that millisecond can lose Lines.
+  const fill = startFill({ after: T - 2_000_001, pages: 2 });
+  expect(sync.batchEnded("libera", "#honk", fullPage(T - 2_000_000, T - 2_000_000), fill)).toEqual({
+    type: "next",
+    request: { after: T - 2_000_000, until: T - 600_000, pages: 3 },
+  });
 });
 
 test("while connected, the marker moves at most every MARK_EVERY_MS, and at the end", () => {

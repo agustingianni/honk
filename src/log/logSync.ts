@@ -33,6 +33,14 @@ import type { Log } from "./log.ts";
 export const LATEST_LIMIT = 50;
 /** Lines asked for in each page of a fill. */
 export const FILL_LIMIT = 100;
+/**
+ * How far before the newest Line of a full page the next page starts. AFTER leaves out
+ * its own time, so a page cut inside a millisecond would skip the rest of it. On a store
+ * of whole seconds every time ends in .000, so 1 ms before brings that whole second
+ * again. The Replay rule drops the Lines asked twice. A page that would only come again
+ * (more than a page of Lines in one millisecond) goes on after its newest Line instead.
+ */
+export const PAGE_OVERLAP_MS = 1;
 /** The most pages one fill asks for, so a long absence can't flood the connection. */
 export const MAX_FILL_PAGES = 20;
 /** How far before the marker a fill starts: the clocks of honk and the server differ. */
@@ -199,7 +207,7 @@ export class LogSync {
   batchEnded(serverId: string, target: string, page: HistoryPage, fill?: Fill): FillStep {
     const s = this.servers.get(serverId);
     if (!s) return { type: "done" };
-    const step = fill ? this.nextPage(fill, page.times) : this.firstPage(serverId, s, target, page);
+    const step = fill ? this.nextPage(fill, page) : this.firstPage(serverId, s, target, page);
     // A gap left open keeps the Buffer pending, so the marker stays before it.
     if (step.type === "done") {
       s.pending.delete(target);
@@ -230,13 +238,21 @@ export class LogSync {
     return { type: "next", request: { after: marker - SYNC_FUZZ_MS, until: oldest, pages: 1 } };
   }
 
-  /** The page after `fill`, until a page is empty or reaches the screen's batch. */
-  private nextPage(fill: Fill, times: number[]): FillStep {
-    if (times.length === 0) return { type: "done" };
-    const newest = Math.max(...times);
-    if (newest >= fill.until) return { type: "done" };
+  /**
+   * The page after `fill`, until a page is empty or goes past the oldest Line of the
+   * screen's batch. Pages overlap by PAGE_OVERLAP_MS. A short page is not the end: a
+   * server may cap its pages below FILL_LIMIT.
+   */
+  private nextPage(fill: Fill, page: HistoryPage): FillStep {
+    if (page.lines === 0) return { type: "done" };
+    // Lines with no server time: honk can't tell where the next page starts.
+    if (page.times.length === 0) return { type: "gave-up" };
+    const newest = Math.max(...page.times);
+    if (newest > fill.until) return { type: "done" };
     if (fill.pages >= MAX_FILL_PAGES) return { type: "gave-up" };
-    return { type: "next", request: { after: newest, until: fill.until, pages: fill.pages + 1 } };
+    // A page all in the millisecond after `fill.after` would only come again.
+    const after = Math.max(newest - PAGE_OVERLAP_MS, fill.after + 1);
+    return { type: "next", request: { after, until: fill.until, pages: fill.pages + 1 } };
   }
 
   /**
