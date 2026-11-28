@@ -64,9 +64,12 @@ for (const target of targets) {
   const libc = target.endsWith("-musl")
     ? ["--define", `process.env.OPENTUI_LIBC=${JSON.stringify("musl")}`]
     : [];
-  // --define puts these values into src/version.ts. Each value is JSON, so the
-  // strings keep their quotes.
-  await $`bun build src/index.tsx --compile --minify --target=bun-${target} \
+  // --production minifies and sets NODE_ENV, which picks React's production
+  // build. The development one is slower, and its debug data for each element
+  // grows the memory without end in a busy channel. --compile alone leaves
+  // NODE_ENV unset. --define puts these values into src/version.ts. Each value
+  // is JSON, so the strings keep their quotes.
+  await $`bun build src/index.tsx --compile --production --target=bun-${target} \
     --define __HONK_VERSION__=${JSON.stringify(version)} \
     --define __HONK_TARGET__=${JSON.stringify(target)} \
     ${libc} \
