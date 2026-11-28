@@ -94,6 +94,43 @@ test("/history with nothing older says so", async () => {
   expect(texts("#honk").at(-1)).toBe("The server has no older messages in #honk.");
 });
 
+test("/history brings the Lines of the second where the screen begins", async () => {
+  // A store of whole seconds: a, b and c share one second. The screen's latest 50
+  // begin at c (your JOIN is one of them), so a and b are older but have c's time.
+  const second = Math.floor(Date.now() / 1000) * 1000 - 60_000;
+  const say = (time: number, text: string) => {
+    irc.now = () => time;
+    irc.say("alice", "#honk", text);
+  };
+  for (let i = 1; i <= 10; i++) say(second - 60_000, `old ${i}`);
+  for (const text of ["a", "b", "c"]) say(second, text);
+  for (let i = 1; i <= 48; i++) say(second + 5_000, `new ${i}`);
+  irc.now = () => Date.now();
+  await inHonk();
+  const shown = () => server().buffers["#honk"]!.messages.map((x) => x.text);
+  await until(() => shown().includes("new 48"));
+  expect(shown()).not.toContain("a");
+  m.handleInput("/history 50");
+  await until(() => shown().includes("old 1"));
+  const lines = shown().filter((t) => /^(old \d+|[abc]|new \d+)$/.test(t));
+  expect(lines).toEqual([
+    ...Array.from({ length: 10 }, (_, i) => `old ${i + 1}`),
+    "a",
+    "b",
+    "c",
+    ...Array.from({ length: 48 }, (_, i) => `new ${i + 1}`),
+  ]);
+});
+
+test("/history says so when the server has only the Lines on screen", async () => {
+  await inHonk();
+  irc.say("alice", "#honk", "only line");
+  await until(() => texts("#honk").includes("only line"));
+  m.handleInput("/history 5");
+  await until(() => texts("#honk").some((t) => t.includes("no older messages")));
+  expect(texts("#honk").filter((t) => t === "only line")).toHaveLength(1);
+});
+
 test("a rejected SASL login is one line that says what to do", async () => {
   irc.rejectSasl = true;
   await connect({ password: "wrong" });
