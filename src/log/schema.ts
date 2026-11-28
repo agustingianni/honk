@@ -154,7 +154,7 @@ export function prepare(db: Database): void {
   db.run("PRAGMA journal_mode = WAL");
   // After a checkpoint, the -wal file shrinks back to this size (16 MB). Without it, it
   // stays as large as the largest write, such as a big prune.
-  db.run("PRAGMA journal_size_limit = 16777216");
+  db.run(`PRAGMA journal_size_limit = ${16 * 1024 * 1024}`);
   db.run("PRAGMA synchronous = NORMAL");
   db.run("PRAGMA foreign_keys = ON");
   for (let v = version; v < SCHEMA_VERSION; v++) {

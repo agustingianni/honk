@@ -263,6 +263,11 @@ export class Log {
   private flushTimer: unknown;
   private pruneTimer: unknown;
   private closed = false;
+  /**
+   * The file frees pages with incremental_vacuum. A file made with tables before honk
+   * set auto_vacuum (by an outside tool, say) can't, and keeps its free pages.
+   */
+  private readonly incrementalVacuum: boolean;
   private networks = new Map<string, NetworkSnapshot>();
   /** Row ids, cached. A snapshot is replaced whenever its Network changes. */
   private networkIds = new WeakMap<NetworkSnapshot, number>();
@@ -279,6 +284,8 @@ export class Log {
     this.clock = options.clock ?? systemClock;
     this.pid = options.pid ?? process.pid;
     this.onError = options.onError ?? (() => {});
+    this.incrementalVacuum =
+      (db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum === 2;
     this.otherWriter = this.takeWriter(options.isAlive ?? processAlive);
     if (this.writable) this.schedulePrune(FIRST_PRUNE_MS);
   }
@@ -621,18 +628,11 @@ export class Log {
     this.schedulePrune(more ? PRUNE_PAUSE_MS : PRUNE_EVERY_MS);
   }
 
-  /**
-   * Gives up to VACUUM_PAGES free pages back to the system. True if more are left and
-   * this step freed some: in a file without auto_vacuum = INCREMENTAL it frees none.
-   */
+  /** Gives up to VACUUM_PAGES free pages back to the system. True if more are left. */
   private vacuumBatch(): boolean {
-    const free = () =>
-      (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
-    const before = free();
-    if (before === 0) return false;
+    if (!this.incrementalVacuum) return false;
     this.db.run(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`);
-    const after = free();
-    return after > 0 && after < before;
+    return (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count > 0;
   }
 
   /** Deletes up to PRUNE_BATCH rows older than their retention. Returns how many. */

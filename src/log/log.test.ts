@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -328,17 +328,11 @@ test("a file without incremental vacuum does not try to free pages again and aga
     log.add("libera", honk, line(`old ${i} `.repeat(20), { time: T - 30 * 86_400_000 + i }));
   }
   log.flush();
-  let vacuums = 0;
-  const conn = (log as unknown as { db: Database }).db;
-  const run = conn.run.bind(conn);
-  conn.run = ((sql: string, ...rest: never[]) => {
-    if (sql.includes("incremental_vacuum")) vacuums++;
-    return run(sql, ...rest);
-  }) as typeof conn.run;
+  const run = spyOn((log as unknown as { db: Database }).db, "run");
   clock.advance(60_000);
   for (let i = 0; i < 100; i++) clock.advance(50);
   expect(texts()).toEqual([]);
-  expect(vacuums).toBe(1);
+  expect(run.mock.calls.filter(([sql]) => String(sql).includes("incremental_vacuum"))).toEqual([]);
 });
 
 test("a second honk reads the file but does not write it", () => {
