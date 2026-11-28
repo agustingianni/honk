@@ -8,7 +8,7 @@
  * Redacted lines come too, with who deleted them; storedMessages words them.
  */
 
-import { joinText, kickText, nickText, partText, quitText, topicText } from "../irc/eventText.ts";
+import { joinText, kickText, nickText, partText, quitText, selfJoinText, topicText } from "../irc/eventText.ts";
 import type { ChatMessage, MessageKind } from "../types.ts";
 import type { StoredLine } from "./storedLine.ts";
 
@@ -43,7 +43,7 @@ export function storedMessages(buffer: string, lines: readonly StoredLine[]): Ch
       case "notice":
         return line(row.kind, row.text, row.nick);
       case "join":
-        return line("join", joinText(row.nick, buffer));
+        return line("join", row.self ? selfJoinText(buffer) : joinText(row.nick, buffer));
       case "part":
         return line("part", partText(row.nick, buffer, row.text));
       case "quit":

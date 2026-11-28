@@ -7,6 +7,8 @@
 const reason = (text: string | undefined) => (text ? ` (${text})` : "");
 
 export const joinText = (who: string, channel: string) => `${who} joined ${channel}`;
+/** Your own join. A Line from the Log reads the same, so the two match as Replays. */
+export const selfJoinText = (channel: string) => `You joined ${channel}`;
 export const partText = (who: string, channel: string, why?: string) =>
   `${who} left ${channel}${reason(why)}`;
 export const quitText = (who: string, why?: string) => `${who} quit${reason(why)}`;

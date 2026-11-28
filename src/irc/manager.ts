@@ -29,7 +29,7 @@ import {
 } from "./names.ts";
 import type { MentionEvent } from "../notify.ts";
 import { findSlashCommand, SLASH_COMMANDS, syntax } from "./commands.ts";
-import { joinText, kickText, nickText, partText, quitText, topicText } from "./eventText.ts";
+import { joinText, kickText, nickText, partText, quitText, selfJoinText, topicText } from "./eventText.ts";
 import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine } from "./delivery.ts";
 import { EchoTracker, type SentPart } from "./echo.ts";
 import {
@@ -1192,8 +1192,9 @@ export class IrcManager {
     // The channels a quitting/renamed nick was in, read before the nicklist plugin
     // removes the nick. Keyed by the event payload.
     const priorChannels = new WeakMap<object, string[]>();
-    // The privmsg/notice plugins emit { source, params } without the IRCv3 tags (server
-    // time, msgid). They emit inside the raw event, so link each payload to the raw tags.
+    // The privmsg/notice/join plugins emit { source, params } without the IRCv3 tags
+    // (server time, msgid). They emit inside the raw event, so link each payload to the
+    // raw tags.
     type Tags = Record<string, string | undefined>;
     const chatTags = new WeakMap<object, Tags>();
     let rawChatTags: Tags | undefined;
@@ -1203,11 +1204,11 @@ export class IrcManager {
     const notePayload = (event: string, payload: unknown) => {
       const server = live();
       if (!server || typeof payload !== "object" || payload === null) return;
-      if (event === "raw:privmsg" || event === "raw:notice") {
+      if (event === "raw:privmsg" || event === "raw:notice" || event === "raw:join") {
         rawChatTags = (payload as { tags?: Tags }).tags;
         return;
       }
-      if (/^(privmsg|notice):|^ctcp_action$/.test(event)) {
+      if (/^(privmsg|notice):|^(ctcp_action|join)$/.test(event)) {
         if (rawChatTags) chatTags.set(payload, rawChatTags);
         return;
       }
@@ -1443,7 +1444,9 @@ export class IrcManager {
       const channel = msg.params.channel;
       const who = normalizeNick(msg.source?.name);
       const buf = this.ensureBuffer(serverId, channel, "channel");
-      this.logRecorder?.event(serverId, channel, msg, { kind: "join", nick: who, text: "" });
+      const tags = tagsOf(msg) ?? chatTags.get(msg);
+      this.logRecorder?.event(serverId, channel, { tags }, { kind: "join", nick: who, text: "" });
+      const joinTags = { ...lineTime(tags), ...(tags?.msgid ? { msgid: tags.msgid } : {}) };
       if (this.same(serverId, who, server.nick)) {
         // Switch for a /join, or from this server's *status (auto-join at startup).
         // Auto-joins and reconnect re-joins never take focus from another buffer.
@@ -1454,10 +1457,12 @@ export class IrcManager {
         ) {
           this.setActive(serverId, channel);
         }
+        // With the JOIN's msgid and time, the same Line from the Log is a Replay of
+        // this one, whatever the clocks say and however the server cases the name.
         this.pushMessage(
           serverId,
           channel,
-          makeMessage("join", `You joined ${channel}`),
+          makeMessage("join", selfJoinText(channel), { ...joinTags, isSelf: true }),
         );
         // Ask for the latest History. The Sync marker is for the whole Network: when the
         // Buffer has Lines from the Log, the Log holds this channel up to the marker, so
@@ -1470,11 +1475,7 @@ export class IrcManager {
           this.logRecorder?.askedLatest(serverId, channel);
         }
       } else {
-        this.pushMessage(
-          serverId,
-          channel,
-          makeMessage("join", joinText(who, channel)),
-        );
+        this.pushMessage(serverId, channel, makeMessage("join", joinText(who, channel), joinTags));
       }
     });
 
@@ -2968,7 +2969,7 @@ export class IrcManager {
               ...server.buffers,
               [target]: { ...buf, users: demoUsers([]) },
             };
-            this.pushMessage(id, target, makeMessage("join", joinText(server.nick, target)));
+            this.pushMessage(id, target, makeMessage("join", selfJoinText(target)));
           }
           this.setActive(id, target);
         }
