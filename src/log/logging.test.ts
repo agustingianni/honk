@@ -347,12 +347,24 @@ test("a Buffer opens with its last 200 Lines from the Log, and loadOlder pages b
   expect(manager.loadOlder("net", "#honk")).toBe(0);
 });
 
-test("with a Sync marker, the screen asks only for the History after it", async () => {
+test("with a Sync marker, a Buffer with Lines in the Log asks only for the History after it", async () => {
   const marker = Date.parse("2026-11-27T21:00:00Z");
-  const { fake } = await connect({ seed: (seeding) => seeding.setSyncMarker("net", marker) });
-  await until(() => fake.received.some((l) => l.command === "CHATHISTORY"));
-  const request = fake.received.find((l) => l.command === "CHATHISTORY")!;
-  expect(request.params).toEqual(["LATEST", "#honk", "timestamp=2026-11-27T20:59:55.000Z", "50"]);
+  const { fake, manager } = await connect({
+    seed: (seeding) => {
+      seeding.add("net", { name: "#honk", kind: "channel" }, {
+        kind: "message", nick: "alice", text: "earlier", time: marker - 60_000, timeFromServer: true,
+      });
+      seeding.setSyncMarker("net", marker);
+    },
+  });
+  const request = (target: string) =>
+    fake.received.find((l) => l.command === "CHATHISTORY" && l.params[1] === target)?.params;
+  await until(() => request("#honk") !== undefined);
+  expect(request("#honk")).toEqual(["LATEST", "#honk", "timestamp=2026-11-27T20:59:55.000Z", "50"]);
+  // The Log has nothing of #new, so the marker says nothing about it.
+  manager.handleInput("/join #new");
+  await until(() => request("#new") !== undefined);
+  expect(request("#new")).toEqual(["LATEST", "#new", "*", "50"]);
 });
 
 test("after a restart, the screen shows the Log and then the History it missed, each Line once", async () => {
@@ -373,4 +385,24 @@ test("after a restart, the screen shows the Log and then the History it missed, 
   const away = onScreen().filter((t) => t.startsWith("away "));
   expect(away.toSorted()).toEqual(Array.from({ length: 60 }, (_, i) => `away ${i + 1}`).toSorted());
   expect(onScreen()[0]).toBe("before");
+});
+
+test("loadOlder above a Line not from the Log keeps the Log's Lines of the same time", async () => {
+  const t = Date.parse("2026-11-27T21:35:07Z");
+  const honk = { name: "#honk", kind: "channel" } as const;
+  const { fake, manager, server } = await connect({
+    seed: (seeding) => {
+      for (const [text, msgid] of [["x", "m1"], ["y", "m2"]]) {
+        seeding.add("net", honk, { kind: "message", nick: "alice", text: text!, msgid, time: t, timeFromServer: true });
+      }
+    },
+  });
+  manager.handleInput("/clear");
+  // A live Line in the same second as the Log's Lines. It enters the Log too.
+  fake.sendRaw(`@msgid=m3;time=${new Date(t).toISOString()} :alice!a@h PRIVMSG #honk :z`);
+  const messages = () => server().buffers["#honk"]!.messages;
+  await until(() => shown(messages()).includes("z"));
+  expect(manager.loadOlder("net", "#honk")).toBe(2);
+  await Promise.resolve();
+  expect(shown(messages())).toEqual(["x", "y", "z"]);
 });

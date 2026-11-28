@@ -351,12 +351,16 @@ export function ChatPane({
     }
 
     const sb = scrollRef.current;
+    // Scrolling up at the top loads older Lines, also in a Buffer that fits on the
+    // screen, whose scroll position never moves.
     if (key.name === "pageup" || key.name === "pagedown") {
       sb?.scrollBy(key.name === "pageup" ? -0.5 : 0.5, "viewport");
+      if (key.name === "pageup") loadOlderAtTop();
       return;
     }
     if (key.shift && (key.name === "up" || key.name === "down")) {
       sb?.scrollBy(key.name === "up" ? -SHIFT_SCROLL_LINES : SHIFT_SCROLL_LINES);
+      if (key.name === "up") loadOlderAtTop();
       return;
     }
 
@@ -418,6 +422,13 @@ export function ChatPane({
   const keepAtTopRef = useRef<string | null>(null);
   const loadOlderRef = useRef(onLoadOlder);
   loadOlderRef.current = onLoadOlder;
+  /** Loads older Lines if the view is at the top and no load waits for its render. */
+  const loadOlderAtTop = () => {
+    const sb = scrollRef.current;
+    if (!sb || sb.scrollTop > 0 || keepAtTopRef.current !== null) return;
+    const first = messagesRef.current[0]?.id;
+    if (first && (loadOlderRef.current?.() ?? 0) > 0) keepAtTopRef.current = first;
+  };
   useEffect(() => {
     setLastSeenId(null);
     const sb = scrollRef.current;
@@ -425,10 +436,7 @@ export function ChatPane({
     let atTop = false;
     const onChange = () => {
       const top = sb.scrollTop <= 0;
-      if (top && !atTop) {
-        const first = messagesRef.current[0]?.id;
-        if (first && (loadOlderRef.current?.() ?? 0) > 0) keepAtTopRef.current = first;
-      }
+      if (top && !atTop) loadOlderAtTop();
       atTop = top;
       const atBottom = sb.scrollTop + sb.viewport.height >= sb.scrollHeight - 1;
       setLastSeenId((prev) => {
@@ -579,6 +587,9 @@ export function ChatPane({
         stickyScroll
         stickyStart="bottom"
         scrollX={false}
+        onMouseScroll={(event: { scroll?: { direction?: string } }) => {
+          if (event.scroll?.direction === "up") loadOlderAtTop();
+        }}
         style={scrollboxStyle(theme.bgBase)}
       >
         {/* No top padding: the header's own bottom padding is the gap. */}

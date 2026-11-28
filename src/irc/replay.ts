@@ -78,7 +78,7 @@ function matchKey(line: ReplayLine): MatchKey {
 }
 
 /** How far apart a time from honk's clock and the server's time can be. */
-const LOCAL_CLOCK_WINDOW_MS = 2000;
+export const LOCAL_CLOCK_WINDOW_MS = 2000;
 
 /**
  * True if the kept Line `kept` matches `line`, whose match key is `key`. Whole seconds

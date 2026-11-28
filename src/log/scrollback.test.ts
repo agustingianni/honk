@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { storedMessages } from "./scrollback.ts";
-import type { StoredLine } from "./search.ts";
+import type { StoredLine } from "./storedLine.ts";
 
 test("storedMessages: Events read as they do on screen, and a Redacted line says who deleted it", () => {
   const lines: StoredLine[] = [

@@ -37,9 +37,9 @@ import {
   type SearchQuery,
   type SearchResult,
   searchLog,
-  type StoredLine,
 } from "./search.ts";
-import { type LineCursor, SCROLLBACK_LINES, scrollbackLines } from "./scrollback.ts";
+import { SCROLLBACK_LINES } from "./scrollback.ts";
+import { type LineCursor, linesBeside, type StoredLine } from "./storedLine.ts";
 
 /** The `logs` settings in the config file. */
 export interface LogSettings {
@@ -390,7 +390,7 @@ export class Log {
            WHERE n.config_id = ? AND n.bouncer_net = ? AND b.name = ?`,
         )
         .get(serverId, net.bouncerNetId, nameKey(name, net.casemapping)) as { id: number } | null;
-      return row ? scrollbackLines(this.db, row.id, before, limit) : [];
+      return row ? linesBeside(this.db, row.id, "older", before, limit, true) : [];
     });
     return Array.isArray(result) ? result : [];
   }

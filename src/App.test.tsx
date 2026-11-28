@@ -33,7 +33,7 @@ function welcome(): IrcManager {
 
 /** Renders App, with no servers unless `manager` has some. Returns the screen as text after each step. */
 async function renderApp(logSearch: LogSearch, manager = welcome()) {
-  const { renderOnce, captureCharFrame, mockInput, renderer } = await testRender(
+  const { renderOnce, captureCharFrame, mockInput, mockMouse, renderer } = await testRender(
     <App
       manager={manager}
       themes={themes}
@@ -58,7 +58,7 @@ async function renderApp(logSearch: LogSearch, manager = welcome()) {
       mockInput.pressEscape();
       await Bun.sleep(50);
     });
-  return { screen, mockInput, escape, destroy, manager };
+  return { screen, mockInput, mockMouse, escape, destroy, manager };
 }
 
 test("Ctrl+F searches the Log; Enter shows the Context view; Esc goes back, then out", async () => {
@@ -202,6 +202,38 @@ test("scrolling to the top of a Buffer loads older Lines from the Log, and the v
       screen = await app.screen();
     }
     expect(lines(screen)).toContain(1);
+  } finally {
+    await app.destroy();
+    manager.disconnectAll();
+  }
+});
+
+test.each(["page up", "wheel"])("%s in a Buffer that fits on the screen loads older Lines from the Log", async (how) => {
+  const T = Date.now() - 3_600_000;
+  for (let i = 1; i <= 3; i++) {
+    log.add("net", { name: "alice", kind: "dm" }, {
+      kind: "message",
+      nick: "alice",
+      text: `line ${i}`,
+      time: T + i * 1000,
+      timeFromServer: true,
+    });
+  }
+  log.flush();
+  const manager = new IrcManager({ log });
+  manager.addServer({ id: "net", host: "127.0.0.1", nick: "goose", autoConnect: false });
+  manager.openDm("net", "alice");
+  const app = await renderApp(log, manager);
+  try {
+    expect(await app.screen()).toContain("line 3");
+    await act(async () => manager.handleInput("/clear"));
+    // Not connected: honk answers with one line, and the Buffer fits on the screen.
+    await act(async () => manager.handleInput("hello?"));
+    expect(await app.screen()).not.toContain("line 3");
+    // Over the chat pane: the sidebar is 44 columns wide.
+    if (how === "wheel") await act(() => app.mockMouse.scroll(70, 10, "up"));
+    else await act(() => app.mockInput.pressKey("\x1b[5~"));
+    expect(await app.screen()).toContain("line 3");
   } finally {
     await app.destroy();
     manager.disconnectAll();

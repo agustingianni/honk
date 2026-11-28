@@ -41,7 +41,7 @@ import {
   TARGETS_BATCH_TYPES,
 } from "./missed.ts";
 import { NetworkWatcher } from "./netwatch.ts";
-import { checkReplay, HistoryBatch } from "./replay.ts";
+import { checkReplay, HistoryBatch, LOCAL_CLOCK_WINDOW_MS } from "./replay.ts";
 import {
   DEMO_AMBIENT,
   DEMO_HISTORY,
@@ -1456,7 +1456,7 @@ export class IrcManager {
       if (!server) return;
       const channel = msg.params.channel;
       const who = normalizeNick(msg.source?.name);
-      this.ensureBuffer(serverId, channel, "channel");
+      const buf = this.ensureBuffer(serverId, channel, "channel");
       this.logRecorder?.event(serverId, channel, msg, { kind: "join", nick: who, text: "" });
       if (this.same(serverId, who, server.nick)) {
         // Switch for a /join, or from this server's *status (auto-join at startup).
@@ -1473,10 +1473,12 @@ export class IrcManager {
           channel,
           makeMessage("join", `You joined ${channel}`),
         );
-        // Fetch recent scrollback from bouncer/server if draft/chathistory is enabled
-        // With a Sync marker, the Log has the Lines before it, so ask only for the newer ones.
+        // Ask for the latest History. The Sync marker is for the whole Network: when the
+        // Buffer has Lines from the Log, the Log holds this channel up to the marker, so
+        // ask only for the newer ones. A channel the Log never held gets the latest 50.
         if (client.state.caps.enabled.has("draft/chathistory")) {
-          const since = this.logRecorder?.historySince(serverId);
+          const fromLog = buf?.messages.some((m) => m.logId !== undefined) === true;
+          const since = fromLog ? this.logRecorder?.historySince(serverId) : undefined;
           requestHistory(client, "LATEST", channel, since === undefined ? "*" : timestampParam(since), 50);
           this.logRecorder?.joined(serverId, channel);
         }
@@ -2235,6 +2237,33 @@ export class IrcManager {
   }
 
   /**
+   * Up to `limit` Lines from the Log before the first of `messages`. A Line that did
+   * not come from the Log (live, or History) has no row id, so the page includes the
+   * Lines of its time, and the ones `messages` has already are dropped as Replays:
+   *
+   *   screen: z (live, 21:35:07)     Log: x, y, z (21:35:07)     -> x, y
+   */
+  private olderFromLog(
+    serverId: string,
+    name: string,
+    messages: ChatMessage[],
+    limit: number,
+  ): ChatMessage[] {
+    const oldest = messages[0]!;
+    const time = oldest.timestamp.getTime();
+    const before = { time, id: oldest.logId ?? Number.MAX_SAFE_INTEGER };
+    const older = storedMessages(name, this.log!.scrollback(serverId, name, before, limit));
+    if (oldest.logId !== undefined) return older;
+    // Only Lines near that time can match. They are the first ones.
+    const end = messages.findIndex((m) => m.timestamp.getTime() > time + LOCAL_CLOCK_WINDOW_MS);
+    const kept = end === -1 ? messages : messages.slice(0, end);
+    const batch = new HistoryBatch();
+    return older.filter(
+      (m) => checkReplay(kept, { ...m, isHistory: true }, batch).type === "new",
+    );
+  }
+
+  /**
    * Loads up to SCROLLBACK_LINES Lines from the Log that are older than the oldest one
    * Buffer `bufferName` holds, and puts them at its top. Returns how many came. The
    * chat pane calls it when you scroll to the top. A Buffer holds at most
@@ -2249,10 +2278,7 @@ export class IrcManager {
     if (!this.log || !server || !buf || !oldest || buf.kind === "status") return 0;
     const room = Math.min(SCROLLBACK_LINES, MAX_MESSAGES_WITH_HISTORY - buf.messages.length);
     if (room <= 0) return 0;
-    // A Line that is not from the Log (live, or History) has no row id: then the page
-    // ends before its time.
-    const before = { time: oldest.timestamp.getTime(), id: oldest.logId ?? 0 };
-    const older = storedMessages(name, this.log.scrollback(serverId, name, before, room));
+    const older = this.olderFromLog(serverId, name, buf.messages, room);
     if (older.length === 0) return 0;
     const messages = [...older, ...buf.messages];
     const messageLimit = Math.max(buf.messageLimit ?? MAX_MESSAGES, messages.length);

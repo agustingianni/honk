@@ -18,6 +18,7 @@
 import type { Database } from "bun:sqlite";
 import { CASEMAPPINGS, nameKey } from "../irc/names.ts";
 import { CHAT_KINDS, sqlList } from "./schema.ts";
+import { linesBeside, STORED_COLUMNS, type StoredLine, type StoredRow, storedLine } from "./storedLine.ts";
 
 export interface SearchWord {
   text: string;
@@ -121,26 +122,6 @@ export interface SearchResult {
   hits: SearchHit[];
   /** More Lines matched than `limit`. */
   more: boolean;
-}
-
-/** One Line as the Log keeps it, for a Context view or scrollback. */
-export interface StoredLine {
-  /** The row id. */
-  id: number;
-  /** Unix ms. */
-  time: number;
-  /** True if `time` is the server's, false if honk's clock. */
-  timeFromServer: boolean;
-  kind: string;
-  nick: string;
-  subject?: string;
-  /** As received, with formatting codes. */
-  text: string;
-  msgid?: string;
-  self: boolean;
-  mention: boolean;
-  /** Who deleted it, for a Redacted line. A Context view leaves those out. */
-  redactedBy?: string;
 }
 
 /** The Lines around a search hit. */
@@ -270,51 +251,15 @@ export function searchLog(db: Database, query: SearchQuery, limit: number): Sear
   };
 }
 
-/** The columns of a StoredLine. */
-export const STORED_COLUMNS =
-  "id, ts, ts_server, kind, nick, subject, text, msgid, self, mention, redacted_by";
-
-/** A row read with STORED_COLUMNS. */
-export interface StoredRow {
-  id: number;
-  ts: number;
-  ts_server: number;
-  kind: string;
-  nick: string;
-  subject: string | null;
-  text: string;
-  msgid: string | null;
-  self: number;
-  mention: number;
-  redacted_by: string | null;
-}
-
-export function storedLine(r: StoredRow): StoredLine {
-  return {
-    id: r.id,
-    time: r.ts,
-    timeFromServer: r.ts_server === 1,
-    kind: r.kind,
-    nick: r.nick,
-    subject: r.subject ?? undefined,
-    text: r.text,
-    msgid: r.msgid ?? undefined,
-    self: r.self === 1,
-    mention: r.mention === 1,
-    redactedBy: r.redacted_by ?? undefined,
-  };
-}
-
 /**
  * The Line with row id `id` and up to `around` Lines on each side of it, from its
  * Buffer, Events too. Redacted Lines are left out. Undefined if the Line is gone or
  * was redacted after the search.
  */
 export function logContext(db: Database, id: number, around: number): LogContext | undefined {
-  const cols = STORED_COLUMNS;
   const hit = db
     .query(
-      `SELECT ${cols.replace(/(\w+)/g, "m.$1")}, m.buffer_id, b.display AS buffer, b.kind AS bkind,
+      `SELECT ${STORED_COLUMNS.replace(/(\w+)/g, "m.$1")}, m.buffer_id, b.display AS buffer, b.kind AS bkind,
               n.config_id AS server, n.display AS network
        FROM message m JOIN buffer b ON b.id = m.buffer_id JOIN network n ON n.id = b.network_id
        WHERE m.id = ? AND m.redacted_at IS NULL`,
@@ -323,22 +268,15 @@ export function logContext(db: Database, id: number, around: number): LogContext
     | (StoredRow & { buffer_id: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string })
     | null;
   if (!hit) return undefined;
-  const side = (cmp: "<" | ">", order: "DESC" | "ASC") =>
-    db
-      .query(
-        `SELECT ${cols} FROM message
-         WHERE buffer_id = ? AND redacted_at IS NULL AND (ts ${cmp} ? OR (ts = ? AND id ${cmp} ?))
-         ORDER BY ts ${order}, id ${order} LIMIT ?`,
-      )
-      .all(hit.buffer_id, hit.ts, hit.ts, id, around) as StoredRow[];
-  const before = side("<", "DESC").reverse();
-  const after = side(">", "ASC");
+  const from = { time: hit.ts, id };
+  const before = linesBeside(db, hit.buffer_id, "older", from, around, false);
+  const after = linesBeside(db, hit.buffer_id, "newer", from, around, false);
   return {
     serverId: hit.server,
     network: hit.network,
     buffer: hit.buffer,
     bufferKind: hit.bkind,
-    lines: [...before, hit, ...after].map(storedLine),
+    lines: [...before, storedLine(hit), ...after],
     match: before.length,
   };
 }
