@@ -18,8 +18,10 @@
  *   live:     @msgid=AB12;time=...07.412Z :alice PRIVMSG #honk :lol    -> stored
  *   History:  @time=...07.000Z :alice PRIVMSG #honk :lol               -> Replay, dropped
  *
- * Only one honk writes the file. A second one opens it, says which process writes it,
- * and stores nothing: two writers would store each Line without a msgid twice.
+ * Only one honk writes the file: the one that holds the lock on logs.db.lock. The
+ * system lets the lock go when that honk ends, also in a crash. A second honk opens
+ * the file, says which process writes it, and stores nothing: two writers would store
+ * each Line without a msgid twice.
  */
 
 import { Database } from "bun:sqlite";
@@ -207,13 +209,30 @@ function keptLine(row: KeptRow): KeptLine {
   };
 }
 
-/** True if process `pid` runs. EPERM: it runs, as another user. */
-function processAlive(pid: number): boolean {
+/** Creates the file at `path` if it is missing, readable only by you. */
+function createPrivate(path: string): void {
+  if (!existsSync(path)) closeSync(openSync(path, "a", 0o600));
+  chmodSync(path, 0o600);
+}
+
+/**
+ * Takes the writer lock: an SQLite file in exclusive locking mode, which keeps its lock
+ * while it is open. Undefined if another connection holds it. A pid in the Log is no
+ * lock: after a crash and a restart, another process can have it.
+ */
+function takeWriterLock(path: string): Database | undefined {
+  createPrivate(path);
+  const lock = new Database(path);
   try {
-    process.kill(pid, 0);
-    return true;
+    lock.run("PRAGMA busy_timeout = 0");
+    lock.run("PRAGMA locking_mode = EXCLUSIVE");
+    lock.run("BEGIN EXCLUSIVE");
+    lock.run("COMMIT");
+    return lock;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    lock.close();
+    if ((err as { code?: string }).code === "SQLITE_BUSY") return undefined;
+    throw err;
   }
 }
 
@@ -221,8 +240,6 @@ function processAlive(pid: number): boolean {
 interface OpenOptions {
   pid?: number;
   clock?: Clock;
-  /** Whether a process runs. Tests replace it. */
-  isAlive?: (pid: number) => boolean;
   /** Called with a line for *status when a write fails. Once per kind of failure. */
   onError?: (text: string) => void;
 }
@@ -241,13 +258,13 @@ export function openLog(
   if (!settings.enabled) return { notices: [], off: "logs.enabled is false in the config" };
   const created = !existsSync(path);
   let db: Database | undefined;
+  let lock: Database | undefined;
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     // Also when the folder existed: mkdir sets the mode only on a new one.
     chmodSync(dirname(path), 0o700);
     // The file holds private messages. SQLite gives the -wal and -shm files the same mode.
-    if (created) closeSync(openSync(path, "a", 0o600));
-    chmodSync(path, 0o600);
+    createPrivate(path);
     db = new Database(path, { create: true, strict: true });
     const unfit = checkSqlite(db);
     if (unfit) {
@@ -255,6 +272,7 @@ export function openLog(
       return { notices: [`honk keeps no log: ${unfit}.`], off: unfit };
     }
     prepare(db);
+    lock = takeWriterLock(`${path}.lock`);
   } catch (err) {
     db?.close();
     // "<path> is from a newer honk (...)", or the error.
@@ -267,18 +285,18 @@ export function openLog(
   }
   let log: Log;
   try {
-    log = new Log(db, settings, options);
+    log = new Log(db, settings, lock, options);
   } catch (err) {
     db.close();
+    lock?.close();
     const message = (err as Error).message;
     return { notices: [`honk keeps no log: ${message}.`], off: message };
   }
   const notices: string[] = [];
   if (created) notices.push(`honk keeps a log of your chats in ${path}.`);
-  if (log.otherWriter !== undefined) {
-    notices.push(
-      `Another honk (pid ${log.otherWriter}) writes the log, so this one does not write to it.`,
-    );
+  if (!lock) {
+    const pid = log.writerPid === undefined ? "" : ` (pid ${log.writerPid})`;
+    notices.push(`Another honk${pid} writes the log, so this one does not write to it.`);
   }
   return { log, notices };
 }
@@ -288,8 +306,8 @@ export function openLog(
  * top of this file.
  */
 export class Log {
-  /** The process that writes the file, when it is not this one. */
-  readonly otherWriter: number | undefined;
+  /** Without the lock: the pid of the honk that writes the file, once it wrote it. */
+  readonly writerPid: number | undefined;
   private readonly clock: Clock;
   private readonly pid: number;
   private readonly onError: (text: string) => void;
@@ -323,6 +341,8 @@ export class Log {
   constructor(
     private readonly db: Database,
     private readonly settings: LogSettings,
+    /** The writer lock, or undefined if another honk holds it. See takeWriterLock. */
+    private readonly lock: Database | undefined,
     options: OpenOptions = {},
   ) {
     this.clock = options.clock ?? systemClock;
@@ -330,7 +350,7 @@ export class Log {
     this.onError = options.onError ?? (() => {});
     this.incrementalVacuum =
       (db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum === 2;
-    this.otherWriter = this.takeWriter(options.isAlive ?? processAlive);
+    this.writerPid = this.takeWriter();
     // Opening waits longer (see prepare); a write waits for its next try instead.
     db.run(`PRAGMA busy_timeout = ${WRITE_BUSY_MS}`);
     if (this.writable) this.schedulePrune(FIRST_PRUNE_MS);
@@ -338,26 +358,24 @@ export class Log {
 
   /** False while another honk writes the file: then nothing is stored. */
   get writable(): boolean {
-    return this.otherWriter === undefined && !this.closed;
+    return this.lock !== undefined && !this.closed;
   }
 
   /**
-   * Takes the writer row, unless a running process other than this one holds it.
-   * Returns that process's pid.
+   * With the lock, writes this process in the writer row. Without it, returns the pid
+   * the row names: the honk that holds the lock, once it wrote the row.
    */
-  private takeWriter(isAlive: (pid: number) => boolean): number | undefined {
-    return this.db
-      .transaction(() => {
-        const row = this.db.query("SELECT pid FROM writer WHERE id = 1").get() as
-          | { pid: number }
-          | null;
-        if (row && row.pid !== this.pid && isAlive(row.pid)) return row.pid;
-        this.db
-          .query("INSERT OR REPLACE INTO writer (id, pid, since) VALUES (1, ?, ?)")
-          .run(this.pid, this.clock.now());
-        return undefined;
-      })
-      .immediate();
+  private takeWriter(): number | undefined {
+    if (!this.lock) {
+      const row = this.db.query("SELECT pid FROM writer WHERE id = 1").get() as
+        | { pid: number }
+        | null;
+      return row?.pid;
+    }
+    this.db
+      .query("INSERT OR REPLACE INTO writer (id, pid, since) VALUES (1, ?, ?)")
+      .run(this.pid, this.clock.now());
+    return undefined;
   }
 
   /** Updates what the Log knows about a Server's Network. Lines added later use it. */
@@ -812,7 +830,7 @@ export class Log {
     if (this.flushTimer !== undefined) this.clock.clearTimeout(this.flushTimer);
     if (this.pruneTimer !== undefined) this.clock.clearTimeout(this.pruneTimer);
     try {
-      if (this.otherWriter === undefined) {
+      if (this.lock) {
         this.db.query("DELETE FROM writer WHERE pid = ?").run(this.pid);
       }
     } catch {
@@ -820,5 +838,6 @@ export class Log {
     }
     this.closed = true;
     this.db.close();
+    this.lock?.close();
   }
 }

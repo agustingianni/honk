@@ -33,6 +33,8 @@ terminal client.
   Apple's build. Run the Log tests on a Mac as well.
 - Only one honk process writes the Log. A second process reads it for search
   and says so in *status, because two writers would store each Line without a
-  msgid twice.
+  msgid twice. The writer holds an exclusive SQLite lock on
+  `logs.db.lock`, which the system releases when the process ends, even in a
+  crash. A pid alone is no lock: after a restart another process can have it.
 - The schema has a version in `PRAGMA user_version`. honk migrates older
   files and refuses to open a file from a newer honk.
