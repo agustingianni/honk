@@ -9,10 +9,6 @@ updates:
     # same wait for bun add and bun update, so change both together.
     cooldown:
       default-days: 7
-    ignore:
-      # TypeScript major versions need config and code changes; upgrade by hand.
-      - dependency-name: typescript
-        update-types: ["version-update:semver-major"]
     groups:
       opentui:
         patterns: ["@opentui/*"]
