@@ -122,6 +122,11 @@ const PRUNE_BATCH = 500;
  */
 const MAX_EARLY_REDACTIONS = 500;
 const PRUNE_PAUSE_MS = 50;
+/**
+ * How many free pages one step gives back to the system: about 20 ms. One
+ * incremental_vacuum with no count frees them all at once, 0.9 s after a large prune.
+ */
+const VACUUM_PAGES = 1000;
 /** The first retention run waits out the connect and join burst at startup. */
 const FIRST_PRUNE_MS = 60_000;
 /** How often old Lines are removed while honk runs. */
@@ -258,6 +263,11 @@ export class Log {
   private flushTimer: unknown;
   private pruneTimer: unknown;
   private closed = false;
+  /**
+   * The file frees pages with incremental_vacuum. A file made with tables before honk
+   * set auto_vacuum (by an outside tool, say) can't, and keeps its free pages.
+   */
+  private readonly incrementalVacuum: boolean;
   private networks = new Map<string, NetworkSnapshot>();
   /** Row ids, cached. A snapshot is replaced whenever its Network changes. */
   private networkIds = new WeakMap<NetworkSnapshot, number>();
@@ -274,6 +284,8 @@ export class Log {
     this.clock = options.clock ?? systemClock;
     this.pid = options.pid ?? process.pid;
     this.onError = options.onError ?? (() => {});
+    this.incrementalVacuum =
+      (db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum === 2;
     this.otherWriter = this.takeWriter(options.isAlive ?? processAlive);
     if (this.writable) this.schedulePrune(FIRST_PRUNE_MS);
   }
@@ -601,17 +613,26 @@ export class Log {
     this.pruneTimer = this.clock.setTimeout(() => this.pruneStep(), ms);
   }
 
-  /** Deletes one batch of old rows, and schedules the next step. */
+  /**
+   * Deletes one batch of old rows, or once none is left, frees one batch of the pages
+   * they used. Then schedules the next step.
+   */
   private pruneStep(): void {
     if (!this.writable) return;
-    let deleted = 0;
+    let more = false;
     try {
-      deleted = this.pruneBatch(this.clock.now());
-      if (deleted === 0) this.db.run("PRAGMA incremental_vacuum");
+      more = this.pruneBatch(this.clock.now()) > 0 || this.vacuumBatch();
     } catch (err) {
       this.report("prune", `could not remove old lines from the log: ${(err as Error).message}`);
     }
-    this.schedulePrune(deleted > 0 ? PRUNE_PAUSE_MS : PRUNE_EVERY_MS);
+    this.schedulePrune(more ? PRUNE_PAUSE_MS : PRUNE_EVERY_MS);
+  }
+
+  /** Gives up to VACUUM_PAGES free pages back to the system. True if more are left. */
+  private vacuumBatch(): boolean {
+    if (!this.incrementalVacuum) return false;
+    this.db.run(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`);
+    return (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count > 0;
   }
 
   /** Deletes up to PRUNE_BATCH rows older than their retention. Returns how many. */

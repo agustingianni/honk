@@ -152,6 +152,9 @@ export function prepare(db: Database): void {
   // Only before the first table: it changes how the file is laid out.
   if (version === 0) db.run("PRAGMA auto_vacuum = INCREMENTAL");
   db.run("PRAGMA journal_mode = WAL");
+  // After a checkpoint, the -wal file shrinks back to this size (16 MB). Without it, it
+  // stays as large as the largest write, such as a big prune.
+  db.run(`PRAGMA journal_size_limit = ${16 * 1024 * 1024}`);
   db.run("PRAGMA synchronous = NORMAL");
   db.run("PRAGMA foreign_keys = ON");
   for (let v = version; v < SCHEMA_VERSION; v++) {
