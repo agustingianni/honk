@@ -4,7 +4,9 @@
  *   $XDG_DATA_HOME/honk/logs.db, or ~/.local/share/honk/logs.db
  *
  * IrcManager hands each Line to `add` as it comes. Lines wait in memory and go to the
- * file in one transaction about once a second, or at 100 Lines, and at `close`.
+ * file in one transaction about once a second, or at 100 Lines, and at `close`. If
+ * another program locks the file or the disk is full, the Lines stay in memory (up to
+ * 10,000) and honk tries again every 5 seconds.
  *
  * Keys (ADR 0002): a Network is the Server `id` plus soju's BOUNCER_NETID ('' when there
  * is none). A Buffer is its name folded with the server's CASEMAPPING, so #Foo[ and
@@ -114,6 +116,21 @@ export function defaultLogPath(env: Record<string, string | undefined> = process
 /** How many Lines wait in memory before a write. */
 const FLUSH_LINES = 100;
 const FLUSH_MS = 1000;
+/** How long after a failed write the next try waits. */
+const RETRY_MS = 5000;
+/** The most Lines kept in memory while writes fail. The oldest go first. */
+const MAX_QUEUE = 10_000;
+/** How long a write waits for a file another program locks, on the UI thread. */
+const WRITE_BUSY_MS = 250;
+/**
+ * Errors that come from one Line, such as a time that is not a number. Other errors,
+ * such as a locked file or a full disk, may go away: the Lines wait for the next try.
+ */
+const ONE_LINE_ERROR = /^SQLITE_(CONSTRAINT|MISMATCH|TOOBIG|RANGE)/;
+
+function isOneLineError(err: unknown): boolean {
+  return ONE_LINE_ERROR.test((err as { code?: string }).code ?? "");
+}
 /** How many Lines one retention step deletes, so a long delete never stalls the screen. */
 const PRUNE_BATCH = 500;
 /**
@@ -237,7 +254,14 @@ export function openLog(
       off: newer ? `the log ${message}` : message,
     };
   }
-  const log = new Log(db, settings, options);
+  let log: Log;
+  try {
+    log = new Log(db, settings, options);
+  } catch (err) {
+    db.close();
+    const message = (err as Error).message;
+    return { notices: [`honk keeps no log: ${message}.`], off: message };
+  }
   const notices: string[] = [];
   if (created) notices.push(`honk keeps a log of your chats in ${path}.`);
   if (log.otherWriter !== undefined) {
@@ -261,6 +285,13 @@ export class Log {
   private readonly reportedErrors = new Set<string>();
   private queue: Op[] = [];
   private flushTimer: unknown;
+  /** The last write failed: the next one waits RETRY_MS, not for 100 Lines. */
+  private failing = false;
+  /**
+   * Servers whose Lines were dropped from a full queue this run. Their Sync markers no
+   * longer move, so the next start asks for the lost History again.
+   */
+  private lostLines = new Set<string>();
   private pruneTimer: unknown;
   private closed = false;
   /**
@@ -275,6 +306,8 @@ export class Log {
   private bufferIds = new Map<string, { id: number; display: string }>();
   /** Redactions whose Line is not in the Log yet, by network id and msgid. */
   private earlyRedactions = new Map<string, { by: string; time: number }>();
+  /** Keys of the early redactions the write in progress used: gone once it commits. */
+  private usedRedactions: string[] = [];
 
   constructor(
     private readonly db: Database,
@@ -287,6 +320,8 @@ export class Log {
     this.incrementalVacuum =
       (db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum === 2;
     this.otherWriter = this.takeWriter(options.isAlive ?? processAlive);
+    // Opening waits longer (see prepare); a write waits for its next try instead.
+    db.run(`PRAGMA busy_timeout = ${WRITE_BUSY_MS}`);
     if (this.writable) this.schedulePrune(FIRST_PRUNE_MS);
   }
 
@@ -363,7 +398,7 @@ export class Log {
 
   /** The Sync marker of the Server's Network, or undefined if it has none yet. */
   syncMarker(serverId: string): number | undefined {
-    this.flush();
+    this.flushUnlessFailing();
     const net = this.networkOf(serverId);
     const row = this.db
       .query("SELECT synced_until AS t FROM network WHERE config_id = ? AND bouncer_net = ?")
@@ -409,10 +444,13 @@ export class Log {
     return Array.isArray(result) ? result : [];
   }
 
-  /** Runs a read after a flush. A failure (such as a busy file) comes back as an error. */
+  /**
+   * Runs a read after a flush, or right away while writes fail: the next try is on its
+   * timer. A failure (such as a busy file) comes back as an error.
+   */
   private read<T>(run: () => T): T | { error: string } {
     if (this.closed) return { error: "the log is closed" };
-    this.flush();
+    this.flushUnlessFailing();
     try {
       return run();
     } catch (err) {
@@ -423,16 +461,47 @@ export class Log {
   private push(op: Op): void {
     if (!this.writable) return;
     this.queue.push(op);
-    if (this.queue.length >= FLUSH_LINES) this.flush();
-    else if (this.flushTimer === undefined) {
-      this.flushTimer = this.clock.setTimeout(() => {
-        this.flushTimer = undefined;
-        this.flush();
-      }, FLUSH_MS);
-    }
+    this.trimQueue();
+    if (this.queue.length >= FLUSH_LINES) this.flushUnlessFailing();
+    if (this.queue.length > 0) this.scheduleFlush();
   }
 
-  /** Writes every waiting Line, in one transaction. */
+  /** Writes what waits, unless writes fail: then the next try waits for its timer. */
+  private flushUnlessFailing(): void {
+    if (!this.failing) this.flush();
+  }
+
+  /**
+   * While writes fail, a full queue drops its oldest tenth. The Sync markers of the
+   * Servers those Lines came from stop for this run (see apply), so the next start asks
+   * for that History again.
+   */
+  private trimQueue(): void {
+    if (this.queue.length <= MAX_QUEUE) return;
+    while (this.queue.length > MAX_QUEUE) {
+      for (const op of this.queue.splice(0, MAX_QUEUE / 10)) this.lostLines.add(op.net.serverId);
+    }
+    this.report(
+      "lost",
+      `the log lost lines: honk keeps at most ${MAX_QUEUE.toLocaleString("en-US")} in memory while it can't write. A server that keeps History sends them again at the next start.`,
+    );
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer !== undefined) return;
+    this.flushTimer = this.clock.setTimeout(
+      () => {
+        this.flushTimer = undefined;
+        this.flush();
+      },
+      this.failing ? RETRY_MS : FLUSH_MS,
+    );
+  }
+
+  /**
+   * Writes every waiting Line, in one transaction. If the file is busy or full, the
+   * Lines wait and honk tries again; a Line that can't be stored is left out.
+   */
   flush(): void {
     if (this.flushTimer !== undefined) {
       this.clock.clearTimeout(this.flushTimer);
@@ -441,16 +510,78 @@ export class Log {
     if (this.queue.length === 0 || this.closed) return;
     const ops = this.queue;
     this.queue = [];
+    const stopped = this.writeAll(ops);
+    if (!stopped) return this.recovered();
+    this.queue = ops.concat(this.queue);
+    this.trimQueue();
+    this.failing = true;
+    this.scheduleFlush();
+    this.report(
+      "write",
+      `could not write to the log: ${stopped.err.message}. honk keeps new lines and tries again.`,
+    );
+  }
+
+  /**
+   * Writes `ops` in one transaction. If one of them can't be stored, writes the others
+   * without it, still in one transaction. Returns the error that stopped it, which may
+   * go away: then nothing is written.
+   */
+  private writeAll(ops: Op[]): { err: Error } | undefined {
+    try {
+      this.write(ops);
+      return undefined;
+    } catch (err) {
+      if (!isOneLineError(err)) return { err: err as Error };
+    }
+    const bad: Error[] = [];
+    try {
+      this.write(ops, (op) => {
+        try {
+          // A nested transaction is a savepoint: a bad op rolls back only itself.
+          this.db.transaction(() => this.apply(op))();
+        } catch (err) {
+          if (!isOneLineError(err)) throw err;
+          this.forgetIds();
+          bad.push(err as Error);
+        }
+      });
+    } catch (err) {
+      return { err: err as Error };
+    }
+    if (bad.length > 0) {
+      const what = bad.length === 1 ? "a line" : `${bad.length} lines`;
+      this.onError(`could not write ${what} to the log: ${bad[0]!.message}`);
+    }
+    return undefined;
+  }
+
+  /** Applies `ops` in one transaction, each with `each`. On a failure nothing is written. */
+  private write(ops: Op[], each = (op: Op) => this.apply(op)): void {
+    this.usedRedactions = [];
     try {
       this.db.transaction(() => {
-        for (const op of ops) this.apply(op);
+        for (const op of ops) each(op);
       })();
     } catch (err) {
-      // The cached ids may name rows the rollback removed.
-      this.networkIds = new WeakMap();
-      this.bufferIds.clear();
-      this.report("write", `could not write to the log: ${(err as Error).message}`);
+      this.forgetIds();
+      throw err;
     }
+    for (const key of this.usedRedactions) this.earlyRedactions.delete(key);
+  }
+
+  /** The cached ids may name rows a rollback removed. */
+  private forgetIds(): void {
+    this.networkIds = new WeakMap();
+    this.bufferIds.clear();
+  }
+
+  /** A write worked. After failed ones, says so, and the next failure is reported again. */
+  private recovered(): void {
+    if (!this.failing) return;
+    this.failing = false;
+    this.reportedErrors.delete("write");
+    this.onError("honk writes the log again.");
   }
 
   private report(kind: string, text: string): void {
@@ -462,6 +593,8 @@ export class Log {
   private apply(op: Op): void {
     const networkId = this.networkId(op.net);
     if (op.type === "sync") {
+      // Lines of this Server were lost: the marker must stay before them.
+      if (this.lostLines.has(op.net.serverId)) return;
       this.db
         .query(
           "UPDATE network SET synced_until = max(coalesce(synced_until, 0), ?) WHERE id = ?",
@@ -574,10 +707,11 @@ export class Log {
       );
   }
 
+  /** A redaction that waits for this Line. It is removed once the write commits. */
   private takeEarlyRedaction(networkId: number, msgid: string) {
     const key = `${networkId}\0${msgid}`;
     const early = this.earlyRedactions.get(key);
-    this.earlyRedactions.delete(key);
+    if (early) this.usedRedactions.push(key);
     return early;
   }
 
@@ -655,18 +789,23 @@ export class Log {
     return deleted;
   }
 
-  /** Writes what waits, gives up the writer row, and closes the file. */
+  /**
+   * Writes what waits, gives up the writer row, and closes the file. Never throws: it
+   * runs as honk exits, when a busy or missing file can only lose what waits.
+   */
   close(): void {
     if (this.closed) return;
     this.flush();
+    if (this.flushTimer !== undefined) this.clock.clearTimeout(this.flushTimer);
     if (this.pruneTimer !== undefined) this.clock.clearTimeout(this.pruneTimer);
     try {
       if (this.otherWriter === undefined) {
         this.db.query("DELETE FROM writer WHERE pid = ?").run(this.pid);
       }
-    } finally {
-      this.closed = true;
-      this.db.close();
+    } catch {
+      // The next honk takes over the row of a process that is gone.
     }
+    this.closed = true;
+    this.db.close();
   }
 }
