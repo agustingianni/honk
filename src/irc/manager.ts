@@ -1630,7 +1630,11 @@ export class IrcManager {
       const batchReplays = new Map<string, HistoryBatch>();
       for (const raw of batch.params.messages) {
         const cmd = raw.command;
-        if (cmd !== "privmsg" && cmd !== "notice") continue;
+        // Events (draft/event-playback) go to the Log only. See logRecorder.ts.
+        if (cmd !== "privmsg" && cmd !== "notice") {
+          logHistory?.event(raw);
+          continue;
+        }
 
         const from = normalizeNick(raw.source?.name) || UNKNOWN_SENDER;
         const rawText = raw.params[1] ?? "";

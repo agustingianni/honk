@@ -7,7 +7,8 @@
  *   you: brb                    -> logged when its Echo comes, with the server's msgid;
  *                                  without echo-message, when the delivery check confirms it
  *   REDACT #honk <msgid>        -> the Line is marked, and kept
- *   a CHATHISTORY batch         -> each Line gets the Replay check (ADR 0003)
+ *   a CHATHISTORY batch         -> each Line gets the Replay check (ADR 0003), its
+ *                                  Events too (draft/event-playback)
  *
  * *status is never logged. It also asks for the History the Log misses after a
  * reconnect (see logSync.ts).
@@ -70,9 +71,64 @@ export interface LogHost {
   notice(serverId: string, text: string): void;
 }
 
+/** An IRC line inside a CHATHISTORY batch, as irc-client-ts gives it. */
+export interface HistoryLine {
+  command?: string;
+  params: readonly string[];
+  source?: { name?: string };
+  tags?: Tags;
+}
+
+/** What an Event is, without its time. */
+type EventInput = Pick<LogLine, "kind" | "nick" | "subject" | "text">;
+
+/**
+ * The Event a History line stands for, and the channel it names. A QUIT or NICK names
+ * no channel. Undefined for a line that is no Event.
+ *
+ *   :dave JOIN #honk           -> join by dave, in #honk
+ *   :alice KICK #honk dave :x  -> kick by alice of dave, reason "x", in #honk
+ *   :dave NICK dave_           -> nick change of dave to dave_, no channel
+ */
+export function historyEvent(line: HistoryLine): { channel?: string; event: EventInput } | undefined {
+  const nick = normalizeNick(line.source?.name);
+  const [first, second, third] = line.params;
+  if (!nick) return undefined;
+  switch (line.command) {
+    case "join":
+      return { channel: first, event: { kind: "join", nick, text: "" } };
+    case "part":
+      return { channel: first, event: { kind: "part", nick, text: second ?? "" } };
+    case "kick":
+      return { channel: first, event: { kind: "kick", nick, subject: second, text: third ?? "" } };
+    case "topic":
+      return { channel: first, event: { kind: "topic", nick, text: second ?? "" } };
+    case "quit":
+      return { event: { kind: "quit", nick, text: first ?? "" } };
+    case "nick":
+      return { event: { kind: "nick", nick, subject: first, text: "" } };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * True for an Ergo HistServ line: an Event played back as a PRIVMSG, for a client
+ * without draft/event-playback. Its msgid is the Event's with "_" in front. Its text is
+ * translated, so honk can't read the Event back out of it.
+ */
+function isHistServLine(tags: Tags): boolean {
+  return tags?.msgid?.startsWith("_") === true;
+}
+
 /** One CHATHISTORY batch on its way to the Log. */
 export interface LogHistory {
   add(target: string, line: ChatInput): void;
+  /**
+   * An Event of the batch (any line but PRIVMSG and NOTICE). One with no channel, such
+   * as a QUIT, goes in the batch's target. Lines that are no Event are left out.
+   */
+  event(line: HistoryLine): void;
   /** Call after the last Line: asks for the next page of a gap, if one is open. */
   end(): void;
 }
@@ -181,19 +237,18 @@ export class LogRecorder {
   }
 
   /** An Event in `bufferName`, with the time and msgid of the IRC line `msg`. */
-  event(
-    serverId: string,
-    bufferName: string,
-    msg: unknown,
-    event: Pick<LogLine, "kind" | "nick" | "subject" | "text">,
-  ): void {
-    const tags = tagsOf(msg);
-    this.add(serverId, bufferName, {
+  event(serverId: string, bufferName: string, msg: unknown, event: EventInput): void {
+    this.add(serverId, bufferName, this.eventLine(serverId, event, tagsOf(msg)));
+  }
+
+  /** An Event as the Log stores it. */
+  private eventLine(serverId: string, event: EventInput, tags: Tags): LogLine {
+    return {
       ...event,
       ...logTime(tags),
       msgid: tags?.msgid,
       self: this.host.same(serverId, event.nick, this.host.nick(serverId)),
-    });
+    };
   }
 
   /**
@@ -206,14 +261,27 @@ export class LogRecorder {
     const batches = new Map<string, HistoryBatch>();
     // The server times of its Lines, for the gap check.
     const times: number[] = [];
+    const addLine = (lineTarget: string, line: LogLine) => {
+      if (line.timeFromServer) times.push(line.time);
+      const key = this.host.key(serverId, lineTarget);
+      let batch = batches.get(key);
+      if (!batch) batches.set(key, (batch = new HistoryBatch()));
+      this.add(serverId, lineTarget, { ...line, history: true }, batch);
+    };
     return {
       add: (lineTarget, input) => {
-        const line = { ...this.chatLine(serverId, lineTarget, input), history: true };
-        if (line.timeFromServer) times.push(line.time);
-        const key = this.host.key(serverId, lineTarget);
-        let batch = batches.get(key);
-        if (!batch) batches.set(key, (batch = new HistoryBatch()));
-        this.add(serverId, lineTarget, line, batch);
+        const line = this.chatLine(serverId, lineTarget, input);
+        // Still a Line of the batch for the gap check, but not a Chat line.
+        if (isHistServLine(input.tags)) {
+          if (line.timeFromServer) times.push(line.time);
+          return;
+        }
+        addLine(lineTarget, line);
+      },
+      event: (raw) => {
+        const found = historyEvent(raw);
+        const lineTarget = found?.channel ?? target;
+        if (found && lineTarget) addLine(lineTarget, this.eventLine(serverId, found.event, raw.tags));
       },
       end: () => {
         if (targetKey !== undefined) this.afterHistory(serverId, target, targetKey, times, fill);

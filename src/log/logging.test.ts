@@ -479,3 +479,67 @@ test.each([
 
   expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
 });
+
+/** Disconnects, lets `away` happen on the server, and connects again. */
+async function whileAway(manager: IrcManager, away: () => void) {
+  manager.disconnectServer("net");
+  away();
+  await manager.connectServer("net");
+}
+
+test("a JOIN in a History batch enters the Log once, and still once after the batch plays again", async () => {
+  const { fake, manager, rows } = await connect();
+  const joins = () => rows().filter((r) => r.kind === "join" && r.nick === "dave");
+  const start = Date.now();
+  log!.setSyncMarker("net", start);
+  await whileAway(manager, () => fake.join("dave", "#honk"));
+  await until(() => joins().length > 0, 5000);
+  expect(joins().map((r) => [r.buffer, r.ts_server, r.msgid !== null])).toEqual([["#honk", 1, true]]);
+
+  // The same History again: the marker is back before the JOIN.
+  log!.setSyncMarker("net", start);
+  await whileAway(manager, () => {});
+  const asked = () => fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk");
+  await until(() => asked().length === 3, 5000);
+  await Bun.sleep(100);
+  expect(joins()).toHaveLength(1);
+});
+
+test("PART, KICK, QUIT, NICK and TOPIC in History enter the Log as they do live", async () => {
+  const { fake, manager, rows } = await connect();
+  for (const nick of ["dave", "erin", "frank", "gina"]) fake.join(nick, "#honk");
+  await until(() => rows().filter((r) => r.kind === "join").length === 5);
+  log!.setSyncMarker("net", Date.now());
+  await whileAway(manager, () => {
+    fake.part("dave", "#honk", "bye");
+    fake.kick("alice", "#honk", "erin", "spam");
+    fake.quit("frank", "gone");
+    fake.renick("gina", "gina_");
+    fake.setTopic("#honk", "new topic", "alice");
+  });
+  const events = () =>
+    rows()
+      .filter((r) => r.kind !== "join" && r.kind !== "message")
+      .map((r) => [r.buffer, r.kind, r.nick, r.subject, r.text]);
+  await until(() => events().length === 5, 5000);
+  expect(events()).toEqual([
+    ["#honk", "part", "dave", null, "bye"],
+    ["#honk", "kick", "alice", "erin", "spam"],
+    ["#honk", "quit", "frank", null, "gone"],
+    ["#honk", "nick", "gina", "gina_", ""],
+    ["#honk", "topic", "alice", null, "new topic"],
+  ]);
+});
+
+test("without draft/event-playback, Ergo's HistServ lines stay out of the Log", async () => {
+  const { fake, manager, rows, texts } = await connect({ withhold: ["draft/event-playback"] });
+  log!.setSyncMarker("net", Date.now());
+  await whileAway(manager, () => {
+    fake.join("dave", "#honk");
+    fake.say("dave", "#honk", "hi");
+  });
+  await until(() => texts().includes("hi"), 5000);
+  expect(rows().filter((r) => r.nick === "HistServ" || r.nick === "dave").map((r) => [r.kind, r.text])).toEqual([
+    ["message", "hi"],
+  ]);
+});

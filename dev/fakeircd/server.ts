@@ -94,8 +94,9 @@ interface StoredMessage {
   time: number;
   msgid: string;
   from: string;
-  /** A JOIN is an event: see onChathistory for how it plays back. */
-  command: "PRIVMSG" | "NOTICE" | "JOIN";
+  /** An EVENT plays back as `text`, such as "JOIN #honk": see onChathistory. */
+  command: "PRIVMSG" | "NOTICE" | "EVENT";
+  /** The channel. A QUIT or NICK is kept once in each channel the nick was in. */
   target: string;
   text: string;
 }
@@ -362,27 +363,28 @@ export class FakeIrcd {
     const ch = this.ensureChannel(channel);
     if (ch.members.has(this.lower(nick))) return;
     this.addMember(ch, nick, prefix);
-    this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`);
-    this.storeJoin(nick, ch.name);
+    this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`, undefined, this.storeEvent(nick, [ch.name], `JOIN ${ch.name}`));
   }
 
-  /** Keeps a JOIN in the history, as Ergo does. */
-  private storeJoin(nick: string, channel: string): void {
-    this.history.push({
-      time: Date.now(),
-      msgid: `m${this.nextMsgId++}`,
-      from: nick,
-      command: "JOIN",
-      target: channel,
-      text: "",
-    });
+  /**
+   * Keeps an Event, such as "PART #honk :bye", in the history of each of `channels`, as
+   * Ergo does. Returns the tags for the live line: the same msgid and time.
+   */
+  private storeEvent(nick: string, channels: string[], event: string): { msgid: string; time: string } {
+    const time = Date.now();
+    const msgid = `m${this.nextMsgId++}`;
+    for (const target of channels) {
+      this.history.push({ time, msgid, from: nick, command: "EVENT", target, text: event });
+    }
+    return { msgid, time: new Date(time).toISOString() };
   }
 
   part(nick: string, channel: string, reason = ""): void {
     const ch = this.channels.get(this.lower(channel));
     const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
-    this.toMembers(ch, `:${hostmask(m.nick)} PART ${ch.name}${reason ? ` :${reason}` : ""}`);
+    const event = `PART ${ch.name}${reason ? ` :${reason}` : ""}`;
+    this.toMembers(ch, `:${hostmask(m.nick)} ${event}`, undefined, this.storeEvent(m.nick, [ch.name], event));
     ch.members.delete(this.lower(nick));
   }
 
@@ -393,7 +395,13 @@ export class FakeIrcd {
       this.dropClient(client, reason);
       return;
     }
-    this.leaveAll(nick, `:${hostmask(nick)} QUIT :${reason}`);
+    const tags = this.storeEvent(nick, this.channelsOf(nick), `QUIT :${reason}`);
+    this.leaveAll(nick, `:${hostmask(nick)} QUIT :${reason}`, undefined, tags);
+  }
+
+  /** The names of the channels `nick` is in. */
+  private channelsOf(nick: string): string[] {
+    return [...this.channels.values()].filter((ch) => ch.members.has(this.lower(nick))).map((ch) => ch.name);
   }
 
   /** A fake user changes nick. */
@@ -401,6 +409,7 @@ export class FakeIrcd {
     if (this.clientByNick(from))
       throw new Error(`fakeircd: ${from} is a client; it changes its own nick`);
     const line = `:${hostmask(from)} NICK :${to}`;
+    const tags = this.storeEvent(from, this.channelsOf(from), `NICK :${to}`);
     const told = new Set<Client>();
     for (const ch of this.channels.values()) {
       const m = ch.members.get(this.lower(from));
@@ -409,14 +418,15 @@ export class FakeIrcd {
       ch.members.set(this.lower(to), { ...m, nick: to });
       for (const other of ch.members.values()) if (other.client) told.add(other.client);
     }
-    for (const c of told) this.send(c, line);
+    for (const c of told) this.send(c, line, tags);
   }
 
   kick(by: string, channel: string, nick: string, reason = ""): void {
     const ch = this.channels.get(this.lower(channel));
     const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
-    this.toMembers(ch, `:${hostmask(by)} KICK ${ch.name} ${m.nick} :${reason || by}`);
+    const event = `KICK ${ch.name} ${m.nick} :${reason || by}`;
+    this.toMembers(ch, `:${hostmask(by)} ${event}`, undefined, this.storeEvent(by, [ch.name], event));
     ch.members.delete(this.lower(nick));
   }
 
@@ -424,7 +434,8 @@ export class FakeIrcd {
     const ch = this.ensureChannel(channel);
     ch.topic = text;
     ch.topicBy = by;
-    this.toMembers(ch, `:${hostmask(by)} TOPIC ${ch.name} :${text}`);
+    const event = `TOPIC ${ch.name} :${text}`;
+    this.toMembers(ch, `:${hostmask(by)} ${event}`, undefined, this.storeEvent(by, [ch.name], event));
   }
 
   /** Replaces the fake users of a channel, such as ["@alice", "dave"]. Clients stay. */
@@ -682,13 +693,13 @@ export class FakeIrcd {
   }
 
   /** Removes a nick from every channel and tells everyone who shared one. */
-  private leaveAll(nick: string, line: string, except?: Client): void {
+  private leaveAll(nick: string, line: string, except?: Client, tags?: Record<string, string>): void {
     const told = new Set<Client>();
     for (const ch of this.channels.values()) {
       if (!ch.members.delete(this.lower(nick))) continue;
       for (const m of ch.members.values()) if (m.client && m.client !== except) told.add(m.client);
     }
-    for (const c of told) this.send(c, line);
+    for (const c of told) this.send(c, line, tags);
   }
 
   /** Delivers a PRIVMSG or NOTICE, stores it for CHATHISTORY, and echoes it to `sender`. */
@@ -948,8 +959,7 @@ export class FakeIrcd {
     const nick = c.nick!;
     if (ch.members.get(this.lower(nick))?.client === c) return;
     this.addMember(ch, nick, "", c);
-    this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`);
-    this.storeJoin(nick, ch.name);
+    this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`, undefined, this.storeEvent(nick, [ch.name], `JOIN ${ch.name}`));
     // draft/read-marker: the marker goes after the JOIN and before the end of NAMES.
     this.sendMarkRead(c, ch.name);
     if (ch.topic) this.sendTopic(c, ch);
@@ -1159,16 +1169,18 @@ export class FakeIrcd {
     this.send(c, `:${SERVER_NAME} BATCH +${ref} chathistory ${target}`, labelTag);
     for (const m of lines) {
       const tags = { batch: ref, time: new Date(m.time).toISOString(), msgid: m.msgid };
-      if (m.command !== "JOIN") {
+      if (m.command !== "EVENT") {
         this.send(c, `:${hostmask(m.from)} ${m.command} ${m.target} :${m.text}`, tags);
       } else if (c.caps.has("draft/event-playback")) {
-        this.send(c, `:${hostmask(m.from)} JOIN ${m.target}`, tags);
+        this.send(c, `:${hostmask(m.from)} ${m.text}`, tags);
       } else {
-        // Like Ergo: without event-playback, an event plays back as a message from HistServ.
+        // Like Ergo: without event-playback, an Event plays back as a message from
+        // HistServ, with "_" before its msgid. Ergo's text differs per kind ("dave
+        // joined the channel"); this one only names the command.
         this.send(
           c,
-          `:HistServ!HistServ@${SERVER_NAME} PRIVMSG ${m.target} :${m.from} joined the channel`,
-          tags,
+          `:HistServ!HistServ@${SERVER_NAME} PRIVMSG ${m.target} :${m.from} ${m.text.split(" ")[0]!.toLowerCase()}`,
+          { ...tags, msgid: `_${m.msgid}` },
         );
       }
     }
