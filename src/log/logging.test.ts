@@ -250,10 +250,10 @@ test("after a reconnect, honk asks for the History the Log misses and stores and
   await until(() => texts().includes("before"));
   // As if this connection had synced up to now. See logSync.ts.
   log!.setSyncMarker("net", Date.now());
-  manager.disconnectServer("net");
   // 60 lines while away: more than the 50 the screen asks for on join.
-  for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
-  await manager.connectServer("net");
+  await whileAway(manager, () => {
+    for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
+  });
   await until(() => texts().includes("away 1"), 5000);
 
   // Each line once. fakeircd gives many of them the same millisecond, so the order of
@@ -471,10 +471,10 @@ test.each([
   fake.say("dave", "goose", "hi");
   await until(() => texts().includes("hi"));
   log!.setSyncMarker("net", Date.now());
-  manager.disconnectServer("net");
-  fake.say("dave", "goose", "while away");
-  setUp(fake);
-  await manager.connectServer("net");
+  await whileAway(manager, () => {
+    fake.say("dave", "goose", "while away");
+    setUp(fake);
+  });
   await until(() => texts().includes("while away"), 5000);
 
   expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
@@ -505,7 +505,7 @@ test("a JOIN in a History batch enters the Log once, and still once after the ba
   expect(joins()).toHaveLength(1);
 });
 
-test("PART, KICK, QUIT, NICK and TOPIC in History enter the Log as they do live", async () => {
+test("PART, KICK, QUIT and NICK Events and topics in History enter the Log as they do live", async () => {
   const { fake, manager, rows } = await connect();
   for (const nick of ["dave", "erin", "frank", "gina"]) fake.join(nick, "#honk");
   await until(() => rows().filter((r) => r.kind === "join").length === 5);
@@ -542,4 +542,20 @@ test("without draft/event-playback, Ergo's HistServ lines stay out of the Log", 
   expect(rows().filter((r) => r.nick === "HistServ" || r.nick === "dave").map((r) => [r.kind, r.text])).toEqual([
     ["message", "hi"],
   ]);
+});
+
+test("an Event seen live and then again in History is one Line", async () => {
+  const { fake, manager, rows } = await connect();
+  const start = Date.now();
+  fake.join("dave", "#honk");
+  fake.part("dave", "#honk", "bye");
+  const dave = () => rows().filter((r) => r.nick === "dave").map((r) => r.kind);
+  await until(() => dave().length === 2);
+  // The marker is back before them, so the reconnect's History holds them again.
+  log!.setSyncMarker("net", start);
+  await whileAway(manager, () => {});
+  const asked = () => fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk");
+  await until(() => asked().length === 2, 5000);
+  await Bun.sleep(100);
+  expect(dave()).toEqual(["join", "part"]);
 });

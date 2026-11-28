@@ -1054,7 +1054,7 @@ export class IrcManager {
     }
     // Without it, Ergo plays joins, parts and mode changes back as fake messages from
     // "HistServ" ("alice joined the channel"). With it, they come as real JOIN and MODE
-    // lines inside the history batch, which the batch handler skips.
+    // lines inside the history batch, which the batch handler gives to the Log only.
     if (!client.state.caps.requested.includes("draft/event-playback")) {
       client.state.caps.requested.push("draft/event-playback");
     }
@@ -1630,7 +1630,7 @@ export class IrcManager {
       const batchReplays = new Map<string, HistoryBatch>();
       for (const raw of batch.params.messages) {
         const cmd = raw.command;
-        // Events (draft/event-playback) go to the Log only. See logRecorder.ts.
+        // Events and topics (draft/event-playback) go to the Log only. See logRecorder.ts.
         if (cmd !== "privmsg" && cmd !== "notice") {
           logHistory?.event(raw);
           continue;

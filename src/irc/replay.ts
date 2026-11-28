@@ -36,6 +36,8 @@ import { stripIrcFormatting } from "../notify.ts";
 export interface ReplayLine {
   kind: string;
   from?: string;
+  /** What an Event was done to: the kicked nick, or the new nick of a nick change. */
+  subject?: string;
   text: string;
   timestamp: Date;
   /** True if `timestamp` came from the server, false or unset if from honk's clock. */
@@ -64,6 +66,7 @@ function wholeSecond(time: Date): number {
 interface MatchKey {
   kind: string;
   from: string;
+  subject: string;
   plain: string;
   second: number;
 }
@@ -72,6 +75,7 @@ function matchKey(line: ReplayLine): MatchKey {
   return {
     kind: line.kind,
     from: line.from ?? "",
+    subject: line.subject ?? "",
     plain: stripIrcFormatting(line.text),
     second: wholeSecond(line.timestamp),
   };
@@ -87,6 +91,7 @@ export const LOCAL_CLOCK_WINDOW_MS = 2000;
  */
 function matches(kept: ReplayLine, line: ReplayLine, key: MatchKey): boolean {
   if (kept.kind !== key.kind || (kept.from ?? "") !== key.from) return false;
+  if ((kept.subject ?? "") !== key.subject) return false;
   const sameTime =
     kept.timeFromServer && line.timeFromServer
       ? wholeSecond(kept.timestamp) === key.second
@@ -115,7 +120,7 @@ export class HistoryBatch {
    * `before` kept Lines that matched. `before` is used the first time the key comes.
    */
   isExtra(key: MatchKey, before: number): boolean {
-    const k = [key.kind, key.from, key.plain, key.second].join("\0");
+    const k = [key.kind, key.from, key.subject, key.plain, key.second].join("\0");
     let c = this.copies.get(k);
     if (!c) {
       c = { seen: 0, before };

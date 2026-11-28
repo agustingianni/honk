@@ -363,7 +363,12 @@ export class FakeIrcd {
     const ch = this.ensureChannel(channel);
     if (ch.members.has(this.lower(nick))) return;
     this.addMember(ch, nick, prefix);
-    this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`, undefined, this.storeEvent(nick, [ch.name], `JOIN ${ch.name}`));
+    this.channelEvent(ch, nick, `JOIN ${ch.name}`);
+  }
+
+  /** Sends `event`, such as "PART #honk :bye", by `nick` to the members of `ch`, and keeps it. */
+  private channelEvent(ch: Channel, nick: string, event: string): void {
+    this.toMembers(ch, `:${hostmask(nick)} ${event}`, undefined, this.storeEvent(nick, [ch.name], event));
   }
 
   /**
@@ -384,7 +389,7 @@ export class FakeIrcd {
     const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
     const event = `PART ${ch.name}${reason ? ` :${reason}` : ""}`;
-    this.toMembers(ch, `:${hostmask(m.nick)} ${event}`, undefined, this.storeEvent(m.nick, [ch.name], event));
+    this.channelEvent(ch, m.nick, event);
     ch.members.delete(this.lower(nick));
   }
 
@@ -426,7 +431,7 @@ export class FakeIrcd {
     const m = ch?.members.get(this.lower(nick));
     if (!ch || !m) return;
     const event = `KICK ${ch.name} ${m.nick} :${reason || by}`;
-    this.toMembers(ch, `:${hostmask(by)} ${event}`, undefined, this.storeEvent(by, [ch.name], event));
+    this.channelEvent(ch, by, event);
     ch.members.delete(this.lower(nick));
   }
 
@@ -435,7 +440,7 @@ export class FakeIrcd {
     ch.topic = text;
     ch.topicBy = by;
     const event = `TOPIC ${ch.name} :${text}`;
-    this.toMembers(ch, `:${hostmask(by)} ${event}`, undefined, this.storeEvent(by, [ch.name], event));
+    this.channelEvent(ch, by, event);
   }
 
   /** Replaces the fake users of a channel, such as ["@alice", "dave"]. Clients stay. */
@@ -959,7 +964,7 @@ export class FakeIrcd {
     const nick = c.nick!;
     if (ch.members.get(this.lower(nick))?.client === c) return;
     this.addMember(ch, nick, "", c);
-    this.toMembers(ch, `:${hostmask(nick)} JOIN ${ch.name}`, undefined, this.storeEvent(nick, [ch.name], `JOIN ${ch.name}`));
+    this.channelEvent(ch, nick, `JOIN ${ch.name}`);
     // draft/read-marker: the marker goes after the JOIN and before the end of NAMES.
     this.sendMarkRead(c, ch.name);
     if (ch.topic) this.sendTopic(c, ch);

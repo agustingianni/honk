@@ -72,7 +72,7 @@ export interface LogHost {
 }
 
 /** An IRC line inside a CHATHISTORY batch, as irc-client-ts gives it. */
-export interface HistoryLine {
+interface HistoryLine {
   command?: string;
   params: readonly string[];
   source?: { name?: string };
@@ -83,14 +83,14 @@ export interface HistoryLine {
 type EventInput = Pick<LogLine, "kind" | "nick" | "subject" | "text">;
 
 /**
- * The Event a History line stands for, and the channel it names. A QUIT or NICK names
- * no channel. Undefined for a line that is no Event.
+ * The Event (or topic) a History line stands for, and the channel it names. A QUIT or
+ * NICK names no channel. Undefined for a line that is not an Event or a topic.
  *
  *   :dave JOIN #honk           -> join by dave, in #honk
  *   :alice KICK #honk dave :x  -> kick by alice of dave, reason "x", in #honk
  *   :dave NICK dave_           -> nick change of dave to dave_, no channel
  */
-export function historyEvent(line: HistoryLine): { channel?: string; event: EventInput } | undefined {
+function historyEvent(line: HistoryLine): { channel?: string; event: EventInput } | undefined {
   const nick = normalizeNick(line.source?.name);
   const [first, second, third] = line.params;
   if (!nick) return undefined;
@@ -125,8 +125,8 @@ function isHistServLine(tags: Tags): boolean {
 export interface LogHistory {
   add(target: string, line: ChatInput): void;
   /**
-   * An Event of the batch (any line but PRIVMSG and NOTICE). One with no channel, such
-   * as a QUIT, goes in the batch's target. Lines that are no Event are left out.
+   * An Event or topic of the batch (any line but PRIVMSG and NOTICE). One with no
+   * channel, such as a QUIT, goes in the batch's target. Other lines are left out.
    */
   event(line: HistoryLine): void;
   /** Call after the last Line: asks for the next page of a gap, if one is open. */
@@ -261,8 +261,11 @@ export class LogRecorder {
     const batches = new Map<string, HistoryBatch>();
     // The server times of its Lines, for the gap check.
     const times: number[] = [];
-    const addLine = (lineTarget: string, line: LogLine) => {
+    const noteTime = (line: LogLine) => {
       if (line.timeFromServer) times.push(line.time);
+    };
+    const addLine = (lineTarget: string, line: LogLine) => {
+      noteTime(line);
       const key = this.host.key(serverId, lineTarget);
       let batch = batches.get(key);
       if (!batch) batches.set(key, (batch = new HistoryBatch()));
@@ -272,11 +275,8 @@ export class LogRecorder {
       add: (lineTarget, input) => {
         const line = this.chatLine(serverId, lineTarget, input);
         // Still a Line of the batch for the gap check, but not a Chat line.
-        if (isHistServLine(input.tags)) {
-          if (line.timeFromServer) times.push(line.time);
-          return;
-        }
-        addLine(lineTarget, line);
+        if (isHistServLine(input.tags)) noteTime(line);
+        else addLine(lineTarget, line);
       },
       event: (raw) => {
         const found = historyEvent(raw);
