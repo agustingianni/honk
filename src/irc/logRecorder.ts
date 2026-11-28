@@ -21,7 +21,7 @@ import { isHistoryService } from "./readMarker.ts";
 import { HistoryBatch } from "./replay.ts";
 import type { SentLine } from "./delivery.ts";
 import type { Log, LogLine, LogNetwork } from "../log/log.ts";
-import { type Fill, LogSync } from "../log/logSync.ts";
+import { type Fill, type HistoryPage, LogSync } from "../log/logSync.ts";
 
 /** The IRCv3 cap that sends REDACT, so the Log can mark a deleted Line. */
 const REDACTION_CAP = "draft/message-redaction";
@@ -121,8 +121,11 @@ export interface LogHistory {
    * channel, such as a QUIT, goes in the batch's target. Other lines are left out.
    */
   event(line: HistoryLine): void;
-  /** Call after the last Line: asks for the next page of a gap, if one is open. */
-  end(): void;
+  /**
+   * Call after the last Line, with the number of lines the batch held in all: asks for
+   * the next page of a gap, if one is open.
+   */
+  end(lines: number): void;
 }
 
 export class LogRecorder {
@@ -276,8 +279,8 @@ export class LogRecorder {
         const lineTarget = found?.channel ?? target;
         if (found && lineTarget) addLine(lineTarget, this.eventLine(serverId, found.event, raw.tags));
       },
-      end: () => {
-        if (targetKey !== undefined) this.afterHistory(serverId, target, targetKey, times, fill);
+      end: (lines) => {
+        if (targetKey !== undefined) this.afterHistory(serverId, target, targetKey, { times, lines }, fill);
       },
     };
   }
@@ -287,10 +290,10 @@ export class LogRecorder {
     serverId: string,
     target: string,
     targetKey: string,
-    times: number[],
+    page: HistoryPage,
     fill: Fill | undefined,
   ): void {
-    const step = this.sync.batchEnded(serverId, targetKey, times, fill);
+    const step = this.sync.batchEnded(serverId, targetKey, page, fill);
     if (step.type === "gave-up") {
       this.host.notice(
         serverId,

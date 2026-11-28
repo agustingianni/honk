@@ -3,7 +3,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeClock } from "../fakeClock.ts";
-import { LogSync, MARK_EVERY_MS, MAX_FILL_PAGES, SETTLE_MS, SYNC_FUZZ_MS } from "./logSync.ts";
+import {
+  LATEST_LIMIT,
+  LogSync,
+  MARK_EVERY_MS,
+  MAX_FILL_PAGES,
+  SETTLE_MS,
+  SYNC_FUZZ_MS,
+} from "./logSync.ts";
 import { DEFAULT_LOG_SETTINGS, type Log, openLog } from "./log.ts";
 
 const T = Date.parse("2026-11-27T21:00:00Z");
@@ -27,6 +34,11 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** A full batch: as many Lines as honk asked for, at these server times. */
+const full = (...times: number[]) => ({ times, lines: LATEST_LIMIT });
+/** A batch with fewer Lines than honk asked for. */
+const short = (...times: number[]) => ({ times, lines: times.length });
+
 /** Moves the clock, and a live Line arrives with the same server time. */
 function wait(ms: number) {
   clock.advance(ms);
@@ -36,7 +48,7 @@ function wait(ms: number) {
 test("a Network without a marker gets one once the joins have settled", () => {
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
-  expect(sync.batchEnded("libera", "#honk", [T - 60_000])).toEqual({ type: "done" });
+  expect(sync.batchEnded("libera", "#honk", short(T - 60_000))).toEqual({ type: "done" });
   sync.moveMarker("libera");
   expect(log.syncMarker("libera")).toBeUndefined();
   wait(SETTLE_MS);
@@ -65,7 +77,7 @@ test("after a gap, honk asks for the History between the marker and the screen's
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
-  const first = sync.batchEnded("libera", "#honk", [T - 600_000, T - 60_000]);
+  const first = sync.batchEnded("libera", "#honk", full(T - 600_000, T - 60_000));
   const request = { after: T - 3_600_000 - SYNC_FUZZ_MS, until: T - 600_000, pages: 1 };
   expect(first).toEqual({ type: "next", request });
 
@@ -75,12 +87,12 @@ test("after a gap, honk asks for the History between the marker and the screen's
   expect(log.syncMarker("libera")).toBe(T - 3_600_000);
 
   // A full page: ask for the next one, after its newest line.
-  const second = sync.batchEnded("libera", "#honk", [T - 3_000_000, T - 2_000_000], request);
+  const second = sync.batchEnded("libera", "#honk", full(T - 3_000_000, T - 2_000_000), request);
   const next = { after: T - 2_000_000, until: T - 600_000, pages: 2 };
   expect(second).toEqual({ type: "next", request: next });
 
   // This page reaches the screen's lines: the gap is closed and the marker moves.
-  expect(sync.batchEnded("libera", "#honk", [T - 700_000, T - 600_000], next)).toEqual({
+  expect(sync.batchEnded("libera", "#honk", full(T - 700_000, T - 600_000), next)).toEqual({
     type: "done",
   });
   expect(log.syncMarker("libera")).toBe(T + SETTLE_MS);
@@ -90,30 +102,50 @@ test("no fill when the screen's History reaches back past the marker", () => {
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
-  expect(sync.batchEnded("libera", "#honk", [T - 4_000_000, T - 10])).toEqual({ type: "done" });
-  expect(sync.batchEnded("libera", "#quiet", [])).toEqual({ type: "done" });
+  expect(sync.batchEnded("libera", "#honk", full(T - 4_000_000, T - 10))).toEqual({ type: "done" });
+  expect(sync.batchEnded("libera", "#quiet", short())).toEqual({ type: "done" });
 });
 
-test("a batch whose oldest Line has the marker's time still leaves a gap", () => {
+test("a full batch whose oldest Line has the marker's time still asks for a fill", () => {
   // Lines in the same millisecond as the marker may come after it, and a full batch can
   // cut them off.
   const marker = T - 3_600_000;
   log.setSyncMarker("libera", marker);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
-  expect(sync.batchEnded("libera", "#honk", [marker, T - 10])).toEqual({
+  expect(sync.batchEnded("libera", "#honk", full(marker, T - 10))).toEqual({
     type: "next",
     request: { after: marker - SYNC_FUZZ_MS, until: marker, pages: 1 },
   });
+});
+
+test("a full batch that starts in the marker's second asks for a fill, as with a store of whole seconds", () => {
+  // soju's file store gives Lines whole seconds: one sent 0.2 s after the marker comes
+  // back 0.7 s before it.
+  const second = T - 3_600_000;
+  const marker = second + 700;
+  log.setSyncMarker("libera", marker);
+  sync.start("libera");
+  sync.askedLatest("libera", "#honk");
+  expect(sync.batchEnded("libera", "#honk", full(second, second + 60_000)).type).toBe("next");
+});
+
+test("a batch with fewer Lines than honk asked for holds all since the marker: no fill", () => {
+  // A quiet channel: the screen's batch holds only the last Line honk saw.
+  const marker = T - 3_600_000;
+  log.setSyncMarker("libera", marker);
+  sync.start("libera");
+  sync.askedLatest("libera", "#honk");
+  expect(sync.batchEnded("libera", "#honk", short(marker))).toEqual({ type: "done" });
 });
 
 test("a fill gives up after MAX_FILL_PAGES pages, and the marker stays before the gap", () => {
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
-  sync.batchEnded("libera", "#honk", [T - 60_000]);
+  sync.batchEnded("libera", "#honk", full(T - 60_000));
   const fill = { after: 0, until: T - 60_000, pages: MAX_FILL_PAGES };
-  expect(sync.batchEnded("libera", "#honk", [T - 1_000_000], fill)).toEqual({ type: "gave-up" });
+  expect(sync.batchEnded("libera", "#honk", full(T - 1_000_000), fill)).toEqual({ type: "gave-up" });
   wait(SETTLE_MS);
   sync.moveMarker("libera");
   sync.stop("libera");
@@ -157,7 +189,7 @@ test("the marker waits for the reply to TARGETS, and then for the gap of each DM
   sync.answeredTargets("libera", ["dave"]);
   expect(log.syncMarker("libera")).toBe(T - 3_600_000);
 
-  expect(sync.batchEnded("libera", "dave", [T - 4_000_000, T - 10])).toEqual({ type: "done" });
+  expect(sync.batchEnded("libera", "dave", full(T - 4_000_000, T - 10))).toEqual({ type: "done" });
   expect(log.syncMarker("libera")).toBe(T + SETTLE_MS);
 });
 

@@ -5,7 +5,7 @@
  *   last run ended at 21:00 (marker), honk starts at 23:00
  *   JOIN #honk -> CHATHISTORY LATEST #honk timestamp=20:59:55 50   (the newest 50
  *                 after the marker; the screen has the Log's Lines up to it)
- *   the batch's oldest line is 22:40, not before the marker: a gap
+ *   the batch is full (50 lines), and its oldest is 22:40, after the marker: a gap
  *   CHATHISTORY AFTER #honk timestamp=20:59:55 100   (a fill, for the Log and the
  *   screen; more pages until a page is empty or reaches 22:40)
  *
@@ -29,6 +29,8 @@
 import { systemClock, type Clock } from "../clock.ts";
 import type { Log } from "./log.ts";
 
+/** Lines the screen asks for in the latest History of a channel you join, or of a DM. */
+export const LATEST_LIMIT = 50;
 /** Lines asked for in each page of a fill. */
 export const FILL_LIMIT = 100;
 /** The most pages one fill asks for, so a long absence can't flood the connection. */
@@ -54,6 +56,13 @@ export interface Fill {
   until: number;
   /** Pages asked for so far, this one included. */
   pages: number;
+}
+
+/** What a History batch held: the server times of its Lines, and how many lines in all. */
+export interface HistoryPage {
+  times: number[];
+  /** Every line of the batch, also those with no server time or that are not Lines. */
+  lines: number;
 }
 
 /** What `batchEnded` says to do next. */
@@ -184,13 +193,13 @@ export class LogSync {
   }
 
   /**
-   * A History batch for `target` ended, with Lines at server times `times`. `fill` is
-   * the fill it answers, if it is one. Says whether to ask for another page.
+   * A History batch for `target` ended. `fill` is the fill it answers, if it is one.
+   * Says whether to ask for another page.
    */
-  batchEnded(serverId: string, target: string, times: number[], fill?: Fill): FillStep {
+  batchEnded(serverId: string, target: string, page: HistoryPage, fill?: Fill): FillStep {
     const s = this.servers.get(serverId);
     if (!s) return { type: "done" };
-    const step = fill ? this.nextPage(fill, times) : this.firstPage(serverId, s, target, times);
+    const step = fill ? this.nextPage(fill, page.times) : this.firstPage(serverId, s, target, page);
     // A gap left open keeps the Buffer pending, so the marker stays before it.
     if (step.type === "done") {
       s.pending.delete(target);
@@ -204,15 +213,20 @@ export class LogSync {
     serverId: string,
     s: ServerSync,
     target: string,
-    times: number[],
+    page: HistoryPage,
   ): FillStep {
     if (!s.pending.has(target)) return { type: "done" };
+    // Fewer lines than asked for: the server had no more, so nothing is missing.
+    if (page.lines < LATEST_LIMIT) return { type: "done" };
     const marker = this.marker(serverId, s);
-    const oldest = times.length > 0 ? Math.min(...times) : undefined;
-    // Only a Line older than the marker shows the batch reaches back far enough. Lines
-    // in the marker's own millisecond may have come after it, and a full batch can cut
-    // them off.
-    if (marker === undefined || oldest === undefined || oldest < marker) return { type: "done" };
+    const oldest = page.times.length > 0 ? Math.min(...page.times) : undefined;
+    // A full batch may have cut off older Lines. It reaches back far enough only past the
+    // SYNC_FUZZ_MS before the marker: Lines in the marker's own millisecond may have come
+    // after it, and a store of whole seconds gives a Line sent after the marker an older
+    // time in the same second.
+    if (marker === undefined || oldest === undefined || oldest < marker - SYNC_FUZZ_MS) {
+      return { type: "done" };
+    }
     return { type: "next", request: { after: marker - SYNC_FUZZ_MS, until: oldest, pages: 1 } };
   }
 

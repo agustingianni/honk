@@ -84,7 +84,7 @@ import {
 } from "./readMarker.ts";
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
 import type { Log } from "../log/log.ts";
-import { FILL_LIMIT, type Fill } from "../log/logSync.ts";
+import { FILL_LIMIT, type Fill, LATEST_LIMIT } from "../log/logSync.ts";
 import { SCROLLBACK_LINES, storedMessages } from "../log/scrollback.ts";
 import { LogRecorder } from "./logRecorder.ts";
 
@@ -1456,7 +1456,7 @@ export class IrcManager {
         if (client.state.caps.enabled.has("draft/chathistory")) {
           const held = buf?.messages.some((m) => m.logId !== undefined) === true;
           const since = held ? this.logRecorder?.historySince(serverId) : undefined;
-          requestHistory(client, "LATEST", channel, since === undefined ? "*" : timestampParam(since), 50);
+          requestHistory(client, "LATEST", channel, since === undefined ? "*" : timestampParam(since), LATEST_LIMIT);
           this.logRecorder?.askedLatest(serverId, channel);
         }
       } else {
@@ -1669,7 +1669,7 @@ export class IrcManager {
         logHistory?.add(target, { kind: msgKind, from, text, tags: raw.tags, self: isSelf });
       }
       // Asks for the History the Log misses, if any. See logSync.ts.
-      logHistory?.end();
+      logHistory?.end(batch.params.messages.length);
     });
 
     const isHistoryBatch = (tags?: Record<string, string | undefined>): boolean => {
@@ -2662,8 +2662,8 @@ export class IrcManager {
       // A DM has no JOIN to bring its marker, so ask for it. The server answers before
       // the history, so a line you read on another client isn't counted as missed.
       if (markers) requestMarkRead(client, nick);
-      // The newest 50, as on a join. The Log asks for the rest. See logSync.ts.
-      requestHistory(client, "LATEST", nick, since, 50);
+      // The newest Lines, as on a join. The Log asks for the rest. See logSync.ts.
+      requestHistory(client, "LATEST", nick, since, LATEST_LIMIT);
     }
     this.logRecorder?.answeredTargets(serverId, nicks);
   }

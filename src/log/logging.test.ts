@@ -13,9 +13,11 @@ import { IrcManager } from "../irc/manager.ts";
 import type { Casemapping } from "../irc/names.ts";
 import { DEFAULT_LOG_SETTINGS, type Log, openLog } from "./log.ts";
 
-// Longer than the 5 s `until` waits below, so a slow wait fails there with its own
+/** How long a test waits for History after a reconnect. */
+const HISTORY_WAIT_MS = 5000;
+// Longer than a few HISTORY_WAIT_MS waits, so a slow wait fails in `until` with its own
 // message, and stops polling before afterEach removes the Log file.
-setDefaultTimeout(15_000);
+setDefaultTimeout(3 * HISTORY_WAIT_MS);
 
 let irc: FakeIrcd | undefined;
 let m: IrcManager | undefined;
@@ -258,7 +260,7 @@ test("after a reconnect, honk asks for the History the Log misses and stores and
   await whileAway(manager, () => {
     for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
   });
-  await until(() => texts().includes("away 1"), 5000);
+  await until(() => texts().includes("away 1"), HISTORY_WAIT_MS);
 
   // Each line once. fakeircd gives many of them the same millisecond, so the order of
   // those depends on which request stored them first.
@@ -279,8 +281,22 @@ test("after a reconnect, Lines in the same millisecond as the Sync marker are fi
     // of that same millisecond before it are not in that batch.
     log!.setSyncMarker("net", fake.storedTime("away 11")!);
   });
-  await until(() => texts().includes("away 1"), 5000);
+  await until(() => texts().includes("away 1"), HISTORY_WAIT_MS);
   expect(texts().filter((t) => t.startsWith("away "))).toHaveLength(60);
+});
+
+test("after a reconnect, a channel with a few Lines while away gets them with no fill", async () => {
+  const { fake, manager, texts } = await connect();
+  fake.say("alice", "#honk", "before");
+  await until(() => texts().includes("before"));
+  log!.setSyncMarker("net", Date.now());
+  await whileAway(manager, () => {
+    for (let i = 1; i <= 3; i++) fake.say("alice", "#honk", `away ${i}`);
+  });
+  await until(() => texts().includes("away 3"), HISTORY_WAIT_MS);
+  const fills = fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[0] === "AFTER");
+  expect(fills).toEqual([]);
+  expect(texts().filter((t) => t.startsWith("away ")).toSorted()).toEqual(["away 1", "away 2", "away 3"]);
 });
 
 test("a server without IRCv3: every live Line is logged with honk's time, and no History is asked", async () => {
@@ -397,7 +413,7 @@ test("after a restart, the screen shows the Log and then the History it missed, 
   for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
   await start();
   const onScreen = () => shown(m!.getSnapshot().servers[0]!.buffers["#honk"]!.messages);
-  await until(() => onScreen().includes("away 1"), 5000);
+  await until(() => onScreen().includes("away 1"), HISTORY_WAIT_MS);
 
   expect(onScreen().filter((t) => t === "before")).toHaveLength(1);
   const away = onScreen().filter((t) => t.startsWith("away "));
@@ -451,7 +467,7 @@ test("a DM sent while honk was closed enters the Log once after the next start, 
   fake.say("dave", "goose", "you there?");
   await start();
   const dm = () => m!.getSnapshot().servers[0]!.buffers["dave"];
-  await until(() => dm()?.messages.some((x) => x.text === "you there?") === true, 5000);
+  await until(() => dm()?.messages.some((x) => x.text === "you there?") === true, HISTORY_WAIT_MS);
 
   expect(rows().filter((r) => r.text === "you there?").map((r) => [r.buffer, r.mention])).toEqual([
     ["dave", 1],
@@ -464,7 +480,7 @@ test("60 DMs while honk was closed: the Log fills the gap past the first 50, eac
   quitSynced();
   for (let i = 1; i <= 60; i++) fake.say("dave", "goose", `dm ${i}`);
   await start();
-  await until(() => texts().includes("dm 1"), 5000);
+  await until(() => texts().includes("dm 1"), HISTORY_WAIT_MS);
 
   const all = Array.from({ length: 60 }, (_, i) => `dm ${i + 1}`).toSorted();
   expect(texts().filter((t) => t.startsWith("dm ")).toSorted()).toEqual(all);
@@ -491,7 +507,7 @@ test.each([
     fake.say("dave", "goose", "while away");
     setUp(fake);
   });
-  await until(() => texts().includes("while away"), 5000);
+  await until(() => texts().includes("while away"), HISTORY_WAIT_MS);
 
   expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
 });
@@ -504,7 +520,7 @@ async function replayHistory(fake: FakeIrcd, manager: IrcManager, start: number,
   log!.setSyncMarker("net", start);
   await whileAway(manager, () => {});
   const asked = () => fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk");
-  await until(() => asked().length === requests, 5000);
+  await until(() => asked().length === requests, HISTORY_WAIT_MS);
   await Bun.sleep(100);
 }
 
@@ -521,7 +537,7 @@ test("a JOIN in a History batch enters the Log once, and still once after the ba
   const start = Date.now();
   log!.setSyncMarker("net", start);
   await whileAway(manager, () => fake.join("dave", "#honk"));
-  await until(() => joins().length > 0, 5000);
+  await until(() => joins().length > 0, HISTORY_WAIT_MS);
   expect(joins().map((r) => [r.buffer, r.ts_server, r.msgid !== null])).toEqual([["#honk", 1, true]]);
 
   // The same History again: the marker is back before the JOIN.
@@ -545,7 +561,7 @@ test("PART, KICK, QUIT and NICK Events and topics in History enter the Log as th
     rows()
       .filter((r) => r.kind !== "join" && r.kind !== "message")
       .map((r) => [r.buffer, r.kind, r.nick, r.subject, r.text]);
-  await until(() => events().length === 5, 5000);
+  await until(() => events().length === 5, HISTORY_WAIT_MS);
   expect(events()).toEqual([
     ["#honk", "part", "dave", null, "bye"],
     ["#honk", "kick", "alice", "erin", "spam"],
@@ -562,7 +578,7 @@ test("without draft/event-playback, Ergo's HistServ lines stay out of the Log", 
     fake.join("dave", "#honk");
     fake.say("dave", "#honk", "hi");
   });
-  await until(() => texts().includes("hi"), 5000);
+  await until(() => texts().includes("hi"), HISTORY_WAIT_MS);
   expect(rows().filter((r) => r.nick === "HistServ" || r.nick === "dave").map((r) => [r.kind, r.text])).toEqual([
     ["message", "hi"],
   ]);
