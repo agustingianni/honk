@@ -21,6 +21,7 @@ import { createRoot } from "@opentui/react";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { App } from "../src/App.tsx";
+import { NICK_COL_MAX_DEFAULT } from "../src/config.ts";
 import { IrcManager } from "../src/irc/manager.ts";
 import { applyTheme, theme } from "../src/theme.ts";
 import type { ThemeEntry } from "../src/themes/index.ts";
@@ -128,6 +129,10 @@ function show(): void {
           themes={[entry]}
           initialThemeId={entry.id}
           onThemeChosen={() => {}}
+          initialRecentActions={{}}
+          onRecentActionsChanged={() => {}}
+          logSearch={{ off: "Search is off while you review themes." }}
+          nickColumnMax={NICK_COL_MAX_DEFAULT}
         />
       </box>
       <Bar item={item} position={`${index + 1}/${items.length}`} />

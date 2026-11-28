@@ -16,7 +16,7 @@
     "demo": "bun run src/index.tsx --demo",
     "typecheck": "bun check",
     "test": "bun test --parallel",
-    "build": "bun build src/index.tsx --compile --production --bytecode --format=esm --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/honk",
+    "build": "bun scripts/build.ts",
     "release": "bun scripts/release.ts",
     "fakeircd": "bun dev/fakeircd/cli.ts",
     "fetch-themes": "bun scripts/fetch-themes.ts",
