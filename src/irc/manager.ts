@@ -1054,7 +1054,7 @@ export class IrcManager {
     }
     // Without it, Ergo plays joins, parts and mode changes back as fake messages from
     // "HistServ" ("alice joined the channel"). With it, they come as real JOIN and MODE
-    // lines inside the history batch, which the batch handler skips.
+    // lines inside the history batch, which the batch handler gives to the Log only.
     if (!client.state.caps.requested.includes("draft/event-playback")) {
       client.state.caps.requested.push("draft/event-playback");
     }
@@ -1576,7 +1576,7 @@ export class IrcManager {
       if (!buf) return;
       const who = msg.source?.name ?? "someone";
       buf.topic = msg.params.topic ?? "";
-      this.logRecorder?.event(serverId, msg.params.channel, msg, { kind: "topic", nick: who, text: buf.topic });
+      this.logRecorder?.event(serverId, msg.params.channel, msg, { kind: "topic", nick: normalizeNick(msg.source?.name) || who, text: buf.topic });
       this.pushMessage(
         serverId,
         msg.params.channel,
@@ -1630,7 +1630,11 @@ export class IrcManager {
       const batchReplays = new Map<string, HistoryBatch>();
       for (const raw of batch.params.messages) {
         const cmd = raw.command;
-        if (cmd !== "privmsg" && cmd !== "notice") continue;
+        // Events and topics (draft/event-playback) go to the Log only. See logRecorder.ts.
+        if (cmd !== "privmsg" && cmd !== "notice") {
+          logHistory?.event(raw);
+          continue;
+        }
 
         const from = normalizeNick(raw.source?.name) || UNKNOWN_SENDER;
         const rawText = raw.params[1] ?? "";

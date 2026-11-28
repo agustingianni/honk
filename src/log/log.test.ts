@@ -193,6 +193,17 @@ test("a line timed by honk's clock matches History less than 2 seconds away", ()
   expect(rows()).toEqual([{ kind: "message", nick: "alice", text: "brb", msgid: "x", ts: T + 1500 }]);
 });
 
+test("two kicks by one nick in one second are two Events: the kicked nick tells them apart", () => {
+  const { log } = open();
+  log.add("libera", honk, line("alice", { kind: "kick", subject: "dave" }));
+  log.add("libera", honk, line("alice", { kind: "kick", subject: "erin", msgid: "k2", history: true }));
+  log.flush();
+  expect(rows("SELECT subject, msgid FROM message ORDER BY id")).toEqual([
+    { subject: "dave", msgid: null },
+    { subject: "erin", msgid: "k2" },
+  ]);
+});
+
 test("formatting does not hide a Replay", () => {
   const { log } = open();
   log.add("libera", honk, line("\x02bold\x02"));

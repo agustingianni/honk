@@ -250,10 +250,10 @@ test("after a reconnect, honk asks for the History the Log misses and stores and
   await until(() => texts().includes("before"));
   // As if this connection had synced up to now. See logSync.ts.
   log!.setSyncMarker("net", Date.now());
-  manager.disconnectServer("net");
   // 60 lines while away: more than the 50 the screen asks for on join.
-  for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
-  await manager.connectServer("net");
+  await whileAway(manager, () => {
+    for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
+  });
   await until(() => texts().includes("away 1"), 5000);
 
   // Each line once. fakeircd gives many of them the same millisecond, so the order of
@@ -471,11 +471,95 @@ test.each([
   fake.say("dave", "goose", "hi");
   await until(() => texts().includes("hi"));
   log!.setSyncMarker("net", Date.now());
-  manager.disconnectServer("net");
-  fake.say("dave", "goose", "while away");
-  setUp(fake);
-  await manager.connectServer("net");
+  await whileAway(manager, () => {
+    fake.say("dave", "goose", "while away");
+    setUp(fake);
+  });
   await until(() => texts().includes("while away"), 5000);
 
   expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
+});
+
+/**
+ * Puts the Sync marker back to `start` and reconnects, so the History after it plays
+ * again. Waits until #honk has had `requests` History requests in all, and a moment more.
+ */
+async function replayHistory(fake: FakeIrcd, manager: IrcManager, start: number, requests: number) {
+  log!.setSyncMarker("net", start);
+  await whileAway(manager, () => {});
+  const asked = () => fake.received.filter((l) => l.command === "CHATHISTORY" && l.params[1] === "#honk");
+  await until(() => asked().length === requests, 5000);
+  await Bun.sleep(100);
+}
+
+/** Disconnects, lets `away` happen on the server, and connects again. */
+async function whileAway(manager: IrcManager, away: () => void) {
+  manager.disconnectServer("net");
+  away();
+  await manager.connectServer("net");
+}
+
+test("a JOIN in a History batch enters the Log once, and still once after the batch plays again", async () => {
+  const { fake, manager, rows } = await connect();
+  const joins = () => rows().filter((r) => r.kind === "join" && r.nick === "dave");
+  const start = Date.now();
+  log!.setSyncMarker("net", start);
+  await whileAway(manager, () => fake.join("dave", "#honk"));
+  await until(() => joins().length > 0, 5000);
+  expect(joins().map((r) => [r.buffer, r.ts_server, r.msgid !== null])).toEqual([["#honk", 1, true]]);
+
+  // The same History again: the marker is back before the JOIN.
+  await replayHistory(fake, manager, start, 3);
+  expect(joins()).toHaveLength(1);
+});
+
+test("PART, KICK, QUIT and NICK Events and topics in History enter the Log as they do live", async () => {
+  const { fake, manager, rows } = await connect();
+  for (const nick of ["dave", "erin", "frank", "gina"]) fake.join(nick, "#honk");
+  await until(() => rows().filter((r) => r.kind === "join").length === 5);
+  log!.setSyncMarker("net", Date.now());
+  await whileAway(manager, () => {
+    fake.part("dave", "#honk", "bye");
+    fake.kick("alice", "#honk", "erin", "spam");
+    fake.quit("frank", "gone");
+    fake.renick("gina", "gina_");
+    fake.setTopic("#honk", "new topic", "alice");
+  });
+  const events = () =>
+    rows()
+      .filter((r) => r.kind !== "join" && r.kind !== "message")
+      .map((r) => [r.buffer, r.kind, r.nick, r.subject, r.text]);
+  await until(() => events().length === 5, 5000);
+  expect(events()).toEqual([
+    ["#honk", "part", "dave", null, "bye"],
+    ["#honk", "kick", "alice", "erin", "spam"],
+    ["#honk", "quit", "frank", null, "gone"],
+    ["#honk", "nick", "gina", "gina_", ""],
+    ["#honk", "topic", "alice", null, "new topic"],
+  ]);
+});
+
+test("without draft/event-playback, Ergo's HistServ lines stay out of the Log", async () => {
+  const { fake, manager, rows, texts } = await connect({ withhold: ["draft/event-playback"] });
+  log!.setSyncMarker("net", Date.now());
+  await whileAway(manager, () => {
+    fake.join("dave", "#honk");
+    fake.say("dave", "#honk", "hi");
+  });
+  await until(() => texts().includes("hi"), 5000);
+  expect(rows().filter((r) => r.nick === "HistServ" || r.nick === "dave").map((r) => [r.kind, r.text])).toEqual([
+    ["message", "hi"],
+  ]);
+});
+
+test("an Event seen live and then again in History is one Line", async () => {
+  const { fake, manager, rows } = await connect();
+  const start = Date.now();
+  fake.join("dave", "#honk");
+  fake.part("dave", "#honk", "bye");
+  const dave = () => rows().filter((r) => r.nick === "dave").map((r) => r.kind);
+  await until(() => dave().length === 2);
+  // The marker is back before them, so the reconnect's History holds them again.
+  await replayHistory(fake, manager, start, 2);
+  expect(dave()).toEqual(["join", "part"]);
 });

@@ -151,6 +151,7 @@ interface KeptRow {
   id: number;
   kind: string;
   nick: string;
+  subject: string | null;
   text: string;
   ts: number;
   ts_server: number;
@@ -165,6 +166,7 @@ function keptLine(row: KeptRow): KeptLine {
     id: row.id,
     kind: row.kind,
     from: row.nick,
+    subject: row.subject ?? undefined,
     text: row.text,
     timestamp: new Date(row.ts),
     timeFromServer: row.ts_server === 1,
@@ -494,7 +496,7 @@ export class Log {
 
   /** The kept Lines that could match `line`: the same msgid, or the same nick near its time. */
   private keptNear(bufferId: number, line: LogLine): KeptLine[] {
-    const cols = "id, kind, nick, text, ts, ts_server, msgid";
+    const cols = "id, kind, nick, subject, text, ts, ts_server, msgid";
     const rows = this.db
       .query(
         `SELECT ${cols} FROM message WHERE buffer_id = ? AND nick = ? AND ts BETWEEN ? AND ?
@@ -517,6 +519,7 @@ export class Log {
         {
           kind: line.kind,
           from: line.nick,
+          subject: line.subject,
           text: line.text,
           timestamp: new Date(line.time),
           timeFromServer: line.timeFromServer,
