@@ -135,6 +135,12 @@ function readConfigFile(path: string): AppConfig | null {
   if (ascii !== undefined && typeof ascii !== "boolean") {
     throw new ConfigError(`${path}: "ascii" must be true or false, not ${JSON.stringify(ascii)}`);
   }
+  const timestamps = parsed.timestamps ?? undefined;
+  if (timestamps !== undefined && typeof timestamps !== "string") {
+    throw new ConfigError(
+      `${path}: "timestamps" must be a format such as "HH:mm", not ${JSON.stringify(timestamps)}`,
+    );
+  }
   const nickColumnMax = parsed.nickColumnMax ?? undefined;
   if (
     nickColumnMax !== undefined &&
@@ -159,6 +165,7 @@ function readConfigFile(path: string): AppConfig | null {
     theme,
     mouse,
     ascii,
+    timestamps,
     nickColumnMax,
     logs,
     servers: servers.map((s, idx) => ({
@@ -215,6 +222,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): LoadedConfig
   config = { ...config, mouse };
   // --ascii, or --no-ascii to undo "ascii": true for one run.
   if (typeof flags.ascii === "boolean") config = { ...config, ascii: flags.ascii };
+  if (typeof flags.timestamps === "string") config = { ...config, timestamps: flags.timestamps };
 
   // 2. Allow quick CLI --server override/addition
   if (typeof flags.server === "string") {

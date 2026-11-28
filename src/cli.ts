@@ -40,6 +40,8 @@ Options:
   --no-tls                connect without TLS
   --config path           read this config file
   --theme name            use this color theme, such as nord
+  --timestamps format     the time on chat lines: HH:mm, HH:mm:ss, "h:mm a"
+                          or none
   --ascii                 draw only ASCII symbols, for fonts or terminals
                           that show the Unicode ones wrong
   --no-mouse              leave the mouse to the terminal, to select text

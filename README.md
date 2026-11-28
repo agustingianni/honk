@@ -358,6 +358,26 @@ To add a theme, put any Base16 or Base24 scheme file from that collection in
 file whose text would be hard to read on its background, and says why in
 `*status`.
 
+### Timestamps
+
+Each chat line starts with the time it was sent, as `HH:mm` on a 24-hour
+clock. To show it another way, set `timestamps` at the top level of the config
+file, or use `--timestamps` for one run:
+
+```json
+{ "timestamps": "HH:mm:ss", "servers": [] }
+```
+
+| Value | Example |
+|---|---|
+| `"HH:mm"` (default) | `09:05` |
+| `"HH:mm:ss"` | `09:05:42` |
+| `"h:mm a"` | ` 9:05 AM` |
+| `"none"` | no time, so the messages get 6 more columns |
+
+If you write a format honk does not know, it uses `HH:mm` and lists the valid
+formats in `*status`. Log search (Ctrl+F) always shows `HH:mm`.
+
 ### Nick column
 
 The nick column in the chat is as wide as the longest nick in the buffer, from

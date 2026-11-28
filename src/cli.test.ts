@@ -21,7 +21,7 @@ describe("cliAction", () => {
 
 describe("help text", () => {
   test("lists every flag that config.ts reads", () => {
-    for (const flag of ["--server", "--port", "--nick", "--channel", "--password", "--sasl", "--no-tls", "--config", "--demo"]) {
+    for (const flag of ["--server", "--port", "--nick", "--channel", "--password", "--sasl", "--no-tls", "--config", "--timestamps", "--demo"]) {
       expect(HELP).toContain(flag);
     }
   });

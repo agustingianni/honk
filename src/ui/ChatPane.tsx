@@ -15,11 +15,12 @@ import { linkOpener } from "../openUrl.ts";
 import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
 import { cellWidth, HEADER_HEIGHT, noticeLabel, scrollboxStyle, truncate } from "./display.ts";
-import { clockTime, dayLabelBefore } from "./dayDivider.ts";
+import { dayLabelBefore } from "./dayDivider.ts";
 import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
 import { glyphs } from "./glyphs.ts";
 import { NICK_COL_MAX_DEFAULT } from "../config.ts";
 import { nickColumnInPane, nickColumnWidth } from "./panelWidths.ts";
+import { chatTime, chatTimeWidth } from "./timeFormat.ts";
 
 interface ChatPaneProps {
   server: ServerState | undefined;
@@ -44,7 +45,6 @@ const openLink = linkOpener();
 
 const NO_USERS: NickEntry[] = [];
 const NO_MESSAGES: ChatMessage[] = [];
-const BLANK_TIME = "     ";
 const GROUP_WINDOW_MS = 5 * 60_000;
 /** Lines per mouse wheel notch. */
 const WHEEL_LINES = 3;
@@ -202,17 +202,11 @@ export const MessageRow = memo(function MessageRow({
       paddingRight={1}
       backgroundColor={bg}
     >
-      {/* Time (5), a space, then the nick column. The message body starts after this. */}
-      <box width={5 + 1 + nickWidth} flexShrink={0} flexDirection="row">
-        {grouped ? (
-          <text>
-            <span fg={theme.fgDim}>
-              {BLANK_TIME} {" ".repeat(nickWidth)}
-            </span>
-          </text>
-        ) : (
+      {/* The time with its space, then the nick column. The message body starts after this. */}
+      <box width={chatTimeWidth() + nickWidth} flexShrink={0} flexDirection="row">
+        {grouped ? null : (
           <>
-            <text fg={theme.fgMuted}>{clockTime(msg.timestamp)} </text>
+            <text fg={theme.fgMuted}>{chatTime(msg.timestamp)}</text>
             {/* Yoga right-aligns the nick, measuring cells as the terminal does. */}
             <box width={nickWidth} flexDirection="row" justifyContent="flex-end">
               {clickableNick && names ? (
