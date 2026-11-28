@@ -293,6 +293,30 @@ test("retentionDays removes old Chat lines too", () => {
   checkIndex();
 });
 
+test("after a large prune, the free pages go back to the system in steps", () => {
+  const { log, clock } = open({ retentionDays: 7 });
+  for (let i = 0; i < 20_000; i++) {
+    log.add("libera", honk, line(`old ${i} `.repeat(20), { time: T - 30 * 86_400_000 + i }));
+  }
+  log.flush();
+  const freePages = () =>
+    (rows("PRAGMA freelist_count")[0] as { freelist_count: number }).freelist_count;
+  // The first prune waits a minute after the start, then each step 50 ms.
+  clock.advance(60_000);
+  const seen: number[] = [];
+  for (let i = 0; i < 200; i++) {
+    clock.advance(50);
+    seen.push(freePages());
+    if (seen.at(-1) === 0 && seen.some((n) => n > 0)) break;
+  }
+  // Up while old rows are deleted, then down a step at a time, not all at once.
+  const peak = seen.indexOf(Math.max(...seen));
+  expect(seen[peak]).toBeGreaterThan(1000);
+  expect(seen.slice(peak + 1).some((n) => n > 0)).toBe(true);
+  expect(freePages()).toBe(0);
+  expect(texts()).toEqual([]);
+});
+
 test("a second honk reads the file but does not write it", () => {
   const first = open({}, 1000);
   const second = open({}, 2000, (pid) => pid === 1000);
