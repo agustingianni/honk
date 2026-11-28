@@ -6,6 +6,7 @@ test("storedMessages: Events read as they do on screen, and a Redacted line says
   const lines: StoredLine[] = [
     { id: 1, time: 0, kind: "message", nick: "me", text: "hi", self: true, mention: false },
     { id: 2, time: 0, kind: "join", nick: "bob", text: "", self: false, mention: false },
+    { id: 9, time: 0, kind: "join", nick: "me", text: "", self: true, mention: false },
     { id: 3, time: 0, kind: "part", nick: "bob", text: "bye", self: false, mention: false },
     { id: 4, time: 0, kind: "quit", nick: "carol", text: "", self: false, mention: false },
     { id: 5, time: 0, kind: "nick", nick: "dave", subject: "dave_", text: "", self: false, mention: false },
@@ -16,6 +17,7 @@ test("storedMessages: Events read as they do on screen, and a Redacted line says
   expect(storedMessages("#rust", lines).map((m) => [m.kind, m.from, m.text, m.isSelf])).toEqual([
     ["message", "me", "hi", true],
     ["join", undefined, "bob joined #rust", false],
+    ["join", undefined, "You joined #rust", true],
     ["part", undefined, "bob left #rust (bye)", false],
     ["part", undefined, "carol quit", false],
     ["system", undefined, "dave is now known as dave_", false],

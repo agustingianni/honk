@@ -29,7 +29,7 @@ import {
 } from "./names.ts";
 import type { MentionEvent } from "../notify.ts";
 import { findSlashCommand, SLASH_COMMANDS, syntax } from "./commands.ts";
-import { joinText, kickText, nickText, partText, quitText, topicText } from "./eventText.ts";
+import { joinText, kickText, nickText, partText, quitText, selfJoinText, topicText } from "./eventText.ts";
 import { DELIVERY_TIMEOUT_MS, DeliveryTracker, type SentLine } from "./delivery.ts";
 import { EchoTracker, type SentPart } from "./echo.ts";
 import {
@@ -1450,7 +1450,7 @@ export class IrcManager {
         this.pushMessage(
           serverId,
           channel,
-          makeMessage("join", `You joined ${channel}`),
+          makeMessage("join", selfJoinText(channel)),
         );
         // Ask for the latest History. The Sync marker is for the whole Network: when the
         // Buffer has Lines from the Log, the Log holds this channel up to the marker, so

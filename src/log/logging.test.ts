@@ -441,6 +441,15 @@ test("loadOlder above a Line not from the Log keeps the Log's Lines of the same 
   expect(shown(messages())).toEqual(["x", "y", "z"]);
 });
 
+test("scrolling to the top of a channel you just joined shows your join once", async () => {
+  const { manager, server, rows } = await connect();
+  await until(() => rows().some((r) => r.kind === "join" && r.self === 1));
+  expect(manager.loadOlder("net", "#honk")).toBe(0);
+  await Promise.resolve();
+  const joins = server().buffers["#honk"]!.messages.filter((x) => x.kind === "join");
+  expect(joins.map((x) => x.text)).toEqual(["You joined #honk"]);
+});
+
 test("a Buffer holds at most 5000 Lines, and then is marked full", async () => {
   const start = Date.parse("2026-11-01T10:00:00Z");
   const { manager, server } = await connect({
