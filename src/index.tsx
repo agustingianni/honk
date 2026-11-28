@@ -53,7 +53,7 @@ interface HotState {
   /** The Log that search reads, or why there is none. */
   logSearch: LogSearch;
   /** The most cells the nick column takes, from the config. */
-  nickColumnMax: number | undefined;
+  nickColumnMax: number;
 }
 
 const g = globalThis as unknown as { __ircHot?: HotState };

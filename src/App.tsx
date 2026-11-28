@@ -18,10 +18,10 @@ import { setWidthMethod } from "./ui/display.ts";
 import { Nicklist } from "./ui/Nicklist.tsx";
 import { Omnibox, recentKey } from "./ui/Omnibox.tsx";
 import {
-  NICK_COL_MAX_DEFAULT,
   NICKLIST_MIN,
   nicklistWidth,
   panelLayout,
+  panelsFit,
   SIDEBAR_MIN,
   sidebarWidth,
 } from "./ui/panelWidths.ts";
@@ -44,7 +44,7 @@ interface AppProps {
   /** The Log that search reads, or why there is none. */
   logSearch: LogSearch;
   /** The most cells the nick column in the chat takes, from the config. */
-  nickColumnMax?: number;
+  nickColumnMax: number;
 }
 
 /**
@@ -72,7 +72,7 @@ export function App({
   initialRecentActions,
   onRecentActionsChanged,
   logSearch,
-  nickColumnMax = NICK_COL_MAX_DEFAULT,
+  nickColumnMax,
 }: AppProps) {
   const renderer = useRenderer();
   const { width } = useTerminalDimensions();
@@ -280,10 +280,10 @@ export function App({
   const showNicklist = layout.nicklist > 0;
   const chatWidth = layout.chat;
   // For the status bar hints: whether a toggle would show the panel.
-  const sidebarFits = panelLayout(width, { sidebar: SIDEBAR_MIN }).sidebar > 0;
+  // The layout shrinks a panel down to its minimum before it hides it.
+  const sidebarFits = panelsFit(width, SIDEBAR_MIN);
   const nicklistFits =
-    users !== undefined &&
-    panelLayout(width, { sidebar: showSidebar ? SIDEBAR_MIN : undefined, nicklist: NICKLIST_MIN }).nicklist > 0;
+    users !== undefined && panelsFit(width, NICKLIST_MIN, showSidebar ? SIDEBAR_MIN : 0);
 
   return (
     <ThemeVersion.Provider value={themeVersion}>

@@ -10,7 +10,13 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DEFAULT_LOG_SETTINGS, type LogSettings } from "./log/log.ts";
 import type { AppConfig, AuthMethod, ServerConfig } from "./types.ts";
-import { NICK_COL_MAX_DEFAULT, NICK_COL_MAX_LIMIT, NICK_COL_MIN } from "./ui/panelWidths.ts";
+
+/** The nick column in the chat is never narrower than this. */
+export const NICK_COL_MIN = 8;
+/** The default for the "nickColumnMax" config key. */
+export const NICK_COL_MAX_DEFAULT = 16;
+/** The largest value the "nickColumnMax" config key takes. */
+const NICK_COL_MAX_LIMIT = 32;
 
 export function defaultNick(): string {
   return process.env.USER || "guest";
@@ -175,7 +181,10 @@ function readConfigFile(path: string): AppConfig | null {
   };
 }
 
-export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
+/** The config, with the defaults filled in for the keys the UI needs. */
+export type LoadedConfig = AppConfig & { nickColumnMax: number };
+
+export function loadConfig(argv: string[] = process.argv.slice(2)): LoadedConfig {
   const flags = parseArgs(argv);
 
   // 1. Check explicit --config or default file locations
@@ -203,7 +212,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
 
   if (typeof flags.theme === "string") config = { ...config, theme: flags.theme };
   const mouse = typeof flags.mouse === "boolean" ? flags.mouse : (config.mouse ?? true);
-  config = { ...config, mouse, nickColumnMax: config.nickColumnMax ?? NICK_COL_MAX_DEFAULT };
+  config = { ...config, mouse };
   // --ascii, or --no-ascii to undo "ascii": true for one run.
   if (typeof flags.ascii === "boolean") config = { ...config, ascii: flags.ascii };
 
@@ -267,7 +276,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
     };
   }
 
-  return config;
+  return { ...config, nickColumnMax: config.nickColumnMax ?? NICK_COL_MAX_DEFAULT };
 }
 
 export function defaultConfigPath(): string {

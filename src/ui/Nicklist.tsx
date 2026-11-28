@@ -26,6 +26,7 @@ export const Nicklist = memo(function Nicklist({
 }: NicklistProps) {
   const themeVersion = useThemeVersion();
   const myKey = nameKey(myNick, casemapping);
+  const nickRoom = nicklistNickRoom(width);
 
   return (
     <box
@@ -62,7 +63,7 @@ export const Nicklist = memo(function Nicklist({
               <NickRow
                 key={u.nick}
                 nick={u.nick}
-                room={nicklistNickRoom(width)}
+                room={nickRoom}
                 prefix={u.prefix}
                 isSelf={nameKey(u.nick, casemapping) === myKey}
                 onSelectUser={onSelectUser}

@@ -1,13 +1,8 @@
+import { NICK_COL_MIN } from "../config.ts";
 import type { ChatMessage, NickEntry, ServerState } from "../types.ts";
-import { bufferDisplayName, cellWidth } from "./display.ts";
+import { bufferDisplayName, cellWidth, noticeLabel, unreadBadge } from "./display.ts";
 import { glyphs } from "./glyphs.ts";
 
-/** The nick column is never narrower than this. */
-export const NICK_COL_MIN = 8;
-/** The default for the "nickColumnMax" config key. */
-export const NICK_COL_MAX_DEFAULT = 16;
-/** The largest value the "nickColumnMax" config key takes. */
-export const NICK_COL_MAX_LIMIT = 32;
 /** The time (5 cells) and a space, before the nick column. */
 const TIME_COL = 5 + 1;
 
@@ -24,9 +19,9 @@ export function nickColumnWidth(messages: readonly ChatMessage[], max: number): 
   let longest = 0;
   for (const m of messages) {
     if (m.kind === "message" && m.from) longest = Math.max(longest, cellWidth(m.from));
-    else if (m.kind === "notice") longest = Math.max(longest, 2 + cellWidth(m.from ?? "notice"));
+    else if (m.kind === "notice") longest = Math.max(longest, cellWidth(noticeLabel(m.from)));
   }
-  return clamp(longest, NICK_COL_MIN, Math.max(NICK_COL_MIN, max));
+  return clamp(longest, NICK_COL_MIN, max);
 }
 
 /**
@@ -39,13 +34,19 @@ export function nickColumnInPane(width: number, paneWidth: number): number {
 }
 
 export const SIDEBAR_MIN = 16;
-export const SIDEBAR_MAX = 32;
+const SIDEBAR_MAX = 32;
 /** A scrollbar takes one column of a panel when its list is longer than the panel. */
 const SCROLLBAR = 1;
+
 /** A buffer row: the selection mark, a space, the name, then 1 cell of padding. */
-const BUFFER_ROW_CHROME = 1 + 1 + 1 + SCROLLBAR;
+function bufferRowChrome(): number {
+  return cellWidth(glyphs.selectedRow) + 1 + 1 + SCROLLBAR;
+}
+
 /** A space and the widest unread count, "99+". */
-const BADGE_ROOM = 1 + 3;
+function badgeRoom(): number {
+  return 1 + cellWidth(unreadBadge(100));
+}
 
 /** A server row: 1 cell of padding, the status glyph and a space, the name, 1 cell of padding. */
 function serverRowChrome(): number {
@@ -62,7 +63,7 @@ export function serverNameRoom(width: number): number {
  * unread count gives the count its room.
  */
 export function bufferNameRoom(width: number, hasBadge: boolean): number {
-  return width - BUFFER_ROW_CHROME - (hasBadge ? BADGE_ROOM : 0);
+  return width - bufferRowChrome() - (hasBadge ? badgeRoom() : 0);
 }
 
 /**
@@ -71,20 +72,21 @@ export function bufferNameRoom(width: number, hasBadge: boolean): number {
  * Between SIDEBAR_MIN and SIDEBAR_MAX.
  */
 export function sidebarWidth(servers: readonly ServerState[]): number {
-  let need = 0;
-  for (const server of servers) {
-    need = Math.max(need, serverRowChrome() + cellWidth(server.name));
-    for (const name of server.bufferOrder) {
-      const buf = server.buffers[name];
-      if (!buf) continue;
-      need = Math.max(need, BUFFER_ROW_CHROME + BADGE_ROOM + cellWidth(bufferDisplayName(buf)));
+  let server = 0;
+  let buffer = 0;
+  for (const s of servers) {
+    server = Math.max(server, cellWidth(s.name));
+    for (const name of s.bufferOrder) {
+      const buf = s.buffers[name];
+      if (buf) buffer = Math.max(buffer, cellWidth(bufferDisplayName(buf)));
     }
   }
+  const need = Math.max(serverRowChrome() + server, bufferRowChrome() + badgeRoom() + buffer);
   return clamp(need, SIDEBAR_MIN, SIDEBAR_MAX);
 }
 
 export const NICKLIST_MIN = 12;
-export const NICKLIST_MAX = 24;
+const NICKLIST_MAX = 24;
 /** A user row: 1 cell of padding, the mode prefix, the nick, 1 cell of padding. */
 const NICK_ROW_CHROME = 1 + 1 + 1 + SCROLLBAR;
 
@@ -117,6 +119,11 @@ export interface WantedPanels {
   nicklist?: number;
 }
 
+/** Whether a terminal `width` columns wide has room for the chat and panels of these widths. */
+export function panelsFit(width: number, ...panels: number[]): boolean {
+  return width - panels.reduce((sum, p) => sum + p, 0) >= CHAT_MIN;
+}
+
 /** Columns of each pane. A panel with 0 is hidden. */
 export interface PanelLayout {
   sidebar: number;
@@ -134,16 +141,13 @@ export function panelLayout(width: number, wanted: WantedPanels): PanelLayout {
   let sidebar = wanted.sidebar ?? 0;
   let nicklist = wanted.nicklist ?? 0;
   let over = sidebar + nicklist - (width - CHAT_MIN);
-  if (over > 0 && nicklist > 0) {
-    const cut = Math.min(over, nicklist - NICKLIST_MIN);
-    nicklist -= cut;
+  const shrink = (size: number, min: number) => {
+    const cut = Math.max(0, Math.min(over, size - min));
     over -= cut;
-  }
-  if (over > 0 && sidebar > 0) {
-    const cut = Math.min(over, sidebar - SIDEBAR_MIN);
-    sidebar -= cut;
-    over -= cut;
-  }
+    return size - cut;
+  };
+  nicklist = shrink(nicklist, NICKLIST_MIN);
+  sidebar = shrink(sidebar, SIDEBAR_MIN);
   if (over > 0) {
     if (wanted.nicklist !== undefined) return panelLayout(width, { sidebar: wanted.sidebar });
     return { sidebar: 0, nicklist: 0, chat: width };

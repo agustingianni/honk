@@ -14,11 +14,12 @@ import type { BufferState, ChatMessage, NickEntry, ServerState } from "../types.
 import { linkOpener } from "../openUrl.ts";
 import { Clickable, isPlainClick, LinkArea, NameText, type NameActions } from "./Clickable.tsx";
 import { getCompletions } from "./completion.ts";
-import { cellWidth, HEADER_HEIGHT, scrollboxStyle, truncate } from "./display.ts";
+import { cellWidth, HEADER_HEIGHT, noticeLabel, scrollboxStyle, truncate } from "./display.ts";
 import { clockTime, dayLabelBefore } from "./dayDivider.ts";
 import { FormattedText, LinkedText, parseIrcText, Segments, underlineRange } from "./format.tsx";
 import { glyphs } from "./glyphs.ts";
-import { NICK_COL_MAX_DEFAULT, nickColumnInPane, nickColumnWidth } from "./panelWidths.ts";
+import { NICK_COL_MAX_DEFAULT } from "../config.ts";
+import { nickColumnInPane, nickColumnWidth } from "./panelWidths.ts";
 
 interface ChatPaneProps {
   server: ServerState | undefined;
@@ -34,7 +35,7 @@ interface ChatPaneProps {
   onJoinChannel: (channel: string) => void;
   /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
   onOpenLink?: (href: string) => void;
-  /** The most cells the nick column takes, from the "nickColumnMax" config key. */
+  /** The most cells the nick column takes, from the "nickColumnMax" config key. 16 when left out. */
   nickColumnMax?: number;
 }
 
@@ -58,11 +59,17 @@ function isChatLine(m: ChatMessage): boolean {
 
 
 /**
- * The cells of the nick column for `messages`. It only grows while the same
- * `key` (a buffer) is on screen, so the lines do not move left and right as
- * people with long nicks come and go. A new key starts over.
+ * The cells of the nick column for `messages` in a chat pane `paneWidth` cells
+ * wide. It only grows while the same `key` (a buffer) is on screen, so the lines
+ * do not move left and right as people with long nicks come and go. A new key
+ * starts over.
  */
-export function useNickColumnWidth(key: string, messages: readonly ChatMessage[], max: number): number {
+export function useNickColumn(
+  key: string,
+  messages: readonly ChatMessage[],
+  max: number,
+  paneWidth: number,
+): number {
   // The theme version changes with the width method, and then nicks are measured again.
   const themeVersion = useThemeVersion();
   const fitted = useMemo(() => nickColumnWidth(messages, max), [messages, max, themeVersion]);
@@ -70,7 +77,7 @@ export function useNickColumnWidth(key: string, messages: readonly ChatMessage[]
   const [seen, setSeen] = useState({ key, width: fitted });
   const width = seen.key === key ? Math.max(seen.width, fitted) : fitted;
   if (seen.key !== key || seen.width !== width) setSeen({ key, width });
-  return width;
+  return nickColumnInPane(width, paneWidth);
 }
 
 /**
@@ -111,7 +118,7 @@ export const MessageRow = memo(function MessageRow({
 }: {
   msg: ChatMessage;
   grouped: boolean;
-  /** The cells of the nick column. See useNickColumnWidth. */
+  /** The cells of the nick column. See useNickColumn. */
   nickWidth: number;
   /** False in a DM: every line there is to you, so painting each one adds nothing. */
   highlightMentions: boolean;
@@ -157,7 +164,7 @@ export const MessageRow = memo(function MessageRow({
       textFg = unconfirmed ? theme.fgMuted : theme.accentAlt;
       break;
     case "notice":
-      label = truncate(`-${msg.from ?? "notice"}-`, nickWidth);
+      label = truncate(noticeLabel(msg.from), nickWidth);
       labelFg = theme.yellow;
       textFg = theme.yellow;
       break;
@@ -425,7 +432,7 @@ export function ChatPane({
   const messages = buffer?.messages ?? NO_MESSAGES;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
-  const nickWidth = nickColumnInPane(useNickColumnWidth(bufferKey, messages, nickColumnMax), paneWidth);
+  const nickWidth = useNickColumn(bufferKey, messages, nickColumnMax, paneWidth);
   useEffect(() => {
     setLastSeenId(null);
     const sb = scrollRef.current;
