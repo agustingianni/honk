@@ -3,7 +3,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeClock } from "../fakeClock.ts";
-import { LogSync, MARK_EVERY_MS, MAX_FILL_PAGES, SETTLE_MS, SYNC_FUZZ_MS } from "./logSync.ts";
+import {
+  LATEST_LIMIT,
+  LogSync,
+  MARK_EVERY_MS,
+  MAX_FILL_PAGES,
+  SETTLE_MS,
+  SYNC_FUZZ_MS,
+} from "./logSync.ts";
 import { DEFAULT_LOG_SETTINGS, type Log, openLog } from "./log.ts";
 
 const T = Date.parse("2026-11-27T21:00:00Z");
@@ -94,14 +101,20 @@ test("no fill when the screen's History reaches back past the marker", () => {
   expect(sync.batchEnded("libera", "#quiet", [])).toEqual({ type: "done" });
 });
 
-test("a gap is filled when the screen's oldest line has the marker's time", () => {
+test("a full batch whose oldest line has the marker's time gets a fill; one that is not full does not", () => {
   // Lines in the same millisecond as the newest one logged, then honk was away.
   log.setSyncMarker("libera", T - 60_000);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
-  expect(sync.batchEnded("libera", "#honk", [T - 60_000, T - 60_000])).toEqual({
+  sync.askedLatest("libera", "#quiet");
+  const full = Array.from({ length: LATEST_LIMIT }, (_, i) => T - 60_000 + i);
+  expect(sync.batchEnded("libera", "#honk", full)).toEqual({
     type: "next",
     request: { after: T - 60_000 - SYNC_FUZZ_MS, until: T - 60_000, pages: 1 },
+  });
+  // The marker Line and 3 newer ones: the server sent all it has.
+  expect(sync.batchEnded("libera", "#quiet", [T - 60_000, T, T + 1, T + 2])).toEqual({
+    type: "done",
   });
 });
 

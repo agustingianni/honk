@@ -73,8 +73,11 @@ export interface LogHost {
 /** One CHATHISTORY batch on its way to the Log. */
 export interface LogHistory {
   add(target: string, line: ChatInput): void;
-  /** Call after the last Line: asks for the next page of a gap, if one is open. */
-  end(): void;
+  /**
+   * Call after the last Line, with how many lines the batch held (Events too): asks
+   * for the next page of a gap, if one is open.
+   */
+  end(lines: number): void;
 }
 
 export class LogRecorder {
@@ -215,8 +218,8 @@ export class LogRecorder {
         if (!batch) batches.set(key, (batch = new HistoryBatch()));
         this.add(serverId, lineTarget, line, batch);
       },
-      end: () => {
-        if (targetKey !== undefined) this.afterHistory(serverId, target, targetKey, times, fill);
+      end: (lines) => {
+        if (targetKey !== undefined) this.afterHistory(serverId, target, targetKey, times, lines, fill);
       },
     };
   }
@@ -227,9 +230,10 @@ export class LogRecorder {
     target: string,
     targetKey: string,
     times: number[],
+    lines: number,
     fill: Fill | undefined,
   ): void {
-    const step = this.sync.batchEnded(serverId, targetKey, times, fill);
+    const step = this.sync.batchEnded(serverId, targetKey, times, fill, lines);
     if (step.type === "gave-up") {
       this.host.notice(
         serverId,
