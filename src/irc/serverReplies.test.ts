@@ -94,21 +94,32 @@ test("/history with nothing older says so", async () => {
   expect(texts("#honk").at(-1)).toBe("The server has no older messages in #honk.");
 });
 
-test("/history brings the Lines of the second where the screen begins", async () => {
-  // A store of whole seconds: a, b and c share one second. The screen's latest 50
-  // begin at c (your JOIN is one of them), so a and b are older but have c's time.
+/**
+ * Stores alice's lines in #honk before you join, as a store of whole seconds keeps
+ * them: old 1..10 a minute before `second`, then `same` at `second`, then new 1..`newer`
+ * 5 s after. Then you join #honk, and it waits for the screen's latest 50 Lines.
+ */
+async function joinAfterOneSecond(same: string[], newer: number): Promise<void> {
   const second = Math.floor(Date.now() / 1000) * 1000 - 60_000;
   const say = (time: number, text: string) => {
     irc.now = () => time;
     irc.say("alice", "#honk", text);
   };
   for (let i = 1; i <= 10; i++) say(second - 60_000, `old ${i}`);
-  for (const text of ["a", "b", "c"]) say(second, text);
-  for (let i = 1; i <= 48; i++) say(second + 5_000, `new ${i}`);
+  for (const text of same) say(second, text);
+  for (let i = 1; i <= newer; i++) say(second + 5_000, `new ${i}`);
   irc.now = () => Date.now();
   await inHonk();
-  const shown = () => server().buffers["#honk"]!.messages.map((x) => x.text);
-  await until(() => shown().includes("new 48"));
+  await until(() => shown().includes(`new ${newer}`));
+}
+
+/** Every line of #honk on screen, History too. */
+const shown = () => server().buffers["#honk"]!.messages.map((x) => x.text);
+
+test("/history brings the Lines of the second where the screen begins", async () => {
+  // A store of whole seconds: a, b and c share one second. The screen's latest 50
+  // begin at c (your JOIN is one of them), so a and b are older but have c's time.
+  await joinAfterOneSecond(["a", "b", "c"], 48);
   expect(shown()).not.toContain("a");
   m.handleInput("/history 50");
   await until(() => shown().includes("old 1"));
@@ -125,18 +136,7 @@ test("/history brings the Lines of the second where the screen begins", async ()
 test("/history gets past a second with more Lines on screen than it asks for", async () => {
   // A store of whole seconds: t1..t20 share one second, and the screen begins at t2,
   // so 19 Lines on screen have that time. /history 5 must still bring t1 and older.
-  const second = Math.floor(Date.now() / 1000) * 1000 - 60_000;
-  const say = (time: number, text: string) => {
-    irc.now = () => time;
-    irc.say("alice", "#honk", text);
-  };
-  for (let i = 1; i <= 10; i++) say(second - 60_000, `old ${i}`);
-  for (let i = 1; i <= 20; i++) say(second, `t${i}`);
-  for (let i = 1; i <= 30; i++) say(second + 5_000, `new ${i}`);
-  irc.now = () => Date.now();
-  await inHonk();
-  const shown = () => server().buffers["#honk"]!.messages.map((x) => x.text);
-  await until(() => shown().includes("new 30"));
+  await joinAfterOneSecond(Array.from({ length: 20 }, (_, i) => `t${i + 1}`), 30);
   expect(shown()).not.toContain("t1");
   m.handleInput("/history 5");
   await until(() => shown().includes("t1") || shown().some((t) => t.includes("no older messages")));
