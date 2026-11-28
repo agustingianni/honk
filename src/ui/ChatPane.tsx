@@ -36,6 +36,11 @@ interface ChatPaneProps {
   onJoinChannel: (channel: string) => void;
   /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
   onOpenLink?: (href: string) => void;
+  /**
+   * The view reached the top of the Buffer: load older Lines from the Log. Returns how
+   * many came.
+   */
+  onLoadOlder?: () => number;
   /** The most cells the nick column takes, from the "nickColumnMax" config key. 16 when left out. */
   nickColumnMax?: number;
 }
@@ -45,6 +50,8 @@ const openLink = linkOpener();
 
 const NO_USERS: NickEntry[] = [];
 const NO_MESSAGES: ChatMessage[] = [];
+/** The renderable id of the box that shows a Line, to scroll to it. */
+const rowId = (messageId: string) => `row-${messageId}`;
 const GROUP_WINDOW_MS = 5 * 60_000;
 /** Lines per mouse wheel notch. */
 const WHEEL_LINES = 3;
@@ -301,6 +308,7 @@ export function ChatPane({
   onSelectUser,
   onJoinChannel,
   onOpenLink = openLink,
+  onLoadOlder,
   nickColumnMax = NICK_COL_MAX_DEFAULT,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
@@ -363,12 +371,16 @@ export function ChatPane({
     }
 
     const sb = scrollRef.current;
+    // Scrolling up at the top loads older Lines, also in a Buffer that fits on the
+    // screen, whose scroll position never moves.
     if (key.name === "pageup" || key.name === "pagedown") {
       sb?.scrollBy(key.name === "pageup" ? -0.5 : 0.5, "viewport");
+      if (key.name === "pageup") loadOlderAtTop();
       return;
     }
     if (key.shift && (key.name === "up" || key.name === "down")) {
       sb?.scrollBy(key.name === "up" ? -SHIFT_SCROLL_LINES : SHIFT_SCROLL_LINES);
+      if (key.name === "up") loadOlderAtTop();
       return;
     }
 
@@ -427,11 +439,27 @@ export function ChatPane({
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const nickWidth = useNickColumn(bufferKey, messages, nickColumnMax, paneWidth);
+  // Reaching the top loads older Lines above. The Line that was at the top stays there,
+  // so the view does not jump: this holds its id until the next render scrolls to it.
+  const keepAtTopRef = useRef<string | null>(null);
+  const loadOlderRef = useRef(onLoadOlder);
+  loadOlderRef.current = onLoadOlder;
+  /** Loads older Lines if the view is at the top and no load waits for its render. */
+  const loadOlderAtTop = () => {
+    const sb = scrollRef.current;
+    if (!sb || sb.scrollTop > 0 || keepAtTopRef.current !== null) return;
+    const first = messagesRef.current[0]?.id;
+    if (first && (loadOlderRef.current?.() ?? 0) > 0) keepAtTopRef.current = first;
+  };
   useEffect(() => {
     setLastSeenId(null);
     const sb = scrollRef.current;
     if (!sb) return;
+    let atTop = false;
     const onChange = () => {
+      const top = sb.scrollTop <= 0;
+      if (top && !atTop) loadOlderAtTop();
+      atTop = top;
       const atBottom = sb.scrollTop + sb.viewport.height >= sb.scrollHeight - 1;
       setLastSeenId((prev) => {
         if (atBottom) return null;
@@ -445,6 +473,12 @@ export function ChatPane({
       sb.verticalScrollBar.off("change", onChange);
     };
   }, [bufferKey]);
+  useEffect(() => {
+    const id = keepAtTopRef.current;
+    if (id === null) return;
+    keepAtTopRef.current = null;
+    scrollRef.current?.scrollChildIntoView(rowId(id), { align: "start" });
+  }, [buffer?.messages]);
   let newBelow = 0;
   if (lastSeenId !== null && buffer) {
     const at = buffer.messages.findIndex((m) => m.id === lastSeenId);
@@ -575,10 +609,18 @@ export function ChatPane({
         stickyScroll
         stickyStart="bottom"
         scrollX={false}
+        onMouseScroll={(event: { scroll?: { direction?: string } }) => {
+          if (event.scroll?.direction === "up") loadOlderAtTop();
+        }}
         style={scrollboxStyle(theme.bgBase)}
       >
         {/* No top padding: the header's own bottom padding is the gap. */}
         <box flexDirection="column" paddingBottom={1}>
+          {buffer?.scrollbackFull && (
+            <text fg={theme.fgMuted} paddingLeft={2}>
+              {`honk holds ${buffer.messages.length} lines of ${buffer.name}. Search the log (Ctrl+F) for older ones.`}
+            </text>
+          )}
           {buffer?.messages.map((msg, idx) => {
             const isFirstUnread = msg.id === buffer.firstUnreadId;
             const prev = idx > 0 ? buffer.messages[idx - 1] : undefined;
@@ -592,7 +634,7 @@ export function ChatPane({
               msg.timestamp.getTime() - prev.timestamp.getTime() < GROUP_WINDOW_MS;
 
             return (
-              <box key={msg.id} flexDirection="column" width="100%">
+              <box key={msg.id} id={rowId(msg.id)} flexDirection="column" width="100%">
                 {(day !== null || isFirstUnread) && (
                   /* The day goes first, then "new". A blank line above and below the pair. */
                   <box flexDirection="column" marginTop={1} marginBottom={1}>

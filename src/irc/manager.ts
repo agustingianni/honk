@@ -41,7 +41,7 @@ import {
   TARGETS_BATCH_TYPES,
 } from "./missed.ts";
 import { NetworkWatcher } from "./netwatch.ts";
-import { checkReplay, HistoryBatch } from "./replay.ts";
+import { checkReplay, HistoryBatch, LOCAL_CLOCK_WINDOW_MS } from "./replay.ts";
 import {
   DEMO_AMBIENT,
   DEMO_HISTORY,
@@ -85,6 +85,7 @@ import {
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
 import type { Log } from "../log/log.ts";
 import { FILL_LIMIT, type Fill } from "../log/logSync.ts";
+import { SCROLLBACK_LINES, storedMessages } from "../log/scrollback.ts";
 import { LogRecorder } from "./logRecorder.ts";
 
 /** Messages kept per buffer from live traffic. */
@@ -341,7 +342,7 @@ interface HistoryRequest {
    * it onto the reply, so a FAIL or a batch matches this request and no other.
    */
   label?: string;
-  /** Set for the Log's own request: its Lines go to the Log only. See logSync.ts. */
+  /** Set for the Log's own request, which fills a gap in the Log. See logSync.ts. */
   fill?: Fill;
 }
 
@@ -597,12 +598,15 @@ export class IrcManager {
   private lastWakeTick = Date.now();
   /** Writes Lines to the Log, if honk keeps one. See logRecorder.ts. */
   private readonly logRecorder: LogRecorder | undefined;
+  /** The Log that Buffers load their scrollback from. See src/log/scrollback.ts. */
+  private readonly log: Log | undefined;
 
   /**
    * `markReadDelayMs`: see MARK_READ_DELAY_MS in readMarker.ts. Tests pass a shorter one.
    * `log`: the Log to write Lines to; none keeps no Log.
    */
   constructor(options: { markReadDelayMs?: number; log?: Log } = {}) {
+    this.log = options.log;
     this.logRecorder = options.log && this.createLogRecorder(options.log);
     this.readMarkerTracker = new ReadMarkerTracker(
       {
@@ -1452,7 +1456,7 @@ export class IrcManager {
       if (!server) return;
       const channel = msg.params.channel;
       const who = normalizeNick(msg.source?.name);
-      this.ensureBuffer(serverId, channel, "channel");
+      const buf = this.ensureBuffer(serverId, channel, "channel");
       this.logRecorder?.event(serverId, channel, msg, { kind: "join", nick: who, text: "" });
       if (this.same(serverId, who, server.nick)) {
         // Switch for a /join, or from this server's *status (auto-join at startup).
@@ -1469,9 +1473,14 @@ export class IrcManager {
           channel,
           makeMessage("join", `You joined ${channel}`),
         );
-        // Fetch recent scrollback from bouncer/server if draft/chathistory is enabled
+        // Ask for the latest History. The Sync marker is for the whole Network: when the
+        // Buffer has Lines from the Log, the Log holds this channel up to the marker, so
+        // ask only for the newer ones. A channel the Log never held gets the latest 50.
+        // (/join opens the Buffer before the server's JOIN, so being open says nothing.)
         if (client.state.caps.enabled.has("draft/chathistory")) {
-          requestHistory(client, "LATEST", channel, "*", 50);
+          const held = buf?.messages.some((m) => m.logId !== undefined) === true;
+          const since = held ? this.logRecorder?.historySince(serverId) : undefined;
+          requestHistory(client, "LATEST", channel, since === undefined ? "*" : timestampParam(since), 50);
           this.logRecorder?.joined(serverId, channel);
         }
       } else {
@@ -1626,7 +1635,8 @@ export class IrcManager {
       const request = batchTarget
         ? takeHistoryRequest(ctrl.historyRequests, label, this.key(serverId, batchTarget))
         : undefined;
-      // A request of the Log's own goes to the Log only, not the screen. See logRecorder.ts.
+      // A request of the Log's own (a fill) goes to the screen too: the screen shows the
+      // Log's Lines, so a gap the fill closes in the Log must close on screen. See logSync.ts.
       const logHistory = this.logRecorder?.history(serverId, batchTarget ?? "", request?.fill);
       if (request && !request.fill && batchTarget) {
         const any = batch.params.messages.some(
@@ -1659,7 +1669,6 @@ export class IrcManager {
           cmd === "notice" ? "notice" : actionMatch ? "action" : "message";
         const text = actionMatch ? actionMatch[1]! : rawText;
         logHistory?.add(target, { kind: msgKind, from, text, tags: raw.tags, self: isSelf });
-        if (logHistory?.isFill) continue;
 
         const bufferKey = this.bufferKey(serverId, target);
         let replays = batchReplays.get(bufferKey);
@@ -1768,15 +1777,6 @@ export class IrcManager {
       const isHistory = isHistoryBatch(tags);
       const self = this.same(serverId, from, this.servers.get(serverId)?.nick);
       const logTarget = this.noticeLogTarget(serverId, msg.params.target, from, self);
-      if (!isHistory && logTarget) {
-        this.logRecorder?.chat(serverId, logTarget, {
-          kind: "notice",
-          from,
-          text: msg.params.text,
-          tags,
-          self,
-        });
-      }
       this.pushMessage(
         serverId,
         target,
@@ -1787,6 +1787,16 @@ export class IrcManager {
           isHistory,
         }),
       );
+      // After the screen: a Buffer the notice opens loads the Log, which must not have it yet.
+      if (!isHistory && logTarget) {
+        this.logRecorder?.chat(serverId, logTarget, {
+          kind: "notice",
+          from,
+          text: msg.params.text,
+          tags,
+          self,
+        });
+      }
     };
     client.on("notice", onNotice);
     client.on("echo:notice", onNotice);
@@ -2218,9 +2228,70 @@ export class IrcManager {
     if (existing) return existing;
 
     const buf = createBuffer(name, kind);
+    // A new Buffer starts with its last Lines from the Log, from before this run.
+    if (this.log && kind !== "status") {
+      buf.messages = storedMessages(name, this.log.scrollback(serverId, name));
+    }
     server.buffers = { ...server.buffers, [name]: buf };
     server.bufferOrder = sortBufferOrder(server, [...server.bufferOrder, name]);
     return buf;
+  }
+
+  /**
+   * Up to `limit` Lines from the Log before the first of `messages`. A Line that did
+   * not come from the Log (live, or History) has no row id, so the page includes the
+   * Lines of its time, and the ones `messages` has already are dropped as Replays:
+   *
+   *   screen: z (live, 21:35:07)     Log: x, y, z (21:35:07)     -> x, y
+   */
+  private olderFromLog(
+    serverId: string,
+    name: string,
+    messages: ChatMessage[],
+    limit: number,
+  ): ChatMessage[] {
+    const oldest = messages[0]!;
+    const time = oldest.timestamp.getTime();
+    const before = { time, id: oldest.logId ?? Number.MAX_SAFE_INTEGER };
+    const older = storedMessages(name, this.log!.scrollback(serverId, name, before, limit));
+    if (oldest.logId !== undefined) return older;
+    // Only Lines near that time can match. They are the first ones.
+    const end = messages.findIndex((m) => m.timestamp.getTime() > time + LOCAL_CLOCK_WINDOW_MS);
+    const kept = end === -1 ? messages : messages.slice(0, end);
+    const batch = new HistoryBatch();
+    return older.filter(
+      (m) => checkReplay(kept, { ...m, isHistory: true }, batch).type === "new",
+    );
+  }
+
+  /**
+   * Loads up to SCROLLBACK_LINES Lines from the Log that are older than the oldest one
+   * Buffer `bufferName` holds, and puts them at its top. Returns how many came. The
+   * chat pane calls it when you scroll to the top. A Buffer holds at most
+   * MAX_MESSAGES_WITH_HISTORY Lines: the limit is on memory, and the Log keeps the rest.
+   */
+  loadOlder(serverId: string, bufferName: string): number {
+    const server = this.servers.get(serverId);
+    const name = this.bufferKey(serverId, bufferName);
+    const buf = server?.buffers[name];
+    // An empty Buffer was cleared with /clear, or has nothing to scroll.
+    const oldest = buf?.messages[0];
+    if (!this.log || !server || !buf || !oldest || buf.kind === "status") return 0;
+    const room = Math.min(SCROLLBACK_LINES, MAX_MESSAGES_WITH_HISTORY - buf.messages.length);
+    if (room <= 0) {
+      if (!buf.scrollbackFull) {
+        server.buffers = { ...server.buffers, [name]: { ...buf, scrollbackFull: true } };
+        this.emit();
+      }
+      return 0;
+    }
+    const older = this.olderFromLog(serverId, name, buf.messages, room);
+    if (older.length === 0) return 0;
+    const messages = [...older, ...buf.messages];
+    const messageLimit = Math.max(buf.messageLimit ?? MAX_MESSAGES, messages.length);
+    server.buffers = { ...server.buffers, [name]: { ...buf, messages, messageLimit } };
+    this.emit();
+    return older.length;
   }
 
   /**
@@ -3295,7 +3366,7 @@ export class IrcManager {
         if (!buf) return;
         server.buffers = {
           ...server.buffers,
-          [activeBuffer]: { ...buf, messages: [], messageLimit: undefined },
+          [activeBuffer]: { ...buf, messages: [], messageLimit: undefined, scrollbackFull: undefined },
         };
         this.emit();
         return;

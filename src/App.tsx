@@ -264,6 +264,8 @@ export function App({
     },
     [manager, activeServerId],
   );
+  const loadOlder = () =>
+    activeServerId && activeBuffer ? manager.loadOlder(activeServerId, activeBuffer.name) : 0;
 
   // The panels fit the names in them. The theme version changes when the width
   // method does, and then names are measured again.
@@ -324,6 +326,7 @@ export function App({
             onPasteLines={pasteLines}
             onSelectUser={selectUser}
             onJoinChannel={joinChannel}
+            onLoadOlder={loadOlder}
             nickColumnMax={nickColumnMax}
           />
           )}

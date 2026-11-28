@@ -70,12 +70,8 @@ export interface LogHost {
   notice(serverId: string, text: string): void;
 }
 
-/**
- * One CHATHISTORY batch on its way to the Log. `isFill` is true for the Log's own
- * request: then its Lines go to the Log only, not to the screen.
- */
+/** One CHATHISTORY batch on its way to the Log. */
 export interface LogHistory {
-  readonly isFill: boolean;
   add(target: string, line: ChatInput): void;
   /** Call after the last Line: asks for the next page of a gap, if one is open. */
   end(): void;
@@ -118,6 +114,14 @@ export class LogRecorder {
   /** Call every few seconds: moves the Sync markers that may move. */
   tick(serverIds: readonly string[]): void {
     for (const id of serverIds) this.sync.moveMarker(id);
+  }
+
+  /**
+   * The time to ask the latest History after when you join a channel: a little before
+   * the Sync marker, since the Log has the Lines up to it. Undefined: ask for all.
+   */
+  historySince(serverId: string): number | undefined {
+    return this.sync.historySince(serverId);
   }
 
   /** You joined `channel`, and honk asked for its latest History. */
@@ -177,7 +181,6 @@ export class LogRecorder {
     // The server times of its Lines, for the gap check.
     const times: number[] = [];
     return {
-      isFill: fill !== undefined,
       add: (lineTarget, input) => {
         const line = { ...this.chatLine(serverId, lineTarget, input), history: true };
         if (line.timeFromServer) times.push(line.time);

@@ -176,8 +176,6 @@ arrow key types no character.
 ### What honk does not do yet
 
 - Run on Windows.
-- Load scrollback from the log. You can search the log (see
-  [Search](#search)), but a buffer does not show its older lines from it yet.
 - Ignore a user.
 - Moderation commands such as `/kick`, `/ban` and `/mode`. Send them with
   `/raw` for now, such as `/raw KICK #channel nick`.
@@ -227,9 +225,16 @@ lines you sent once the server confirmed them, and joins, parts, quits, nick
 changes and kicks. It does not hold `*status`, lines that failed to send, or
 anything from `--demo`. Only you can read the file (mode 0600).
 
+Each channel and DM opens with its last 200 lines from the log, so the
+scrollback is still there after a restart. Scroll to the top of a buffer, with
+the mouse wheel or PageUp, to load 200 older lines at a time. A buffer holds
+up to 5000 lines; search (Ctrl+F) finds the older ones. A deleted message
+shows as `[message deleted by alice]`.
+
 After a reconnect, or when honk starts again, honk asks for the channel lines
 it missed, if the network or bouncer keeps chat history (such as Ergo or soju).
-It adds each line to the log once. DMs you missed while honk was closed are not
+It asks only for the lines after the last ones in the log, and adds each line
+to the log and the screen once. DMs you missed while honk was closed are not
 fetched yet.
 
 The settings go at the top level of the config file. These are the defaults:

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { searchCommand } from "../irc/commands.ts";
-import type { LogContext, SearchHit } from "../log/search.ts";
+import type { SearchHit } from "../log/search.ts";
 import { applyGlyphs } from "./glyphs.ts";
-import { contextMessages, hitRow, hitTime } from "./logSearch.ts";
+import { hitRow, hitTime } from "./logSearch.ts";
 
 applyGlyphs(true);
 
@@ -53,34 +53,6 @@ test("hitRow: a match past the row's end moves into view", () => {
     ],
   });
   expect(marked(hitRow(long, now, 50))).toBe("09:05  #rust  alice: ...and then the [borrow] checker");
-});
-
-test("contextMessages: Events read as they do on screen", () => {
-  const context: LogContext = {
-    serverId: "libera",
-    network: "Libera.Chat",
-    buffer: "#rust",
-    bufferKind: "channel",
-    match: 0,
-    lines: [
-      { id: 1, time: 0, kind: "message", nick: "me", text: "hi", self: true, mention: false },
-      { id: 2, time: 0, kind: "join", nick: "bob", text: "", self: false, mention: false },
-      { id: 3, time: 0, kind: "part", nick: "bob", text: "bye", self: false, mention: false },
-      { id: 4, time: 0, kind: "quit", nick: "carol", text: "", self: false, mention: false },
-      { id: 5, time: 0, kind: "nick", nick: "dave", subject: "dave_", text: "", self: false, mention: false },
-      { id: 6, time: 0, kind: "kick", nick: "op", subject: "eve", text: "spam", self: false, mention: false },
-      { id: 7, time: 0, kind: "topic", nick: "op", text: "Rust talk", self: false, mention: false },
-    ],
-  };
-  expect(contextMessages(context).map((m) => [m.kind, m.from, m.text, m.isSelf])).toEqual([
-    ["message", "me", "hi", true],
-    ["join", undefined, "bob joined #rust", false],
-    ["part", undefined, "bob left #rust (bye)", false],
-    ["part", undefined, "carol quit", false],
-    ["system", undefined, "dave is now known as dave_", false],
-    ["error", undefined, "eve was kicked by op (spam)", false],
-    ["system", undefined, "op changed the topic to: Rust talk", false],
-  ]);
 });
 
 test("searchCommand: the words after /search", () => {

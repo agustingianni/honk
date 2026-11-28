@@ -83,6 +83,8 @@ export type MessageKind =
 export interface ChatMessage {
   id: string;
   msgid?: string;
+  /** The row id of a Line loaded from the Log. See src/log/scrollback.ts. */
+  logId?: number;
   timestamp: Date;
   /** True if `timestamp` is the server's (a time tag), not honk's clock. See src/irc/replay.ts. */
   timeFromServer?: boolean;
@@ -117,6 +119,11 @@ export interface BufferState {
   firstUnreadId?: string;
   /** Max messages kept. Grows past the default when history is loaded, so it isn't trimmed away. */
   messageLimit?: number;
+  /**
+   * True once scrolling up found the Buffer at MAX_MESSAGES_WITH_HISTORY Lines, so it
+   * loads no older ones from the Log. The chat pane says that search finds them.
+   */
+  scrollbackFull?: boolean;
 }
 
 export interface ReconnectInfo {

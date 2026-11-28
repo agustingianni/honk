@@ -3,10 +3,11 @@
  * Log. With it, honk fills the gap after a restart or a reconnect:
  *
  *   last run ended at 21:00 (marker), honk starts at 23:00
- *   JOIN #honk -> CHATHISTORY LATEST #honk * 50   (for the screen, as before)
+ *   JOIN #honk -> CHATHISTORY LATEST #honk timestamp=20:59:55 50   (the newest 50
+ *                 after the marker; the screen has the Log's Lines up to it)
  *   the batch's oldest line is 22:40, after the marker: a gap
- *   CHATHISTORY AFTER #honk timestamp=20:59:55 100   (for the Log only; more pages
- *   until a page is empty or reaches 22:40)
+ *   CHATHISTORY AFTER #honk timestamp=20:59:55 100   (a fill, for the Log and the
+ *   screen; more pages until a page is empty or reaches 22:40)
  *
  * The marker moves only once no gap waits to be filled. Then, while connected, honk
  * logs every live Line, so the marker follows the server time of the newest live Line.
@@ -110,6 +111,17 @@ export class LogSync {
       s.markerRead = true;
     }
     return s.marker;
+  }
+
+  /**
+   * SYNC_FUZZ_MS before the marker of this connection, or undefined if the Network has
+   * no marker yet or the connection has no chathistory. The Replay rule drops the
+   * overlap.
+   */
+  historySince(serverId: string): number | undefined {
+    const s = this.servers.get(serverId);
+    const marker = s && this.marker(serverId, s);
+    return marker === undefined ? undefined : marker - SYNC_FUZZ_MS;
   }
 
   /** You joined Buffer `target` (nameKey), and honk asked for its latest History. */

@@ -18,6 +18,7 @@
 import type { Database } from "bun:sqlite";
 import { CASEMAPPINGS, nameKey } from "../irc/names.ts";
 import { CHAT_KINDS, sqlList } from "./schema.ts";
+import { linesBeside, STORED_COLUMNS, type StoredLine, type StoredRow, storedLine } from "./storedLine.ts";
 
 export interface SearchWord {
   text: string;
@@ -123,27 +124,13 @@ export interface SearchResult {
   more: boolean;
 }
 
-/** One Line of a Context view. */
-export interface ContextLine {
-  id: number;
-  /** Unix ms. */
-  time: number;
-  kind: string;
-  nick: string;
-  subject?: string;
-  /** As received, with formatting codes. */
-  text: string;
-  self: boolean;
-  mention: boolean;
-}
-
 /** The Lines around a search hit. */
 export interface LogContext {
   serverId: string;
   network: string;
   buffer: string;
   bufferKind: "channel" | "dm";
-  lines: ContextLine[];
+  lines: StoredLine[];
   /** The index of the hit in `lines`. */
   match: number;
 }
@@ -264,64 +251,32 @@ export function searchLog(db: Database, query: SearchQuery, limit: number): Sear
   };
 }
 
-interface ContextRow {
-  id: number;
-  ts: number;
-  kind: string;
-  nick: string;
-  subject: string | null;
-  text: string;
-  self: number;
-  mention: number;
-}
-
-function contextLine(r: ContextRow): ContextLine {
-  return {
-    id: r.id,
-    time: r.ts,
-    kind: r.kind,
-    nick: r.nick,
-    subject: r.subject ?? undefined,
-    text: r.text,
-    self: r.self === 1,
-    mention: r.mention === 1,
-  };
-}
-
 /**
  * The Line with row id `id` and up to `around` Lines on each side of it, from its
  * Buffer, Events too. Redacted Lines are left out. Undefined if the Line is gone or
  * was redacted after the search.
  */
 export function logContext(db: Database, id: number, around: number): LogContext | undefined {
-  const cols = "id, ts, kind, nick, subject, text, self, mention";
   const hit = db
     .query(
-      `SELECT ${cols.replace(/(\w+)/g, "m.$1")}, m.buffer_id, b.display AS buffer, b.kind AS bkind,
+      `SELECT ${STORED_COLUMNS.replace(/(\w+)/g, "m.$1")}, m.buffer_id, b.display AS buffer, b.kind AS bkind,
               n.config_id AS server, n.display AS network
        FROM message m JOIN buffer b ON b.id = m.buffer_id JOIN network n ON n.id = b.network_id
        WHERE m.id = ? AND m.redacted_at IS NULL`,
     )
     .get(id) as
-    | (ContextRow & { buffer_id: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string })
+    | (StoredRow & { buffer_id: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string })
     | null;
   if (!hit) return undefined;
-  const side = (cmp: "<" | ">", order: "DESC" | "ASC") =>
-    db
-      .query(
-        `SELECT ${cols} FROM message
-         WHERE buffer_id = ? AND redacted_at IS NULL AND (ts ${cmp} ? OR (ts = ? AND id ${cmp} ?))
-         ORDER BY ts ${order}, id ${order} LIMIT ?`,
-      )
-      .all(hit.buffer_id, hit.ts, hit.ts, id, around) as ContextRow[];
-  const before = side("<", "DESC").reverse();
-  const after = side(">", "ASC");
+  const from = { time: hit.ts, id };
+  const before = linesBeside(db, hit.buffer_id, "older", from, around, { withRedacted: false });
+  const after = linesBeside(db, hit.buffer_id, "newer", from, around, { withRedacted: false });
   return {
     serverId: hit.server,
     network: hit.network,
     buffer: hit.buffer,
     bufferKind: hit.bkind,
-    lines: [...before, hit, ...after].map(contextLine),
+    lines: [...before, storedLine(hit), ...after],
     match: before.length,
   };
 }
