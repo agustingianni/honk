@@ -279,10 +279,12 @@ function newestMatches(
   const last = select([], [], "message_fts.rowid DESC");
   if (last.length <= limit) return last.sort(byTime);
   const floor = Math.min(...last.map((r) => r.ts));
-  const before = Math.min(...last.map((r) => r.id));
+  const before = last.at(-1)!.id;
   const { first } = db
     .query(`SELECT min(id) AS first FROM message WHERE kind IN (${sqlList(CHAT_KINDS)}) AND ts >= ?`)
     .get(floor) as { first: number };
+  // Nothing was written late: the usual case.
+  if (first >= before) return last.sort(byTime);
   const late = select(
     ["message_fts.rowid >= ?", "message_fts.rowid < ?", "m.ts >= ?"],
     [first, before, floor],
