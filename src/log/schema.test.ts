@@ -18,6 +18,7 @@ test("prepare brings a new file to the current schema, with incremental vacuum",
   prepare(db);
   expect(userVersion(db)).toBe(SCHEMA_VERSION);
   expect(db.query("PRAGMA auto_vacuum").get()).toEqual({ auto_vacuum: 2 });
+  expect(db.query("PRAGMA journal_size_limit").get()).toEqual({ journal_size_limit: 16777216 });
   // A second prepare changes nothing.
   prepare(db);
   expect(userVersion(db)).toBe(SCHEMA_VERSION);

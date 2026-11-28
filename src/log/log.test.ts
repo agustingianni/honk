@@ -317,6 +317,30 @@ test("after a large prune, the free pages go back to the system in steps", () =>
   expect(texts()).toEqual([]);
 });
 
+test("a file without incremental vacuum does not try to free pages again and again", () => {
+  open().log.close();
+  const db = new Database(path);
+  db.run("PRAGMA auto_vacuum = NONE");
+  db.run("VACUUM");
+  db.close();
+  const { log, clock } = open({ retentionDays: 7 });
+  for (let i = 0; i < 2000; i++) {
+    log.add("libera", honk, line(`old ${i} `.repeat(20), { time: T - 30 * 86_400_000 + i }));
+  }
+  log.flush();
+  let vacuums = 0;
+  const conn = (log as unknown as { db: Database }).db;
+  const run = conn.run.bind(conn);
+  conn.run = ((sql: string, ...rest: never[]) => {
+    if (sql.includes("incremental_vacuum")) vacuums++;
+    return run(sql, ...rest);
+  }) as typeof conn.run;
+  clock.advance(60_000);
+  for (let i = 0; i < 100; i++) clock.advance(50);
+  expect(texts()).toEqual([]);
+  expect(vacuums).toBe(1);
+});
+
 test("a second honk reads the file but does not write it", () => {
   const first = open({}, 1000);
   const second = open({}, 2000, (pid) => pid === 1000);

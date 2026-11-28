@@ -621,10 +621,18 @@ export class Log {
     this.schedulePrune(more ? PRUNE_PAUSE_MS : PRUNE_EVERY_MS);
   }
 
-  /** Gives up to VACUUM_PAGES free pages back to the system. True if more are left. */
-  vacuumBatch(): boolean {
+  /**
+   * Gives up to VACUUM_PAGES free pages back to the system. True if more are left and
+   * this step freed some: in a file without auto_vacuum = INCREMENTAL it frees none.
+   */
+  private vacuumBatch(): boolean {
+    const free = () =>
+      (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
+    const before = free();
+    if (before === 0) return false;
     this.db.run(`PRAGMA incremental_vacuum(${VACUUM_PAGES})`);
-    return (this.db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count > 0;
+    const after = free();
+    return after > 0 && after < before;
   }
 
   /** Deletes up to PRUNE_BATCH rows older than their retention. Returns how many. */
