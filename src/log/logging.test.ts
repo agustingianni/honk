@@ -426,14 +426,14 @@ test("loadOlder above a Line not from the Log keeps the Log's Lines of the same 
   
   const { fake, manager, server } = await connect({
     seed: (seeding) => {
-      for (const [text, msgid] of [["x", "m1"], ["y", "m2"]]) {
+      for (const [text, msgid] of [["x", "seed1"], ["y", "seed2"]]) {
         seeding.add("net", honk, { kind: "message", nick: "alice", text: text!, msgid, time: t, timeFromServer: true });
       }
     },
   });
   manager.handleInput("/clear");
   // A live Line in the same second as the Log's Lines. It enters the Log too.
-  fake.sendRaw(`@msgid=m3;time=${new Date(t).toISOString()} :alice!a@h PRIVMSG #honk :z`);
+  fake.sendRaw(`@msgid=live3;time=${new Date(t).toISOString()} :alice!a@h PRIVMSG #honk :z`);
   const messages = () => server().buffers["#honk"]!.messages;
   await until(() => shown(messages()).includes("z"));
   expect(manager.loadOlder("net", "#honk")).toBe(2);
@@ -448,6 +448,21 @@ test("scrolling to the top of a channel you just joined shows your join once", a
   await Promise.resolve();
   const joins = server().buffers["#honk"]!.messages.filter((x) => x.kind === "join");
   expect(joins.map((x) => x.text)).toEqual(["You joined #honk"]);
+});
+
+test("your join shows once at the top even when the server clock is behind or the case differs", async () => {
+  const { fake, manager, server, rows } = await connect();
+  const behind = new Date(Date.now() - 10_000).toISOString();
+  fake.sendRaw(`@msgid=j1;time=${behind} :goose!goose@fake.host JOIN #skew`);
+  // The Buffer is #honk; the server writes the name in other case.
+  fake.sendRaw(`@msgid=j2 :goose!goose@fake.host JOIN #HONK`);
+  await until(() => rows().filter((r) => r.kind === "join" && r.self === 1).length === 3);
+  for (const name of ["#skew", "#honk"]) {
+    while (manager.loadOlder("net", name) > 0);
+    await Promise.resolve();
+    const joins = server().buffers[name]!.messages.filter((x) => x.kind === "join");
+    expect(joins.map((x) => x.msgid ?? "live")).toEqual(name === "#skew" ? ["j1"] : [expect.any(String), "j2"]);
+  }
 });
 
 test("a Buffer holds at most 5000 Lines, and then is marked full", async () => {
