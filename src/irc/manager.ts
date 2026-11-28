@@ -354,7 +354,9 @@ interface HistoryRequest {
    * For a /history, the id of the oldest Line on screen when it was asked. The batch is
    * older, so its Lines go before that one, also those with the same time.
    */
-  olderThan?: string;
+  beforeLineId?: string;
+  /** For a /history, how many lines it asked for. */
+  asked?: number;
 }
 
 /** Counts the labels sent with History requests, so each one is new on its connection. */
@@ -1661,15 +1663,20 @@ export class IrcManager {
             isHistory: true,
           }),
           replays,
-          request?.olderThan,
+          request?.beforeLineId,
         );
         anyNew ||= isNew;
         // After the screen: a Buffer this opens loads the Log, and must not find this
         // Line there already, or the screen drops it as a Replay without its badge.
         logHistory?.add(target, { kind: msgKind, from, text, tags: raw.tags, self: isSelf });
       }
-      // A /history that found nothing older says so, instead of nothing happening.
-      if (request && !request.fill && batchTarget && !anyNew) {
+      // A /history that found nothing older says so, instead of nothing happening. A full
+      // batch of Replays may have more behind it, so it does not say so.
+      const lines = batch.params.messages.filter(
+        (m) => m.command === "privmsg" || m.command === "notice",
+      );
+      const short = request?.asked === undefined || lines.length < request.asked;
+      if (request && !request.fill && batchTarget && !anyNew && short) {
         this.pushMessage(
           serverId,
           batchTarget,
@@ -2443,15 +2450,15 @@ export class IrcManager {
 
   /**
    * `batch` is the History batch `message` came in, if any. See replay.ts. A History
-   * line goes before the line with id `olderThan`, if the buffer still has it. Returns
-   * true if the buffer got the line.
+   * Line goes before the Line with id `beforeLineId`, if the Buffer still has it.
+   * Returns true if the Buffer got the Line.
    */
   private pushMessage(
     serverId: string,
     targetName: string,
     message: ChatMessage,
     batch?: HistoryBatch,
-    olderThan?: string,
+    beforeLineId?: string,
   ): boolean {
     const server = this.servers.get(serverId);
     const bufferName = this.bufferKey(serverId, targetName);
@@ -2489,8 +2496,9 @@ export class IrcManager {
     let at = message.isHistory
       ? timeOrderIndex(messages, message.timestamp.getTime())
       : messages.length;
-    const newer = olderThan === undefined ? -1 : messages.findLastIndex((m) => m.id === olderThan);
-    if (message.isHistory && newer >= 0) at = Math.min(at, newer);
+    const askedBeforeAt =
+      beforeLineId === undefined ? -1 : messages.findLastIndex((m) => m.id === beforeLineId);
+    if (message.isHistory && askedBeforeAt >= 0) at = Math.min(at, askedBeforeAt);
     messages.splice(at, 0, message);
     // History lines go in front of older lines, so trimming the oldest would drop them
     // right away. Grow the buffer's limit for them instead.
@@ -3420,19 +3428,24 @@ export class IrcManager {
         const oldest = buf?.messages.find(
           (m) => m.kind === "message" || m.kind === "action" || m.kind === "notice",
         );
+        // BEFORE leaves out its own time, so it starts just after the oldest Line: other
+        // Lines of its millisecond (its second, on a store of whole seconds) come too.
+        // The Replay rule drops the ones the screen has, so they are asked for on top.
+        const time = oldest?.timestamp.getTime();
+        const replays = buf?.messages.filter((m) => m.timestamp.getTime() === time).length ?? 0;
+        const asked = limit + replays;
         const label = historyLabel(client);
         this.getControl(server.id).historyRequests.push({
           target: this.key(server.id, activeBuffer),
           label,
-          olderThan: oldest?.id,
+          beforeLineId: oldest?.id,
+          asked,
         });
-        // BEFORE leaves out its own time, so it starts just after the oldest Line: other
-        // Lines of its millisecond (its second, on a store of whole seconds) come too.
-        // The Replay rule drops the ones the screen has.
-        const [subcommand, anchor] = oldest
-          ? (["BEFORE", timestampParam(oldest.timestamp.getTime() + PAGE_OVERLAP_MS)] as const)
-          : (["LATEST", "*"] as const);
-        requestHistory(client, subcommand, activeBuffer, anchor, limit, label);
+        const [subcommand, anchor] =
+          time !== undefined
+            ? (["BEFORE", timestampParam(time + PAGE_OVERLAP_MS)] as const)
+            : (["LATEST", "*"] as const);
+        requestHistory(client, subcommand, activeBuffer, anchor, asked, label);
         return;
       }
 

@@ -34,8 +34,10 @@ export const LATEST_LIMIT = 50;
 /** Lines asked for in each page of a fill. */
 export const FILL_LIMIT = 100;
 /**
- * How far before the newest Line of a full page the next page starts. AFTER leaves out
- * its own time, so a page cut inside a millisecond would skip the rest of it. On a store
+ * How far a History request reaches past the Line it starts from: a fill's next page
+ * starts this far before the newest Line of the page before, and a /history asks
+ * BEFORE this far after the oldest Line on screen. AFTER and BEFORE leave out their own
+ * time, so a page cut inside a millisecond would skip the rest of it. On a store
  * of whole seconds every time ends in .000, so 1 ms before brings that whole second
  * again. The Replay rule drops the Lines asked twice. A page that would only come again
  * (more than a page of Lines in one millisecond) goes on after its newest Line instead.
