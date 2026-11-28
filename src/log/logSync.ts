@@ -37,7 +37,8 @@ export const FILL_LIMIT = 100;
  * How far before the newest Line of a full page the next page starts. AFTER leaves out
  * its own time, so a page cut inside a millisecond would skip the rest of it. On a store
  * of whole seconds every time ends in .000, so 1 ms before brings that whole second
- * again. The Replay rule drops the Lines asked twice.
+ * again. The Replay rule drops the Lines asked twice. A page that would only come again
+ * (more than a page of Lines in one millisecond) goes on after its newest Line instead.
  */
 export const PAGE_OVERLAP_MS = 1;
 /** The most pages one fill asks for, so a long absence can't flood the connection. */
@@ -63,8 +64,6 @@ export interface Fill {
   until: number;
   /** Pages asked for so far, this one included. */
   pages: number;
-  /** The newest Line of the page before, if any: the next page should bring a newer one. */
-  newestBefore?: number;
 }
 
 /** What a History batch held: the server times of its Lines, and how many lines in all. */
@@ -241,9 +240,8 @@ export class LogSync {
 
   /**
    * The page after `fill`, until a page is empty or goes past the oldest Line of the
-   * screen's batch. A page that only reaches that time may be cut inside its
-   * millisecond (a second on a store of whole seconds), so one more page comes. A short
-   * page is not the end: a server may cap its pages below FILL_LIMIT.
+   * screen's batch. Pages overlap by PAGE_OVERLAP_MS. A short page is not the end: a
+   * server may cap its pages below FILL_LIMIT.
    */
   private nextPage(fill: Fill, page: HistoryPage): FillStep {
     if (page.lines === 0) return { type: "done" };
@@ -252,11 +250,9 @@ export class LogSync {
     const newest = Math.max(...page.times);
     if (newest > fill.until) return { type: "done" };
     if (fill.pages >= MAX_FILL_PAGES) return { type: "gave-up" };
-    // The same page again: more than a page of Lines in one millisecond (a second on a
-    // store of whole seconds). Go on after it; only that millisecond can lose Lines.
-    const stuck = fill.newestBefore !== undefined && newest <= fill.newestBefore;
-    const after = stuck ? newest : newest - PAGE_OVERLAP_MS;
-    return { type: "next", request: { after, until: fill.until, pages: fill.pages + 1, newestBefore: newest } };
+    // A page all in the millisecond after `fill.after` would only come again.
+    const after = Math.max(newest - PAGE_OVERLAP_MS, fill.after + 1);
+    return { type: "next", request: { after, until: fill.until, pages: fill.pages + 1 } };
   }
 
   /**

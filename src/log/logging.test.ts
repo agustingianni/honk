@@ -309,13 +309,13 @@ test("a fill page that ends inside a millisecond does not skip the rest of it", 
     // away 1..89, then away 90..110 in one millisecond, then away 111..160. The screen's
     // 50 are 111..160; the first fill page ("before" and away 1..99) ends inside that
     // millisecond, and the page after it must bring away 100..110.
-    const at = (i: number) => marker + 1000 + (i < 90 ? 0 : i <= 110 ? 1 : 2);
+    const timeOf = (i: number) => marker + 1000 + (i < 90 ? 0 : i <= 110 ? 1 : 2);
     for (let i = 1; i <= 160; i++) {
-      fake.now = () => at(i);
+      fake.now = () => timeOf(i);
       fake.say("alice", "#honk", `away ${i}`);
     }
     // Your JOIN on the reconnect comes after them in time too.
-    fake.now = () => at(160) + 1;
+    fake.now = () => timeOf(160) + 1;
   });
   await until(() => texts().includes("away 105"), HISTORY_WAIT_MS);
   const away = texts().filter((t) => t.startsWith("away "));

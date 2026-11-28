@@ -16,6 +16,7 @@ import { connect as netConnect, createServer, type Server, type Socket } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
+import { type Clock, systemClock } from "../../src/clock.ts";
 import {
   LineSplitter,
   parseLine,
@@ -354,10 +355,10 @@ export class FakeIrcd {
   }
 
   /**
-   * The server time for each new stored message or Event. A test sets it to put many
-   * messages in one millisecond.
+   * The server's clock, for every server time it sends or stores. A test sets it to put
+   * many messages in one millisecond.
    */
-  now: () => number = () => Date.now();
+  now: Clock["now"] = systemClock.now;
 
   /** The server time, in ms, of the stored message with this text, or undefined. */
   storedTime(text: string): number | undefined {
@@ -505,7 +506,7 @@ export class FakeIrcd {
   fillHistory(channel: string, count: number): void {
     const ch = this.ensureChannel(channel);
     const oldest =
-      this.history.find((m) => this.lower(m.target) === this.lower(ch.name))?.time ?? Date.now();
+      this.history.find((m) => this.lower(m.target) === this.lower(ch.name))?.time ?? this.now();
     const lines: StoredMessage[] = [];
     for (let i = count; i >= 1; i--) {
       const from = FILLER_NICKS[i % FILLER_NICKS.length]!;
@@ -644,7 +645,7 @@ export class FakeIrcd {
   private send(c: Client, line: string, tags: Record<string, string> = {}): void {
     const all: Record<string, string> = {};
     if (tags.batch && c.caps.has("batch")) all.batch = tags.batch;
-    if (c.caps.has("server-time")) all.time = tags.time ?? new Date().toISOString();
+    if (c.caps.has("server-time")) all.time = tags.time ?? new Date(this.now()).toISOString();
     if (tags.msgid && c.caps.has("message-tags")) all.msgid = tags.msgid;
     if (tags.label && c.caps.has("labeled-response")) all.label = tags.label;
     const tagStr = Object.entries(all)
@@ -999,7 +1000,7 @@ export class FakeIrcd {
     }
     const known = this.readMarkers.get(this.lower(target));
     if (known !== undefined && known >= ms) return this.sendMarkRead(c, target);
-    this.setReadMarker(target, Math.min(ms, Date.now()));
+    this.setReadMarker(target, Math.min(ms, this.now()));
   }
 
   /** Tells a client with draft/read-marker the marker for a target ("*" if none). */
@@ -1013,7 +1014,7 @@ export class FakeIrcd {
   /** 332 and 333: the topic and who set it. */
   private sendTopic(c: Client, ch: Channel): void {
     this.reply(c, "332", `${ch.name} :${ch.topic}`);
-    this.reply(c, "333", `${ch.name} ${ch.topicBy} ${Math.floor(Date.now() / 1000)}`);
+    this.reply(c, "333", `${ch.name} ${ch.topicBy} ${Math.floor(this.now() / 1000)}`);
   }
 
   private sendNames(c: Client, ch: Channel): void {
@@ -1135,7 +1136,7 @@ export class FakeIrcd {
     const me = this.lower(c.nick!);
     if (sub === "TARGETS") {
       const from = this.anchorTime(params[1]) ?? 0;
-      const to = this.anchorTime(params[2]) ?? Date.now();
+      const to = this.anchorTime(params[2]) ?? this.now();
       const latest = new Map<string, number>();
       for (const m of this.history) {
         if (m.time < Math.min(from, to) || m.time > Math.max(from, to) || isChannel(m.target))
