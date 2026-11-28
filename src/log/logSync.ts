@@ -209,7 +209,7 @@ export class LogSync {
     if (!s.pending.has(target)) return { type: "done" };
     const marker = this.marker(serverId, s);
     const oldest = times.length > 0 ? Math.min(...times) : undefined;
-    // At the marker's own time, Lines before the batch's oldest can still be missing.
+    // Lines in the marker's own millisecond can still be missing.
     if (marker === undefined || oldest === undefined || oldest < marker) return { type: "done" };
     return { type: "next", request: { after: marker - SYNC_FUZZ_MS, until: oldest, pages: 1 } };
   }
