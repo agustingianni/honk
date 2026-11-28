@@ -5,7 +5,8 @@ updates:
     schedule:
       interval: weekly
     # Wait a week before suggesting a new version. Most malicious releases are
-    # found and removed within days.
+    # found and removed within days. minimumReleaseAge in bunfig.toml uses the
+    # same wait for bun add and bun update, so change both together.
     cooldown:
       default-days: 7
     ignore:
