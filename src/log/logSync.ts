@@ -71,8 +71,11 @@ interface ServerSync {
   registeredAt: number;
   /** Buffers whose gap is not filled yet, as nameKey. A fill keeps its Buffer here. */
   pending: Set<string>;
-  /** True while the reply to CHATHISTORY TARGETS has not come: it may name more gaps. */
-  awaitingTargets: boolean;
+  /**
+   * When honk asked CHATHISTORY TARGETS, while its reply has not come: it may name more
+   * gaps. A reply that never comes stops counting after SETTLE_MS.
+   */
+  targetsAskedAt?: number;
   synced: boolean;
   lastMarkAt: number;
 }
@@ -96,7 +99,6 @@ export class LogSync {
       markerRead: false,
       registeredAt: this.clock.now(),
       pending: new Set(),
-      awaitingTargets: false,
       synced: false,
       lastMarkAt: 0,
     });
@@ -111,6 +113,12 @@ export class LogSync {
     const time = this.serverTime(serverId);
     if (s?.synced && time !== undefined) this.log.setSyncMarker(serverId, time);
     this.servers.delete(serverId);
+  }
+
+  /** The marker of this connection's Network, or undefined if it has none yet. */
+  syncMarker(serverId: string): number | undefined {
+    const s = this.servers.get(serverId);
+    return s && this.marker(serverId, s);
   }
 
   /** The marker for this connection, read once, after 005 named the bouncer network. */
@@ -128,13 +136,15 @@ export class LogSync {
    * overlap.
    */
   historySince(serverId: string): number | undefined {
-    const s = this.servers.get(serverId);
-    const marker = s && this.marker(serverId, s);
+    const marker = this.syncMarker(serverId);
     return marker === undefined ? undefined : marker - SYNC_FUZZ_MS;
   }
 
-  /** You joined Buffer `target` (nameKey), and honk asked for its latest History. */
-  joined(serverId: string, target: string): void {
+  /**
+   * honk asked for the latest History of Buffer `target` (nameKey): a channel you
+   * joined, or a DM the reply to TARGETS named.
+   */
+  askedLatest(serverId: string, target: string): void {
     const s = this.servers.get(serverId);
     if (!s || s.synced || this.marker(serverId, s) === undefined) return;
     s.pending.add(target);
@@ -144,17 +154,28 @@ export class LogSync {
   askedTargets(serverId: string): void {
     const s = this.servers.get(serverId);
     if (!s || s.synced || this.marker(serverId, s) === undefined) return;
-    s.awaitingTargets = true;
+    s.targetsAskedAt = this.clock.now();
   }
 
   /**
-   * The reply to CHATHISTORY TARGETS came, or a FAIL. Call `joined` for each DM it
-   * names first, so the marker waits for their gaps too.
+   * The reply to CHATHISTORY TARGETS came, or a FAIL. Call `askedLatest` for each DM
+   * it names first, so the marker waits for their gaps too.
    */
   answeredTargets(serverId: string): void {
     const s = this.servers.get(serverId);
-    if (!s?.awaitingTargets) return;
-    s.awaitingTargets = false;
+    if (s?.targetsAskedAt === undefined) return;
+    s.targetsAskedAt = undefined;
+    this.moveMarker(serverId);
+  }
+
+  /**
+   * The server sent a FAIL instead of the History of `target`. Asking again would most
+   * likely fail again (a service nick keeps no History), so its gap stops holding the
+   * marker. The FAIL itself is shown on screen.
+   */
+  historyFailed(serverId: string, target: string): void {
+    const s = this.servers.get(serverId);
+    if (!s?.pending.delete(target)) return;
     this.moveMarker(serverId);
   }
 
@@ -205,8 +226,9 @@ export class LogSync {
   moveMarker(serverId: string): void {
     const s = this.servers.get(serverId);
     const time = this.serverTime(serverId);
-    if (!s || time === undefined || s.pending.size > 0 || s.awaitingTargets) return;
+    if (!s || time === undefined || s.pending.size > 0) return;
     const now = this.clock.now();
+    if (s.targetsAskedAt !== undefined && now - s.targetsAskedAt < SETTLE_MS) return;
     if (now - s.registeredAt < SETTLE_MS) return;
     if (s.synced && now - s.lastMarkAt < MARK_EVERY_MS) return;
     s.synced = true;

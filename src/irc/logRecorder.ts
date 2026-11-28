@@ -124,9 +124,22 @@ export class LogRecorder {
     return this.sync.historySince(serverId);
   }
 
-  /** You joined `channel`, and honk asked for its latest History. */
-  joined(serverId: string, channel: string): void {
-    this.sync.joined(serverId, this.host.key(serverId, channel));
+  /**
+   * honk asked for the latest History of `target`: a channel you joined, or a DM that
+   * wrote to you while you were away.
+   */
+  askedLatest(serverId: string, target: string): void {
+    this.sync.askedLatest(serverId, this.host.key(serverId, target));
+  }
+
+  /** The server sent a FAIL instead of the History of `target`. See LogSync.historyFailed. */
+  historyFailed(serverId: string, target: string): void {
+    this.sync.historyFailed(serverId, this.host.key(serverId, target));
+  }
+
+  /** The Sync marker of the connection's Network, or undefined if it has none. */
+  syncMarker(serverId: string): number | undefined {
+    return this.sync.syncMarker(serverId);
   }
 
   /** honk asked who wrote to you (CHATHISTORY TARGETS). The Sync marker waits for the reply. */
@@ -139,7 +152,7 @@ export class LogRecorder {
    * FAIL (no nicks).
    */
   answeredTargets(serverId: string, nicks: readonly string[]): void {
-    for (const nick of nicks) this.joined(serverId, nick);
+    for (const nick of nicks) this.askedLatest(serverId, nick);
     this.sync.answeredTargets(serverId);
   }
 

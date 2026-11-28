@@ -480,3 +480,17 @@ test("on the first start, with no Sync marker, honk does not ask who wrote to yo
   await until(() => shown(server().buffers["#honk"]!.messages).includes("a live line after the MOTD"));
   expect(fake.received.some((l) => l.command === "CHATHISTORY" && l.params[0] === "TARGETS")).toBe(false);
 });
+
+test("when TARGETS fails, a DM open on screen still gets the History it missed", async () => {
+  const { fake, manager, server, texts } = await connect();
+  fake.say("dave", "goose", "hi");
+  await until(() => texts().includes("hi"));
+  log!.setSyncMarker("net", Date.now());
+  manager.disconnectServer("net");
+  fake.say("dave", "goose", "while away");
+  fake.failTargets = true;
+  await manager.connectServer("net");
+  await until(() => texts().includes("while away"), 5000);
+
+  expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
+});

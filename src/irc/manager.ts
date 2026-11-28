@@ -84,7 +84,7 @@ import {
 } from "./readMarker.ts";
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
 import type { Log } from "../log/log.ts";
-import { FILL_LIMIT, type Fill, SYNC_FUZZ_MS } from "../log/logSync.ts";
+import { FILL_LIMIT, type Fill } from "../log/logSync.ts";
 import { SCROLLBACK_LINES, storedMessages } from "../log/scrollback.ts";
 import { LogRecorder } from "./logRecorder.ts";
 
@@ -1339,33 +1339,8 @@ export class IrcManager {
     // The nicks that wrote to you while the connection was down. Load each DM from that
     // time; the missed-line checks in pushMessage then badge and notify it. See missed.ts.
     client.on("batch_end", (batch) => {
-      if (!TARGETS_BATCH_TYPES.has(batch.params.type)) return;
-      const server = live();
-      const ctrl = this.controls.get(serverId);
-      if (!server || !ctrl?.missed) return;
-      const missed = ctrl.missed;
-      const named = dmTargets(batch.params.messages, [missed.nick, server.nick], this.casemapping(serverId));
-      // The list is a hint, not complete (ircv3-specifications#604), so the DMs open on
-      // screen ask too.
-      const nicks = [...named];
-      for (const name of server.bufferOrder) {
-        if (server.buffers[name]?.kind === "dm" && !nicks.some((n) => this.same(serverId, n, name))) {
-          nicks.push(name);
-        }
-      }
-      const buffers = new Set(missed.buffers);
-      for (const nick of nicks) buffers.add(this.bufferKey(serverId, nick));
-      ctrl.missed = { ...missed, buffers };
-      const since = timestampParam(missed.since - MISSED_MARGIN_MS);
-      const markers = client.state.caps.enabled.has(READ_MARKER_CAP);
-      for (const nick of nicks) {
-        // A DM has no JOIN to bring its marker, so ask for it. The server answers before
-        // the history, so a line you read on another client isn't counted as missed.
-        if (markers) requestMarkRead(client, nick);
-        // The newest 50, as on a join. The Log asks for the rest. See logSync.ts.
-        requestHistory(client, "LATEST", nick, since, 50);
-      }
-      this.logRecorder?.answeredTargets(serverId, nicks);
+      if (!TARGETS_BATCH_TYPES.has(batch.params.type) || !live()) return;
+      this.loadMissedDms(serverId, client, batch.params.messages);
     });
 
     client.on("isupport:network", (msg) => {
@@ -1485,7 +1460,7 @@ export class IrcManager {
           const held = buf?.messages.some((m) => m.logId !== undefined) === true;
           const since = held ? this.logRecorder?.historySince(serverId) : undefined;
           requestHistory(client, "LATEST", channel, since === undefined ? "*" : timestampParam(since), 50);
-          this.logRecorder?.joined(serverId, channel);
+          this.logRecorder?.askedLatest(serverId, channel);
         }
       } else {
         this.pushMessage(
@@ -1908,8 +1883,13 @@ export class IrcManager {
           label,
           target === undefined ? undefined : this.key(serverId, target),
         );
-        // No reply to TARGETS comes now, so the Sync marker stops waiting for one.
-        if (msg.params[2]?.toUpperCase() === "TARGETS") this.logRecorder?.answeredTargets(serverId, []);
+        if (msg.params[2]?.toUpperCase() === "TARGETS") {
+          // No list comes. The DMs open on screen still ask.
+          this.loadMissedDms(serverId, client, []);
+        } else if (target !== undefined && (!failed || failed.fill)) {
+          // Not a /history you typed: the Log stops waiting for this History.
+          this.logRecorder?.historyFailed(serverId, failed?.target ?? target);
+        }
         const buffer = failed?.target ?? target;
         if (buffer !== undefined && this.hasBuffer(serverId, buffer)) where = buffer;
       }
@@ -2632,15 +2612,15 @@ export class IrcManager {
     const server = this.servers.get(serverId);
     if (!server || ctrl.targetsAsked || !client.state.caps.enabled.has("draft/chathistory")) return;
     ctrl.targetsAsked = true;
-    const logSince = this.logRecorder?.historySince(serverId);
+    const marker = this.logRecorder?.syncMarker(serverId);
     // The first connection of this run: what you missed is what the Log misses. No
     // channel counts as missed, the same as on any start.
-    if (!ctrl.missed && logSince !== undefined) {
-      ctrl.missed = { since: logSince + SYNC_FUZZ_MS, nick: server.nick, buffers: new Set() };
+    if (!ctrl.missed && marker !== undefined) {
+      ctrl.missed = { since: marker, nick: server.nick, buffers: new Set() };
     }
     if (!ctrl.missed) return;
     // From the earlier of the two, so a DM the Log misses is found too.
-    const from = Math.min(ctrl.missed.since - MISSED_MARGIN_MS, logSince ?? Infinity);
+    const from = Math.min(ctrl.missed.since, marker ?? Infinity) - MISSED_MARGIN_MS;
     void client.send(
       "CHATHISTORY" as never,
       "TARGETS" as never,
@@ -2649,6 +2629,43 @@ export class IrcManager {
       "50" as never,
     );
     this.logRecorder?.askedTargets(serverId);
+  }
+
+  /**
+   * The reply to TARGETS came (`lines`), or a FAIL (no lines). Loads each DM that wrote
+   * to you since the missed window began: the missed-line checks in pushMessage then
+   * badge and notify it. See missed.ts.
+   */
+  private loadMissedDms(
+    serverId: string,
+    client: Client,
+    lines: readonly { command?: string; params: readonly string[] }[],
+  ): void {
+    const server = this.servers.get(serverId);
+    const ctrl = this.controls.get(serverId);
+    if (!server || !ctrl?.missed) return;
+    const missed = ctrl.missed;
+    const nicks = dmTargets(lines, [missed.nick, server.nick], this.casemapping(serverId));
+    // The list is a hint, not complete (ircv3-specifications#604), so the DMs open on
+    // screen ask too.
+    for (const name of server.bufferOrder) {
+      if (server.buffers[name]?.kind === "dm" && !nicks.some((n) => this.same(serverId, n, name))) {
+        nicks.push(name);
+      }
+    }
+    const buffers = new Set(missed.buffers);
+    for (const nick of nicks) buffers.add(this.bufferKey(serverId, nick));
+    ctrl.missed = { ...missed, buffers };
+    const since = timestampParam(missed.since - MISSED_MARGIN_MS);
+    const markers = client.state.caps.enabled.has(READ_MARKER_CAP);
+    for (const nick of nicks) {
+      // A DM has no JOIN to bring its marker, so ask for it. The server answers before
+      // the history, so a line you read on another client isn't counted as missed.
+      if (markers) requestMarkRead(client, nick);
+      // The newest 50, as on a join. The Log asks for the rest. See logSync.ts.
+      requestHistory(client, "LATEST", nick, since, 50);
+    }
+    this.logRecorder?.answeredTargets(serverId, nicks);
   }
 
   /** Remembers what honk knew when a registered connection is lost. See missed.ts. */
