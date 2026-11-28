@@ -16,7 +16,7 @@
     "demo": "bun run src/index.tsx --demo",
     "typecheck": "bun check",
     "test": "bun test --parallel",
-    "build": "bun build src/index.tsx --compile --define process.env.NODE_ENV='\"production\"' --outfile dist/honk",
+    "build": "bun build src/index.tsx --compile --production --outfile dist/honk",
     "release": "bun scripts/release.ts",
     "fakeircd": "bun dev/fakeircd/cli.ts",
     "fetch-themes": "bun scripts/fetch-themes.ts",
