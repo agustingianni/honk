@@ -93,7 +93,7 @@ test("after a gap, honk asks for the History between the marker and the screen's
   // A full page: ask for the next one, from just before its newest line, so the rest of
   // that line's millisecond is not skipped.
   const second = sync.batchEnded("libera", "#honk", fullPage(T - 3_000_000, T - 2_000_000), request);
-  const next = { after: T - 2_000_000 - PAGE_OVERLAP_MS, until: T - 600_000, pages: 2, reached: T - 2_000_000 };
+  const next = { after: T - 2_000_000 - PAGE_OVERLAP_MS, until: T - 600_000, pages: 2, newestBefore: T - 2_000_000 };
   expect(second).toEqual({ type: "next", request: next });
 
   // This page goes past the screen's oldest line: the gap is closed and the marker moves.
@@ -157,34 +157,53 @@ test("a fill gives up after MAX_FILL_PAGES pages, and the marker stays before th
   expect(log.syncMarker("libera")).toBe(T - 3_600_000);
 });
 
-test("a fill page with fewer lines than asked for ends the fill", () => {
+test("an empty fill page ends the fill", () => {
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
   const fill = { after: T - 3_605_000, until: T - 600_000, pages: 1 };
-  expect(sync.batchEnded("libera", "#honk", short(T - 3_000_000), fill)).toEqual({ type: "done" });
+  expect(sync.batchEnded("libera", "#honk", short(), fill)).toEqual({ type: "done" });
 });
 
-test("a full fill page that ends at the time of the screen's oldest line asks for one more", () => {
-  // The page may be cut inside that second: Lines of it can be in neither batch.
+test("a fill page that is short but does not reach the screen's batch asks for more", () => {
+  // A server may cap its pages below FILL_LIMIT, so a short page is not the end.
+  log.setSyncMarker("libera", T - 3_600_000);
+  sync.start("libera");
+  sync.askedLatest("libera", "#honk");
+  const fill = { after: T - 3_605_000, until: T - 600_000, pages: 1 };
+  expect(sync.batchEnded("libera", "#honk", short(T - 3_000_000), fill).type).toBe("next");
+});
+
+test("a fill page with lines but no server times gives up, and the marker stays", () => {
+  log.setSyncMarker("libera", T - 3_600_000);
+  sync.start("libera");
+  sync.askedLatest("libera", "#honk");
+  const fill = { after: T - 3_605_000, until: T - 600_000, pages: 1 };
+  expect(sync.batchEnded("libera", "#honk", { times: [], lines: FILL_LIMIT }, fill)).toEqual({ type: "gave-up" });
+});
+
+test("a fill page that ends at the time of the screen's oldest Line asks for one more", () => {
+  // The page may be cut inside that millisecond: Lines of it can be in neither batch.
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
   const fill = { after: T - 3_605_000, until: T - 600_000, pages: 1 };
   expect(sync.batchEnded("libera", "#honk", fullPage(T - 3_000_000, T - 600_000), fill)).toEqual({
     type: "next",
-    request: { after: T - 600_000 - PAGE_OVERLAP_MS, until: T - 600_000, pages: 2, reached: T - 600_000 },
+    request: { after: T - 600_000 - PAGE_OVERLAP_MS, until: T - 600_000, pages: 2, newestBefore: T - 600_000 },
   });
 });
 
-test("a full fill page with no Line newer than the page before gives up", () => {
-  // More than FILL_LIMIT Lines in one millisecond: asking again brings the same page.
+test("a fill page with no Line newer than the page before goes on past that millisecond", () => {
+  // More than FILL_LIMIT Lines in one millisecond: asking with the overlap brings the
+  // same page, so the next one starts after it. Only that millisecond can lose Lines.
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
   sync.askedLatest("libera", "#honk");
-  const fill = { after: T - 2_000_001, until: T - 600_000, pages: 2, reached: T - 2_000_000 };
+  const fill = { after: T - 2_000_001, until: T - 600_000, pages: 2, newestBefore: T - 2_000_000 };
   expect(sync.batchEnded("libera", "#honk", fullPage(T - 2_000_000, T - 2_000_000), fill)).toEqual({
-    type: "gave-up",
+    type: "next",
+    request: { after: T - 2_000_000, until: T - 600_000, pages: 3, newestBefore: T - 2_000_000 },
   });
 });
 

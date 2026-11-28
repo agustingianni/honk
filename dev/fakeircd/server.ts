@@ -354,10 +354,10 @@ export class FakeIrcd {
   }
 
   /**
-   * The server time for each new stored message or Event, instead of the clock. A test
-   * sets it to put many messages in one millisecond.
+   * The server time for each new stored message or Event. A test sets it to put many
+   * messages in one millisecond.
    */
-  now?: () => number;
+  now: () => number = () => Date.now();
 
   /** The server time, in ms, of the stored message with this text, or undefined. */
   storedTime(text: string): number | undefined {
@@ -387,7 +387,7 @@ export class FakeIrcd {
    * Ergo does. Returns the tags for the live line: the same msgid and time.
    */
   private storeEvent(nick: string, channels: string[], event: string): { msgid: string; time: string } {
-    const time = this.now?.() ?? Date.now();
+    const time = this.now();
     const msgid = `m${this.nextMsgId++}`;
     for (const target of channels) {
       this.history.push({ time, msgid, from: nick, command: "EVENT", target, text: event });
@@ -725,7 +725,7 @@ export class FakeIrcd {
     sender: Client | null,
   ): void {
     const msg: StoredMessage = {
-      time: this.now?.() ?? Date.now(),
+      time: this.now(),
       msgid: `m${this.nextMsgId++}`,
       from,
       command,
