@@ -1,0 +1,7 @@
+# Settings for `bun install` and `bun add` in this repo. The honk binary never
+# reads this file: it is built with --no-compile-autoload-bunfig.
+[install]
+# Do not install a version published less than 7 days ago, the same wait as
+# the Dependabot cooldown. Most malicious releases are found and removed
+# within days.
+minimumReleaseAge = 604800 # seconds
