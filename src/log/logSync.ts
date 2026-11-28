@@ -145,27 +145,31 @@ export class LogSync {
    * joined, or a DM the reply to TARGETS named.
    */
   askedLatest(serverId: string, target: string): void {
-    const s = this.servers.get(serverId);
-    if (!s || s.synced || this.marker(serverId, s) === undefined) return;
-    s.pending.add(target);
+    this.unsynced(serverId)?.pending.add(target);
   }
 
   /** honk asked who wrote to you since the marker. The marker waits for the reply. */
   askedTargets(serverId: string): void {
-    const s = this.servers.get(serverId);
-    if (!s || s.synced || this.marker(serverId, s) === undefined) return;
-    s.targetsAskedAt = this.clock.now();
+    const s = this.unsynced(serverId);
+    if (s) s.targetsAskedAt = this.clock.now();
   }
 
   /**
-   * The reply to CHATHISTORY TARGETS came, or a FAIL. Call `askedLatest` for each DM
-   * it names first, so the marker waits for their gaps too.
+   * The reply to CHATHISTORY TARGETS came, or a FAIL. `targets` (nameKeys): the DMs
+   * honk then asked the latest History of. The marker waits for their gaps instead.
    */
-  answeredTargets(serverId: string): void {
+  answeredTargets(serverId: string, targets: readonly string[]): void {
+    for (const target of targets) this.askedLatest(serverId, target);
     const s = this.servers.get(serverId);
     if (s?.targetsAskedAt === undefined) return;
     s.targetsAskedAt = undefined;
     this.moveMarker(serverId);
+  }
+
+  /** The connection, if its marker may still wait for gaps: it has one, and is not synced. */
+  private unsynced(serverId: string): ServerSync | undefined {
+    const s = this.servers.get(serverId);
+    return s && !s.synced && this.marker(serverId, s) !== undefined ? s : undefined;
   }
 
   /**

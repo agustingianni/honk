@@ -1336,8 +1336,6 @@ export class IrcManager {
       }
     });
 
-    // The nicks that wrote to you while the connection was down. Load each DM from that
-    // time; the missed-line checks in pushMessage then badge and notify it. See missed.ts.
     client.on("batch_end", (batch) => {
       if (!TARGETS_BATCH_TYPES.has(batch.params.type) || !live()) return;
       this.loadMissedDms(serverId, client, batch.params.messages);
@@ -1372,9 +1370,8 @@ export class IrcManager {
       this.settleCasemapping(serverId);
       this.emit();
     });
-    // A server that sends no CASEMAPPING has sent all its 005 lines by the end of the
-    // MOTD, so the default stands.
-    // All 005 lines are in by then too, so the Log knows the Network and its Sync marker.
+    // A server has sent all its 005 lines by the end of the MOTD. Without CASEMAPPING the
+    // default stands, and the Log knows the Network (and its Sync marker) by then.
     for (const end of ["raw:rpl_endofmotd", "raw:err_nomotd"] as const) {
       client.on(end, () => {
         if (!live()) return;
@@ -1883,14 +1880,14 @@ export class IrcManager {
           label,
           target === undefined ? undefined : this.key(serverId, target),
         );
+        const buffer = failed?.target ?? target;
         if (msg.params[2]?.toUpperCase() === "TARGETS") {
           // No list comes. The DMs open on screen still ask.
           this.loadMissedDms(serverId, client, []);
-        } else if (target !== undefined && (!failed || failed.fill)) {
+        } else if (buffer !== undefined && (!failed || failed.fill)) {
           // Not a /history you typed: the Log stops waiting for this History.
-          this.logRecorder?.historyFailed(serverId, failed?.target ?? target);
+          this.logRecorder?.historyFailed(serverId, buffer);
         }
-        const buffer = failed?.target ?? target;
         if (buffer !== undefined && this.hasBuffer(serverId, buffer)) where = buffer;
       }
       this.pushMessage(
@@ -2648,10 +2645,9 @@ export class IrcManager {
     const nicks = dmTargets(lines, [missed.nick, server.nick], this.casemapping(serverId));
     // The list is a hint, not complete (ircv3-specifications#604), so the DMs open on
     // screen ask too.
+    const named = new Set(nicks.map((n) => this.key(serverId, n)));
     for (const name of server.bufferOrder) {
-      if (server.buffers[name]?.kind === "dm" && !nicks.some((n) => this.same(serverId, n, name))) {
-        nicks.push(name);
-      }
+      if (server.buffers[name]?.kind === "dm" && !named.has(this.key(serverId, name))) nicks.push(name);
     }
     const buffers = new Set(missed.buffers);
     for (const nick of nicks) buffers.add(this.bufferKey(serverId, nick));

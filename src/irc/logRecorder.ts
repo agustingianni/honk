@@ -152,8 +152,7 @@ export class LogRecorder {
    * FAIL (no nicks).
    */
   answeredTargets(serverId: string, nicks: readonly string[]): void {
-    for (const nick of nicks) this.askedLatest(serverId, nick);
-    this.sync.answeredTargets(serverId);
+    this.sync.answeredTargets(serverId, nicks.map((nick) => this.host.key(serverId, nick)));
   }
 
   /** Adds a Line to the Log of Buffer `bufferName`, unless it is *status. */

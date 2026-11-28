@@ -141,8 +141,7 @@ test("the marker waits for the reply to TARGETS, and then for the gap of each DM
   expect(log.syncMarker("libera")).toBe(T - 3_600_000);
 
   // The reply names dave.
-  sync.askedLatest("libera", "dave");
-  sync.answeredTargets("libera");
+  sync.answeredTargets("libera", ["dave"]);
   expect(log.syncMarker("libera")).toBe(T - 3_600_000);
 
   expect(sync.batchEnded("libera", "dave", [T - 4_000_000, T - 10])).toEqual({ type: "done" });

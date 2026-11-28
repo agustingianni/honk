@@ -118,6 +118,13 @@ async function connect(
   return { fake: irc, manager, server, query, rows, texts, checkIndex, search, start };
 }
 
+/** Quits honk after it synced up to now, as at the end of a run. See logSync.ts. */
+function quitSynced() {
+  log!.setSyncMarker("net", Date.now());
+  m!.disconnectAll();
+  log!.close();
+}
+
 /** A time tag in the whole second `s` seconds after a fixed start. */
 const at = (s: number, ms = 0) => new Date(Date.parse("2026-11-27T21:35:00Z") + s * 1000 + ms).toISOString();
 
@@ -369,11 +376,7 @@ test("after a restart, the screen shows the Log and then the History it missed, 
   const { fake, texts, start } = await connect();
   fake.say("alice", "#honk", "before");
   await until(() => texts().includes("before"));
-  // As if this connection had synced up to now. See logSync.ts.
-  log!.setSyncMarker("net", Date.now());
-  // Quit honk.
-  m!.disconnectAll();
-  log!.close();
+  quitSynced();
   // 60 lines while honk is closed: more than the 50 the screen asks for on join.
   for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
   await start();
@@ -426,13 +429,6 @@ test("a Buffer holds at most 5000 Lines, and then is marked full", async () => {
   expect(server().buffers["#honk"]!.scrollbackFull).toBe(true);
 });
 
-/** Quits honk after it synced up to now, as at the end of a run. See logSync.ts. */
-function quitSynced() {
-  log!.setSyncMarker("net", Date.now());
-  m!.disconnectAll();
-  log!.close();
-}
-
 test("a DM sent while honk was closed enters the Log once after the next start, and opens with a badge", async () => {
   const { fake, rows, start } = await connect();
   quitSynced();
@@ -460,20 +456,6 @@ test("60 DMs while honk was closed: the Log fills the gap past the first 50, eac
   expect(onScreen.filter((t) => t.startsWith("dm ")).toSorted()).toEqual(all);
 });
 
-test("a DM open on screen gets the History it missed even when TARGETS leaves it out", async () => {
-  const { fake, manager, server, texts } = await connect();
-  fake.say("dave", "goose", "hi");
-  await until(() => texts().includes("hi"));
-  log!.setSyncMarker("net", Date.now());
-  manager.disconnectServer("net");
-  fake.say("dave", "goose", "while away");
-  fake.hiddenTargets.add("dave");
-  await manager.connectServer("net");
-  await until(() => texts().includes("while away"), 5000);
-
-  expect(shown(server().buffers["dave"]!.messages)).toEqual(["hi", "while away"]);
-});
-
 test("on the first start, with no Sync marker, honk does not ask who wrote to you", async () => {
   const { fake, server } = await connect();
   fake.say("alice", "#honk", "a live line after the MOTD");
@@ -481,14 +463,17 @@ test("on the first start, with no Sync marker, honk does not ask who wrote to yo
   expect(fake.received.some((l) => l.command === "CHATHISTORY" && l.params[0] === "TARGETS")).toBe(false);
 });
 
-test("when TARGETS fails, a DM open on screen still gets the History it missed", async () => {
+test.each([
+  ["leaves it out", (fake: FakeIrcd) => fake.hiddenTargets.add("dave")],
+  ["fails", (fake: FakeIrcd) => (fake.failTargets = true)],
+])("a DM open on screen gets the History it missed when TARGETS %s", async (_, setUp) => {
   const { fake, manager, server, texts } = await connect();
   fake.say("dave", "goose", "hi");
   await until(() => texts().includes("hi"));
   log!.setSyncMarker("net", Date.now());
   manager.disconnectServer("net");
   fake.say("dave", "goose", "while away");
-  fake.failTargets = true;
+  setUp(fake);
   await manager.connectServer("net");
   await until(() => texts().includes("while away"), 5000);
 
