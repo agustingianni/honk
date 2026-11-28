@@ -353,6 +353,11 @@ export class FakeIrcd {
     for (const c of this.clients) this.sendMarkRead(c, target);
   }
 
+  /** The server time, in ms, of the stored message with this text, or undefined. */
+  storedTime(text: string): number | undefined {
+    return this.history.find((m) => m.text === text)?.time;
+  }
+
   /** The read marker for a target in ms, or undefined if nobody set one. */
   readMarker(target: string): number | undefined {
     return this.readMarkers.get(this.lower(target));

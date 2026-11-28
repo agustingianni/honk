@@ -2,7 +2,7 @@
  * honk against fakeircd, writing a real logs.db. Each test checks the rows, and the
  * full-text index with FTS5's own integrity check.
  */
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +12,10 @@ import { until } from "../../dev/fakeircd/testing.ts";
 import { IrcManager } from "../irc/manager.ts";
 import type { Casemapping } from "../irc/names.ts";
 import { DEFAULT_LOG_SETTINGS, type Log, openLog } from "./log.ts";
+
+// Longer than the 5 s `until` waits below, so a slow wait fails there with its own
+// message, and stops polling before afterEach removes the Log file.
+setDefaultTimeout(15_000);
 
 let irc: FakeIrcd | undefined;
 let m: IrcManager | undefined;
@@ -265,6 +269,18 @@ test("after a reconnect, honk asks for the History the Log misses and stores and
   const onScreen = shown(server().buffers["#honk"]!.messages);
   expect(onScreen.filter((t) => t.startsWith("away ")).toSorted()).toEqual(away.toSorted());
   checkIndex();
+});
+
+test("after a reconnect, Lines in the same millisecond as the Sync marker are filled too", async () => {
+  const { fake, manager, texts } = await connect();
+  await whileAway(manager, () => {
+    for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
+    // The marker has the time of "away 11", the oldest Line of the screen's 50. Lines
+    // of that same millisecond before it are not in that batch.
+    log!.setSyncMarker("net", fake.storedTime("away 11")!);
+  });
+  await until(() => texts().includes("away 1"), 5000);
+  expect(texts().filter((t) => t.startsWith("away "))).toHaveLength(60);
 });
 
 test("a server without IRCv3: every live Line is logged with honk's time, and no History is asked", async () => {

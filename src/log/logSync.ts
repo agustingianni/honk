@@ -5,7 +5,7 @@
  *   last run ended at 21:00 (marker), honk starts at 23:00
  *   JOIN #honk -> CHATHISTORY LATEST #honk timestamp=20:59:55 50   (the newest 50
  *                 after the marker; the screen has the Log's Lines up to it)
- *   the batch's oldest line is 22:40, after the marker: a gap
+ *   the batch's oldest line is 22:40, not before the marker: a gap
  *   CHATHISTORY AFTER #honk timestamp=20:59:55 100   (a fill, for the Log and the
  *   screen; more pages until a page is empty or reaches 22:40)
  *
@@ -209,7 +209,10 @@ export class LogSync {
     if (!s.pending.has(target)) return { type: "done" };
     const marker = this.marker(serverId, s);
     const oldest = times.length > 0 ? Math.min(...times) : undefined;
-    if (marker === undefined || oldest === undefined || oldest <= marker) return { type: "done" };
+    // Only a Line older than the marker shows the batch reaches back far enough. Lines
+    // in the marker's own millisecond may have come after it, and a full batch can cut
+    // them off.
+    if (marker === undefined || oldest === undefined || oldest < marker) return { type: "done" };
     return { type: "next", request: { after: marker - SYNC_FUZZ_MS, until: oldest, pages: 1 } };
   }
 

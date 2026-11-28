@@ -94,6 +94,19 @@ test("no fill when the screen's History reaches back past the marker", () => {
   expect(sync.batchEnded("libera", "#quiet", [])).toEqual({ type: "done" });
 });
 
+test("a batch whose oldest Line has the marker's time still leaves a gap", () => {
+  // Lines in the same millisecond as the marker may come after it, and a full batch can
+  // cut them off.
+  const marker = T - 3_600_000;
+  log.setSyncMarker("libera", marker);
+  sync.start("libera");
+  sync.askedLatest("libera", "#honk");
+  expect(sync.batchEnded("libera", "#honk", [marker, T - 10])).toEqual({
+    type: "next",
+    request: { after: marker - SYNC_FUZZ_MS, until: marker, pages: 1 },
+  });
+});
+
 test("a fill gives up after MAX_FILL_PAGES pages, and the marker stays before the gap", () => {
   log.setSyncMarker("libera", T - 3_600_000);
   sync.start("libera");
