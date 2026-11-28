@@ -233,7 +233,7 @@ export class LogRecorder {
     lines: number,
     fill: Fill | undefined,
   ): void {
-    const step = this.sync.batchEnded(serverId, targetKey, times, fill, lines);
+    const step = this.sync.batchEnded(serverId, targetKey, times, lines, fill);
     if (step.type === "gave-up") {
       this.host.notice(
         serverId,

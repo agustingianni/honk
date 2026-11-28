@@ -5,8 +5,7 @@
  *   last run ended at 21:00 (marker), honk starts at 23:00
  *   JOIN #honk -> CHATHISTORY LATEST #honk timestamp=20:59:55 50   (the newest 50
  *                 after the marker; the screen has the Log's Lines up to it)
- *   the batch's oldest line is 22:40, after the marker: a gap (also a full batch
- *   whose oldest line has the marker's time: more Lines can share that millisecond)
+ *   the batch's oldest line is 22:40, after the marker: a gap
  *   CHATHISTORY AFTER #honk timestamp=20:59:55 100   (a fill, for the Log and the
  *   screen; more pages until a page is empty or reaches 22:40)
  *
@@ -187,16 +186,16 @@ export class LogSync {
   }
 
   /**
-   * A History batch for `target` ended, with Lines at server times `times`. `fill` is
-   * the fill it answers, if it is one. `lines`: how many lines the batch held, Events
-   * too. Says whether to ask for another page.
+   * A History batch for `target` ended, with Lines at server times `times`, and
+   * `lines` lines in all, Events too. `fill` is the fill it answers, if it is one.
+   * Says whether to ask for another page.
    */
   batchEnded(
     serverId: string,
     target: string,
     times: number[],
+    lines: number,
     fill?: Fill,
-    lines = times.length,
   ): FillStep {
     const s = this.servers.get(serverId);
     if (!s) return { type: "done" };

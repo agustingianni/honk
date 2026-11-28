@@ -2658,7 +2658,7 @@ export class IrcManager {
       // A DM has no JOIN to bring its marker, so ask for it. The server answers before
       // the history, so a line you read on another client isn't counted as missed.
       if (markers) requestMarkRead(client, nick);
-      // The newest 50, as on a join. The Log asks for the rest. See logSync.ts.
+      // The newest LATEST_LIMIT, as on a join. The Log asks for the rest. See logSync.ts.
       requestHistory(client, "LATEST", nick, since, LATEST_LIMIT);
     }
     this.logRecorder?.answeredTargets(serverId, nicks);
