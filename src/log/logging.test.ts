@@ -84,12 +84,6 @@ async function connect(
     seeding.close();
   }
   const manager = await start();
-  /** Quits honk and starts it again on the same Log. */
-  const restart = async () => {
-    m!.disconnectAll();
-    log!.close();
-    return start();
-  };
 
   const query = <T>(sql: string): T[] => {
     log!.flush();
@@ -121,7 +115,7 @@ async function connect(
       `SELECT m.text FROM message_fts JOIN message m ON m.id = message_fts.rowid
        WHERE message_fts MATCH '"${word}"'`,
     ).map((r) => r.text);
-  return { fake: irc, manager, server, query, rows, texts, checkIndex, search, restart };
+  return { fake: irc, manager, server, query, rows, texts, checkIndex, search, start };
 }
 
 /** A time tag in the whole second `s` seconds after a fixed start. */
@@ -313,6 +307,10 @@ test("a REDACT inside a History batch marks a Line of the same batch", async () 
   expect(search("token")).toEqual([]);
 });
 
+
+
+const honk = { name: "#honk", kind: "channel" } as const;
+
 /** The texts of the Chat lines in a Buffer on screen. */
 const shown = (messages: { kind: string; text: string }[]) =>
   messages.filter((x) => x.kind === "message").map((x) => x.text);
@@ -324,9 +322,9 @@ test("a Buffer opens with its last 200 Lines from the Log, and loadOlder pages b
     seed: (seeding) => {
       for (let i = 1; i <= 250; i++) {
         const line = { kind: "message" as const, nick: "alice", text: `old ${i}`, timeFromServer: true };
-        seeding.add("net", { name: "#honk", kind: "channel" }, { ...line, time: start + i * 1000 });
+        seeding.add("net", honk, { ...line, time: start + i * 1000 });
       }
-      seeding.add("net", { name: "#honk", kind: "channel" }, {
+      seeding.add("net", honk, {
         kind: "message", nick: "bob", text: "oops", time: start + 300_000, timeFromServer: true, msgid: "x1",
       });
       seeding.redact("net", "x1", "bob", start + 301_000);
@@ -351,7 +349,7 @@ test("with a Sync marker, a Buffer with Lines in the Log asks only for the Histo
   const marker = Date.parse("2026-11-27T21:00:00Z");
   const { fake, manager } = await connect({
     seed: (seeding) => {
-      seeding.add("net", { name: "#honk", kind: "channel" }, {
+      seeding.add("net", honk, {
         kind: "message", nick: "alice", text: "earlier", time: marker - 60_000, timeFromServer: true,
       });
       seeding.setSyncMarker("net", marker);
@@ -368,16 +366,17 @@ test("with a Sync marker, a Buffer with Lines in the Log asks only for the Histo
 });
 
 test("after a restart, the screen shows the Log and then the History it missed, each Line once", async () => {
-  const { fake, texts, restart } = await connect();
+  const { fake, texts, start } = await connect();
   fake.say("alice", "#honk", "before");
   await until(() => texts().includes("before"));
   // As if this connection had synced up to now. See logSync.ts.
   log!.setSyncMarker("net", Date.now());
+  // Quit honk.
   m!.disconnectAll();
   log!.close();
   // 60 lines while honk is closed: more than the 50 the screen asks for on join.
   for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
-  await restart();
+  await start();
   const onScreen = () => shown(m!.getSnapshot().servers[0]!.buffers["#honk"]!.messages);
   await until(() => onScreen().includes("away 1"), 5000);
 
@@ -389,7 +388,7 @@ test("after a restart, the screen shows the Log and then the History it missed, 
 
 test("loadOlder above a Line not from the Log keeps the Log's Lines of the same time", async () => {
   const t = Date.parse("2026-11-27T21:35:07Z");
-  const honk = { name: "#honk", kind: "channel" } as const;
+  
   const { fake, manager, server } = await connect({
     seed: (seeding) => {
       for (const [text, msgid] of [["x", "m1"], ["y", "m2"]]) {
@@ -407,13 +406,13 @@ test("loadOlder above a Line not from the Log keeps the Log's Lines of the same 
   expect(shown(messages())).toEqual(["x", "y", "z"]);
 });
 
-test("a Buffer holds at most 5000 Lines, and then says that search finds the older ones", async () => {
+test("a Buffer holds at most 5000 Lines, and then is marked full", async () => {
   const start = Date.parse("2026-11-01T10:00:00Z");
   const { manager, server } = await connect({
     noCaps: true,
     seed: (seeding) => {
       for (let i = 1; i <= 5100; i++) {
-        seeding.add("net", { name: "#honk", kind: "channel" }, {
+        seeding.add("net", honk, {
           kind: "message", nick: "alice", text: `old ${i}`, time: start + i * 1000, timeFromServer: true,
         });
       }
@@ -422,11 +421,7 @@ test("a Buffer holds at most 5000 Lines, and then says that search finds the old
   while (manager.loadOlder("net", "#honk") > 0);
   await Promise.resolve();
   const messages = server().buffers["#honk"]!.messages;
-  expect(messages[0]!.text).toBe("honk holds 5000 lines of #honk. Search the log (Ctrl+F) for older ones.");
-  expect(messages).toHaveLength(5001);
-  expect(messages[1]!.text).toBe("old 102");
-  // Once.
-  manager.loadOlder("net", "#honk");
-  await Promise.resolve();
-  expect(server().buffers["#honk"]!.messages).toHaveLength(5001);
+  expect(messages).toHaveLength(5000);
+  expect(messages[0]!.text).toBe("old 102");
+  expect(server().buffers["#honk"]!.scrollbackFull).toBe(true);
 });

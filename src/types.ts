@@ -108,6 +108,11 @@ export interface BufferState {
   firstUnreadId?: string;
   /** Max messages kept. Grows past the default when history is loaded, so it isn't trimmed away. */
   messageLimit?: number;
+  /**
+   * True once scrolling up found the Buffer at MAX_MESSAGES_WITH_HISTORY Lines, so it
+   * loads no older ones from the Log. The chat pane says that search finds them.
+   */
+  scrollbackFull?: boolean;
 }
 
 export interface ReconnectInfo {

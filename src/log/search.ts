@@ -269,8 +269,8 @@ export function logContext(db: Database, id: number, around: number): LogContext
     | null;
   if (!hit) return undefined;
   const from = { time: hit.ts, id };
-  const before = linesBeside(db, hit.buffer_id, "older", from, around, false);
-  const after = linesBeside(db, hit.buffer_id, "newer", from, around, false);
+  const before = linesBeside(db, hit.buffer_id, "older", from, around, { withRedacted: false });
+  const after = linesBeside(db, hit.buffer_id, "newer", from, around, { withRedacted: false });
   return {
     serverId: hit.server,
     network: hit.network,

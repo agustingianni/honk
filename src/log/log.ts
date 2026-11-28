@@ -390,7 +390,7 @@ export class Log {
            WHERE n.config_id = ? AND n.bouncer_net = ? AND b.name = ?`,
         )
         .get(serverId, net.bouncerNetId, nameKey(name, net.casemapping)) as { id: number } | null;
-      return row ? linesBeside(this.db, row.id, "older", before, limit, true) : [];
+      return row ? linesBeside(this.db, row.id, "older", before, limit, { withRedacted: true }) : [];
     });
     return Array.isArray(result) ? result : [];
   }

@@ -594,6 +594,11 @@ export function ChatPane({
       >
         {/* No top padding: the header's own bottom padding is the gap. */}
         <box flexDirection="column" paddingBottom={1}>
+          {buffer?.scrollbackFull && (
+            <text fg={theme.fgMuted} paddingLeft={2}>
+              {`honk holds ${buffer.messages.length} lines of ${buffer.name}. Search the log (Ctrl+F) for older ones.`}
+            </text>
+          )}
           {buffer?.messages.map((msg, idx) => {
             const isFirstUnread = msg.id === buffer.firstUnreadId;
             const prev = idx > 0 ? buffer.messages[idx - 1] : undefined;

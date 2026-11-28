@@ -161,9 +161,13 @@ test("an IRC update while search is open does not read the Log again", async () 
   }
 });
 
-test("scrolling to the top of a Buffer loads older Lines from the Log, and the view stays put", async () => {
+/**
+ * A manager with a DM with alice open, whose Log holds `count` Lines from an hour ago:
+ * "line 1" to "line <count>".
+ */
+function dmWithLog(count: number): IrcManager {
   const T = Date.now() - 3_600_000;
-  for (let i = 1; i <= 300; i++) {
+  for (let i = 1; i <= count; i++) {
     log.add("net", { name: "alice", kind: "dm" }, {
       kind: "message",
       nick: "alice",
@@ -176,6 +180,11 @@ test("scrolling to the top of a Buffer loads older Lines from the Log, and the v
   const manager = new IrcManager({ log });
   manager.addServer({ id: "net", host: "127.0.0.1", nick: "goose", autoConnect: false });
   manager.openDm("net", "alice");
+  return manager;
+}
+
+test("scrolling to the top of a Buffer loads older Lines from the Log, and the view stays put", async () => {
+  const manager = dmWithLog(300);
 
   const app = await renderApp(log, manager);
   // The test keys have no name for Page Up, so this is its escape sequence.
@@ -209,20 +218,7 @@ test("scrolling to the top of a Buffer loads older Lines from the Log, and the v
 });
 
 test.each(["page up", "wheel"])("%s in a Buffer that fits on the screen loads older Lines from the Log", async (how) => {
-  const T = Date.now() - 3_600_000;
-  for (let i = 1; i <= 3; i++) {
-    log.add("net", { name: "alice", kind: "dm" }, {
-      kind: "message",
-      nick: "alice",
-      text: `line ${i}`,
-      time: T + i * 1000,
-      timeFromServer: true,
-    });
-  }
-  log.flush();
-  const manager = new IrcManager({ log });
-  manager.addServer({ id: "net", host: "127.0.0.1", nick: "goose", autoConnect: false });
-  manager.openDm("net", "alice");
+  const manager = dmWithLog(3);
   const app = await renderApp(log, manager);
   try {
     expect(await app.screen()).toContain("line 3");
