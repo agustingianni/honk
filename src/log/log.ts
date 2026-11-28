@@ -384,7 +384,7 @@ export class Log {
 
   /** The Sync marker of the Server's Network, or undefined if it has none yet. */
   syncMarker(serverId: string): number | undefined {
-    if (!this.failing) this.flush();
+    this.flushUnlessFailing();
     const net = this.networkOf(serverId);
     const row = this.db
       .query("SELECT synced_until AS t FROM network WHERE config_id = ? AND bouncer_net = ?")
@@ -436,7 +436,7 @@ export class Log {
    */
   private read<T>(run: () => T): T | { error: string } {
     if (this.closed) return { error: "the log is closed" };
-    if (!this.failing) this.flush();
+    this.flushUnlessFailing();
     try {
       return run();
     } catch (err) {
@@ -446,21 +446,27 @@ export class Log {
 
   private push(op: Op): void {
     if (!this.writable) return;
-    if (op.type === "sync" && this.lostLines.has(op.net.serverId)) return;
     this.queue.push(op);
-    if (this.queue.length > MAX_QUEUE) this.dropOldest();
-    if (this.queue.length >= FLUSH_LINES && !this.failing) this.flush();
-    else this.scheduleFlush();
+    this.trimQueue();
+    if (this.queue.length >= FLUSH_LINES) this.flushUnlessFailing();
+    if (this.queue.length > 0) this.scheduleFlush();
+  }
+
+  /** Writes what waits, unless writes fail: then the next try waits for its timer. */
+  private flushUnlessFailing(): void {
+    if (!this.failing) this.flush();
   }
 
   /**
-   * The queue is full while writes fail: drops its oldest tenth. The Sync markers of
-   * the Servers those Lines came from stop for this run, so the next start asks for
-   * that History again.
+   * While writes fail, a full queue drops its oldest tenth. The Sync markers of the
+   * Servers those Lines came from stop for this run (see apply), so the next start asks
+   * for that History again.
    */
-  private dropOldest(): void {
-    for (const op of this.queue.splice(0, MAX_QUEUE / 10)) this.lostLines.add(op.net.serverId);
-    this.queue = this.queue.filter((op) => op.type !== "sync" || !this.lostLines.has(op.net.serverId));
+  private trimQueue(): void {
+    if (this.queue.length <= MAX_QUEUE) return;
+    while (this.queue.length > MAX_QUEUE) {
+      for (const op of this.queue.splice(0, MAX_QUEUE / 10)) this.lostLines.add(op.net.serverId);
+    }
     this.report(
       "lost",
       `the log lost lines: honk keeps at most ${MAX_QUEUE.toLocaleString("en-US")} in memory while it can't write. A server that keeps History sends them again at the next start.`,
@@ -492,8 +498,8 @@ export class Log {
     this.queue = [];
     const stopped = this.writeAll(ops);
     if (!stopped) return this.recovered();
-    this.queue = ops.slice(stopped.at).concat(this.queue);
-    while (this.queue.length > MAX_QUEUE) this.dropOldest();
+    this.queue = ops.concat(this.queue);
+    this.trimQueue();
     this.failing = true;
     this.scheduleFlush();
     this.report(
@@ -503,49 +509,57 @@ export class Log {
   }
 
   /**
-   * Writes `ops` in one transaction, or if one of them can't be stored, one by one
-   * without the bad ones. Returns where an error that may go away stopped it: `ops`
-   * from `at` on are not written.
+   * Writes `ops` in one transaction. If one of them can't be stored, writes the others
+   * without it, still in one transaction. Returns the error that stopped it, which may
+   * go away: then nothing is written.
    */
-  private writeAll(ops: Op[]): { at: number; err: Error } | undefined {
+  private writeAll(ops: Op[]): { err: Error } | undefined {
     try {
       this.write(ops);
       return undefined;
     } catch (err) {
-      if (!isOneLineError(err)) return { at: 0, err: err as Error };
+      if (!isOneLineError(err)) return { err: err as Error };
     }
-    let bad: Error | undefined;
-    let badCount = 0;
-    for (const [i, op] of ops.entries()) {
-      try {
-        this.write([op]);
-      } catch (err) {
-        if (!isOneLineError(err)) return { at: i, err: err as Error };
-        bad = err as Error;
-        badCount++;
-      }
+    const bad: Error[] = [];
+    try {
+      this.write(ops, (op) => {
+        try {
+          // A nested transaction is a savepoint: a bad op rolls back only itself.
+          this.db.transaction(() => this.apply(op))();
+        } catch (err) {
+          if (!isOneLineError(err)) throw err;
+          this.forgetIds();
+          bad.push(err as Error);
+        }
+      });
+    } catch (err) {
+      return { err: err as Error };
     }
-    if (bad) {
-      const what = badCount === 1 ? "a line" : `${badCount} lines`;
-      this.onError(`could not write ${what} to the log: ${bad.message}`);
+    if (bad.length > 0) {
+      const what = bad.length === 1 ? "a line" : `${bad.length} lines`;
+      this.onError(`could not write ${what} to the log: ${bad[0]!.message}`);
     }
     return undefined;
   }
 
-  /** Applies `ops` in one transaction. On a failure nothing is written. */
-  private write(ops: Op[]): void {
+  /** Applies `ops` in one transaction, each with `each`. On a failure nothing is written. */
+  private write(ops: Op[], each = (op: Op) => this.apply(op)): void {
     this.usedRedactions = [];
     try {
       this.db.transaction(() => {
-        for (const op of ops) this.apply(op);
+        for (const op of ops) each(op);
       })();
     } catch (err) {
-      // The cached ids may name rows the rollback removed.
-      this.networkIds = new WeakMap();
-      this.bufferIds.clear();
+      this.forgetIds();
       throw err;
     }
     for (const key of this.usedRedactions) this.earlyRedactions.delete(key);
+  }
+
+  /** The cached ids may name rows a rollback removed. */
+  private forgetIds(): void {
+    this.networkIds = new WeakMap();
+    this.bufferIds.clear();
   }
 
   /** A write worked. After failed ones, says so, and the next failure is reported again. */
@@ -565,6 +579,8 @@ export class Log {
   private apply(op: Op): void {
     const networkId = this.networkId(op.net);
     if (op.type === "sync") {
+      // Lines of this Server were lost: the marker must stay before them.
+      if (this.lostLines.has(op.net.serverId)) return;
       this.db
         .query(
           "UPDATE network SET synced_until = max(coalesce(synced_until, 0), ?) WHERE id = ?",
