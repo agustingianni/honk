@@ -331,3 +331,24 @@ test("an existing folder for the Log becomes private too", () => {
   open();
   expect(statSync(join(dir, "honk")).mode & 0o777).toBe(0o700);
 });
+
+test("scrollback pages a Buffer's Lines newest first, by time and then row id", () => {
+  const { log } = open();
+  log.add("libera", honk, line("one", { time: T }));
+  log.add("libera", honk, line("two", { time: T + 1000 }));
+  log.add("libera", honk, line("three", { time: T + 1000 }));
+  log.add("libera", { name: "#other", kind: "channel" }, line("elsewhere", { time: T + 1500 }));
+  log.add("libera", honk, line("four", { time: T + 2000, msgid: "m4" }));
+  log.redact("libera", "m4", "bob", T + 3000);
+  const texts = (lines: { text: string }[]) => lines.map((l) => l.text);
+
+  const newest = log.scrollback("libera", "#HONK", undefined, 2);
+  expect(texts(newest)).toEqual(["three", "four"]);
+  expect(newest[1]).toMatchObject({ msgid: "m4", redactedBy: "bob", timeFromServer: true });
+
+  const older = log.scrollback("libera", "#honk", newest[0], 2);
+  expect(texts(older)).toEqual(["one", "two"]);
+  expect(log.scrollback("libera", "#honk", older[0], 2)).toEqual([]);
+  expect(log.scrollback("libera", "#nowhere")).toEqual([]);
+  expect(log.scrollback("efnet", "#honk")).toEqual([]);
+});

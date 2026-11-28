@@ -37,7 +37,9 @@ import {
   type SearchQuery,
   type SearchResult,
   searchLog,
+  type StoredLine,
 } from "./search.ts";
+import { type LineCursor, SCROLLBACK_LINES, scrollbackLines } from "./scrollback.ts";
 
 /** The `logs` settings in the config file. */
 export interface LogSettings {
@@ -367,6 +369,30 @@ export class Log {
   context(id: number, around = CONTEXT_LINES): LogContext | undefined {
     const result = this.read(() => logContext(this.db, id, around));
     return result && !("error" in result) ? result : undefined;
+  }
+
+  /**
+   * Up to `limit` Lines of Buffer `name` on the Server's Network, oldest first: the
+   * newest ones, or the ones before `before`. Empty if the Log has none, or on a failed
+   * read. See scrollback.ts.
+   */
+  scrollback(
+    serverId: string,
+    name: string,
+    before?: LineCursor,
+    limit = SCROLLBACK_LINES,
+  ): StoredLine[] {
+    const net = this.networkOf(serverId);
+    const result = this.read(() => {
+      const row = this.db
+        .query(
+          `SELECT b.id FROM buffer b JOIN network n ON n.id = b.network_id
+           WHERE n.config_id = ? AND n.bouncer_net = ? AND b.name = ?`,
+        )
+        .get(serverId, net.bouncerNetId, nameKey(name, net.casemapping)) as { id: number } | null;
+      return row ? scrollbackLines(this.db, row.id, before, limit) : [];
+    });
+    return Array.isArray(result) ? result : [];
   }
 
   /** Runs a read after a flush. A failure (such as a busy file) comes back as an error. */

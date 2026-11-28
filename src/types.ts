@@ -72,6 +72,8 @@ export type MessageKind =
 export interface ChatMessage {
   id: string;
   msgid?: string;
+  /** The row id of a Line loaded from the Log. See src/log/scrollback.ts. */
+  logId?: number;
   timestamp: Date;
   /** True if `timestamp` is the server's (a time tag), not honk's clock. See src/irc/replay.ts. */
   timeFromServer?: boolean;

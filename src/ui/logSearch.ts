@@ -3,9 +3,7 @@
  */
 
 import type { Log } from "../log/log.ts";
-import { joinText, kickText, nickText, partText, quitText, topicText } from "../irc/eventText.ts";
-import type { LogContext, SearchHit } from "../log/search.ts";
-import type { ChatMessage, MessageKind } from "../types.ts";
+import type { SearchHit } from "../log/search.ts";
 import { clockTime, sameDay } from "./dayDivider.ts";
 import { glyphs } from "./glyphs.ts";
 
@@ -61,37 +59,4 @@ export function hitRow(hit: SearchHit, now: Date, width: number): { label: strin
     label += part.text;
   }
   return { label, highlights };
-}
-
-/** The Lines of a Context view as chat lines, worded as the chat pane words them. */
-export function contextMessages(context: LogContext): ChatMessage[] {
-  return context.lines.map((row) => {
-    const line = (kind: MessageKind, text: string, from?: string): ChatMessage => ({
-      id: `log-${row.id}`,
-      timestamp: new Date(row.time),
-      kind,
-      from,
-      text,
-      isSelf: row.self,
-      isMention: row.mention,
-    });
-    switch (row.kind) {
-      case "message":
-      case "action":
-      case "notice":
-        return line(row.kind, row.text, row.nick);
-      case "join":
-        return line("join", joinText(row.nick, context.buffer));
-      case "part":
-        return line("part", partText(row.nick, context.buffer, row.text));
-      case "quit":
-        return line("part", quitText(row.nick, row.text));
-      case "nick":
-        return line("system", nickText(row.nick, row.subject ?? ""));
-      case "kick":
-        return line("error", kickText(row.subject ?? "", row.nick, row.text));
-      default:
-        return line("system", topicText(row.nick, row.text));
-    }
-  });
 }

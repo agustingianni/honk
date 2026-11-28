@@ -46,6 +46,8 @@ async function connect(
     noCaps?: boolean;
     casemapping?: Casemapping;
     channel?: string;
+    /** Writes to the Log before honk connects, as a past run did. */
+    seed?: (log: Log) => void;
   } = {},
 ) {
   irc = await FakeIrcd.start({ casemapping: opts.casemapping ?? "ascii" });
@@ -53,24 +55,41 @@ async function connect(
   irc.rejectCap = opts.noCaps ?? false;
   dir = mkdtempSync(join(tmpdir(), "honk-logging-"));
   const path = join(dir, "logs.db");
-  log = openLog(path, DEFAULT_LOG_SETTINGS).log!;
-  const manager = new IrcManager({ log });
-  m = manager;
   const channel = opts.channel ?? "#honk";
-  manager.addServer({
-    id: "net",
-    name: "net",
-    host: "127.0.0.1",
-    port: irc.port,
-    tls: false,
-    nick: "goose",
-    channels: [channel],
-    autoConnect: false,
-  });
-  await manager.connectServer("net");
-  const server = () => manager.getSnapshot().servers.find((s) => s.id === "net")!;
-  await until(() => server().buffers[channel]?.messages.some((x) => x.kind === "join") === true);
-  manager.setActive("net", channel);
+  const port = irc.port;
+  /** Starts honk on the Log at `path`, connects, and waits for the join. */
+  const start = async () => {
+    log = openLog(path, DEFAULT_LOG_SETTINGS).log!;
+    const manager = new IrcManager({ log });
+    m = manager;
+    manager.addServer({
+      id: "net",
+      name: "net",
+      host: "127.0.0.1",
+      port,
+      tls: false,
+      nick: "goose",
+      channels: [channel],
+      autoConnect: false,
+    });
+    await manager.connectServer("net");
+    await until(() => server().buffers[channel]?.messages.some((x) => x.kind === "join") === true);
+    manager.setActive("net", channel);
+    return manager;
+  };
+  const server = () => m!.getSnapshot().servers.find((s) => s.id === "net")!;
+  if (opts.seed) {
+    const seeding = openLog(path, DEFAULT_LOG_SETTINGS).log!;
+    opts.seed(seeding);
+    seeding.close();
+  }
+  const manager = await start();
+  /** Quits honk and starts it again on the same Log. */
+  const restart = async () => {
+    m!.disconnectAll();
+    log!.close();
+    return start();
+  };
 
   const query = <T>(sql: string): T[] => {
     log!.flush();
@@ -102,7 +121,7 @@ async function connect(
       `SELECT m.text FROM message_fts JOIN message m ON m.id = message_fts.rowid
        WHERE message_fts MATCH '"${word}"'`,
     ).map((r) => r.text);
-  return { fake: irc, manager, server, query, rows, texts, checkIndex, search };
+  return { fake: irc, manager, server, query, rows, texts, checkIndex, search, restart };
 }
 
 /** A time tag in the whole second `s` seconds after a fixed start. */
@@ -224,7 +243,7 @@ test("on an rfc1459 server, #foo[ and #FOO{ are one Buffer in the Log", async ()
   expect(query("SELECT name FROM buffer")).toEqual([{ name: "#foo{" }]);
 });
 
-test("after a reconnect, honk asks for the History the Log misses and stores it once", async () => {
+test("after a reconnect, honk asks for the History the Log misses and stores and shows it once", async () => {
   const { fake, manager, server, texts, checkIndex } = await connect();
   fake.say("alice", "#honk", "before");
   await until(() => texts().includes("before"));
@@ -241,10 +260,9 @@ test("after a reconnect, honk asks for the History the Log misses and stores it 
   const away = texts().filter((t) => t.startsWith("away "));
   expect(away.toSorted()).toEqual(Array.from({ length: 60 }, (_, i) => `away ${i + 1}`).toSorted());
   expect(texts().filter((t) => t === "before")).toHaveLength(1);
-  // The Log's own request did not reach the screen.
-  const onScreen = server().buffers["#honk"]!.messages.map((x) => x.text);
-  expect(onScreen).not.toContain("away 1");
-  expect(onScreen).toContain("away 60");
+  // The Log's own requests reached the screen too, so it has no hole.
+  const onScreen = shown(server().buffers["#honk"]!.messages);
+  expect(onScreen.filter((t) => t.startsWith("away ")).toSorted()).toEqual(away.toSorted());
   checkIndex();
 });
 
@@ -293,4 +311,66 @@ test("a REDACT inside a History batch marks a Line of the same batch", async () 
   await until(() => rows().some((r) => r.msgid === "h1"));
   expect(rows().find((r) => r.msgid === "h1")?.redacted_by).toBe("alice");
   expect(search("token")).toEqual([]);
+});
+
+/** The texts of the Chat lines in a Buffer on screen. */
+const shown = (messages: { kind: string; text: string }[]) =>
+  messages.filter((x) => x.kind === "message").map((x) => x.text);
+
+test("a Buffer opens with its last 200 Lines from the Log, and loadOlder pages back", async () => {
+  const start = Date.parse("2026-11-01T10:00:00Z");
+  const { manager, server } = await connect({
+    noCaps: true,
+    seed: (seeding) => {
+      for (let i = 1; i <= 250; i++) {
+        const line = { kind: "message" as const, nick: "alice", text: `old ${i}`, timeFromServer: true };
+        seeding.add("net", { name: "#honk", kind: "channel" }, { ...line, time: start + i * 1000 });
+      }
+      seeding.add("net", { name: "#honk", kind: "channel" }, {
+        kind: "message", nick: "bob", text: "oops", time: start + 300_000, timeFromServer: true, msgid: "x1",
+      });
+      seeding.redact("net", "x1", "bob", start + 301_000);
+    },
+  });
+  const messages = () => server().buffers["#honk"]!.messages;
+  const first = shown(messages());
+  expect(first).toHaveLength(200);
+  expect(first[0]).toBe("old 52");
+  expect(first.slice(-2)).toEqual(["old 250", "[message deleted by bob]"]);
+  // Lines from the Log come before this run's own.
+  expect(messages().at(-1)?.text).toBe("You joined #honk");
+
+  expect(manager.loadOlder("net", "#HONK")).toBe(51);
+  await Promise.resolve();
+  expect(shown(messages()).slice(0, 2)).toEqual(["old 1", "old 2"]);
+  expect(shown(messages())).toHaveLength(251);
+  expect(manager.loadOlder("net", "#honk")).toBe(0);
+});
+
+test("with a Sync marker, the screen asks only for the History after it", async () => {
+  const marker = Date.parse("2026-11-27T21:00:00Z");
+  const { fake } = await connect({ seed: (seeding) => seeding.setSyncMarker("net", marker) });
+  await until(() => fake.received.some((l) => l.command === "CHATHISTORY"));
+  const request = fake.received.find((l) => l.command === "CHATHISTORY")!;
+  expect(request.params).toEqual(["LATEST", "#honk", "timestamp=2026-11-27T20:59:55.000Z", "50"]);
+});
+
+test("after a restart, the screen shows the Log and then the History it missed, each Line once", async () => {
+  const { fake, texts, restart } = await connect();
+  fake.say("alice", "#honk", "before");
+  await until(() => texts().includes("before"));
+  // As if this connection had synced up to now. See logSync.ts.
+  log!.setSyncMarker("net", Date.now());
+  m!.disconnectAll();
+  log!.close();
+  // 60 lines while honk is closed: more than the 50 the screen asks for on join.
+  for (let i = 1; i <= 60; i++) fake.say("alice", "#honk", `away ${i}`);
+  await restart();
+  const onScreen = () => shown(m!.getSnapshot().servers[0]!.buffers["#honk"]!.messages);
+  await until(() => onScreen().includes("away 1"), 5000);
+
+  expect(onScreen().filter((t) => t === "before")).toHaveLength(1);
+  const away = onScreen().filter((t) => t.startsWith("away "));
+  expect(away.toSorted()).toEqual(Array.from({ length: 60 }, (_, i) => `away ${i + 1}`).toSorted());
+  expect(onScreen()[0]).toBe("before");
 });

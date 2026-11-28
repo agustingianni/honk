@@ -257,6 +257,8 @@ export function App({
     },
     [manager, activeServerId],
   );
+  const loadOlder = () =>
+    activeServerId && activeBuffer ? manager.loadOlder(activeServerId, activeBuffer.name) : 0;
 
   const sidebarFits = width >= SIDEBAR_MIN_WIDTH;
   const nicklistFits = width >= NICKLIST_MIN_WIDTH;
@@ -304,6 +306,7 @@ export function App({
             onPasteLines={pasteLines}
             onSelectUser={selectUser}
             onJoinChannel={joinChannel}
+            onLoadOlder={loadOlder}
           />
           )}
 

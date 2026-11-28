@@ -25,10 +25,14 @@ afterEach(() => {
 
 const themes = allThemes([]);
 
-/** Renders App with no servers. Returns the screen as text after each step. */
-async function renderApp(logSearch: LogSearch) {
+function welcome(): IrcManager {
   const manager = new IrcManager();
   manager.initWelcome();
+  return manager;
+}
+
+/** Renders App, with no servers unless `manager` has some. Returns the screen as text after each step. */
+async function renderApp(logSearch: LogSearch, manager = welcome()) {
   const { renderOnce, captureCharFrame, mockInput, renderer } = await testRender(
     <App
       manager={manager}
@@ -154,5 +158,52 @@ test("an IRC update while search is open does not read the Log again", async () 
     expect(searches).toBe(before);
   } finally {
     app.destroy();
+  }
+});
+
+test("scrolling to the top of a Buffer loads older Lines from the Log, and the view stays put", async () => {
+  const T = Date.now() - 3_600_000;
+  for (let i = 1; i <= 300; i++) {
+    log.add("net", { name: "alice", kind: "dm" }, {
+      kind: "message",
+      nick: "alice",
+      text: `line ${i}`,
+      time: T + i * 1000,
+      timeFromServer: true,
+    });
+  }
+  log.flush();
+  const manager = new IrcManager({ log });
+  manager.addServer({ id: "net", host: "127.0.0.1", nick: "goose", autoConnect: false });
+  manager.openDm("net", "alice");
+
+  const app = await renderApp(log, manager);
+  // The test keys have no name for Page Up, so this is its escape sequence.
+  const pageUp = () => app.mockInput.pressKey("\x1b[5~");
+  const lines = (screen: string) => [...screen.matchAll(/line (\d+)/g)].map((m) => Number(m[1]));
+  try {
+    expect(lines(await app.screen())).toContain(300);
+    // Up to the top of the 200 Lines loaded when the Buffer opened. Reaching it loads
+    // the 100 older Lines above, and the Lines on screen stay where they were.
+    const held = () => manager.getSnapshot().servers[0]!.buffers.alice!.messages.length;
+    let screen = await app.screen();
+    for (let i = 0; i < 40 && held() === 200; i++) {
+      await act(pageUp);
+      screen = await app.screen();
+    }
+    expect(held()).toBe(300);
+    expect(lines(screen)).toContain(101);
+    expect(lines(screen)).not.toContain(100);
+    await act(pageUp);
+    screen = await app.screen();
+    expect(lines(screen)).toContain(100);
+    for (let i = 0; i < 40 && !lines(screen).includes(1); i++) {
+      await act(pageUp);
+      screen = await app.screen();
+    }
+    expect(lines(screen)).toContain(1);
+  } finally {
+    await app.destroy();
+    manager.disconnectAll();
   }
 });

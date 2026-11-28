@@ -1,12 +1,12 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useEffect, useMemo, useRef } from "react";
+import { storedMessages } from "../log/scrollback.ts";
 import type { LogContext } from "../log/search.ts";
 import { theme } from "../theme.ts";
 import { Divider, MessageRow } from "./ChatPane.tsx";
 import { dayLabelBefore } from "./dayDivider.ts";
 import { HEADER_HEIGHT, scrollboxStyle } from "./display.ts";
-import { contextMessages } from "./logSearch.ts";
 
 interface ContextViewProps {
   context: LogContext;
@@ -29,7 +29,7 @@ export function ContextView({
   onBack,
 }: ContextViewProps) {
   const scrollRef = useRef<ScrollBoxRenderable>(null);
-  const messages = useMemo(() => contextMessages(context), [context]);
+  const messages = useMemo(() => storedMessages(context.buffer, context.lines), [context]);
   const matchId = messages[context.match]?.id;
 
   // The hit starts a third of the way down, with the Lines before it above.

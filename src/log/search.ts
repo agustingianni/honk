@@ -123,18 +123,24 @@ export interface SearchResult {
   more: boolean;
 }
 
-/** One Line of a Context view. */
-export interface ContextLine {
+/** One Line as the Log keeps it, for a Context view or scrollback. */
+export interface StoredLine {
+  /** The row id. */
   id: number;
   /** Unix ms. */
   time: number;
+  /** True if `time` is the server's, false if honk's clock. */
+  timeFromServer: boolean;
   kind: string;
   nick: string;
   subject?: string;
   /** As received, with formatting codes. */
   text: string;
+  msgid?: string;
   self: boolean;
   mention: boolean;
+  /** Who deleted it, for a Redacted line. A Context view leaves those out. */
+  redactedBy?: string;
 }
 
 /** The Lines around a search hit. */
@@ -143,7 +149,7 @@ export interface LogContext {
   network: string;
   buffer: string;
   bufferKind: "channel" | "dm";
-  lines: ContextLine[];
+  lines: StoredLine[];
   /** The index of the hit in `lines`. */
   match: number;
 }
@@ -264,27 +270,38 @@ export function searchLog(db: Database, query: SearchQuery, limit: number): Sear
   };
 }
 
-interface ContextRow {
+/** The columns of a StoredLine. */
+export const STORED_COLUMNS =
+  "id, ts, ts_server, kind, nick, subject, text, msgid, self, mention, redacted_by";
+
+/** A row read with STORED_COLUMNS. */
+export interface StoredRow {
   id: number;
   ts: number;
+  ts_server: number;
   kind: string;
   nick: string;
   subject: string | null;
   text: string;
+  msgid: string | null;
   self: number;
   mention: number;
+  redacted_by: string | null;
 }
 
-function contextLine(r: ContextRow): ContextLine {
+export function storedLine(r: StoredRow): StoredLine {
   return {
     id: r.id,
     time: r.ts,
+    timeFromServer: r.ts_server === 1,
     kind: r.kind,
     nick: r.nick,
     subject: r.subject ?? undefined,
     text: r.text,
+    msgid: r.msgid ?? undefined,
     self: r.self === 1,
     mention: r.mention === 1,
+    redactedBy: r.redacted_by ?? undefined,
   };
 }
 
@@ -294,7 +311,7 @@ function contextLine(r: ContextRow): ContextLine {
  * was redacted after the search.
  */
 export function logContext(db: Database, id: number, around: number): LogContext | undefined {
-  const cols = "id, ts, kind, nick, subject, text, self, mention";
+  const cols = STORED_COLUMNS;
   const hit = db
     .query(
       `SELECT ${cols.replace(/(\w+)/g, "m.$1")}, m.buffer_id, b.display AS buffer, b.kind AS bkind,
@@ -303,7 +320,7 @@ export function logContext(db: Database, id: number, around: number): LogContext
        WHERE m.id = ? AND m.redacted_at IS NULL`,
     )
     .get(id) as
-    | (ContextRow & { buffer_id: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string })
+    | (StoredRow & { buffer_id: number; buffer: string; bkind: "channel" | "dm"; server: string; network: string })
     | null;
   if (!hit) return undefined;
   const side = (cmp: "<" | ">", order: "DESC" | "ASC") =>
@@ -313,7 +330,7 @@ export function logContext(db: Database, id: number, around: number): LogContext
          WHERE buffer_id = ? AND redacted_at IS NULL AND (ts ${cmp} ? OR (ts = ? AND id ${cmp} ?))
          ORDER BY ts ${order}, id ${order} LIMIT ?`,
       )
-      .all(hit.buffer_id, hit.ts, hit.ts, id, around) as ContextRow[];
+      .all(hit.buffer_id, hit.ts, hit.ts, id, around) as StoredRow[];
   const before = side("<", "DESC").reverse();
   const after = side(">", "ASC");
   return {
@@ -321,7 +338,7 @@ export function logContext(db: Database, id: number, around: number): LogContext
     network: hit.network,
     buffer: hit.buffer,
     bufferKind: hit.bkind,
-    lines: [...before, hit, ...after].map(contextLine),
+    lines: [...before, hit, ...after].map(storedLine),
     match: before.length,
   };
 }

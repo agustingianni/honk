@@ -33,12 +33,19 @@ interface ChatPaneProps {
   onJoinChannel: (channel: string) => void;
   /** A plain click on a link in a message or the topic. Opens it in the browser by default. */
   onOpenLink?: (href: string) => void;
+  /**
+   * The view reached the top of the Buffer: load older Lines from the Log. Returns how
+   * many came.
+   */
+  onLoadOlder?: () => number;
 }
 
 /** Undefined over SSH and on platforms honk cannot open a browser on. */
 const openLink = linkOpener();
 
 const NO_USERS: NickEntry[] = [];
+/** The renderable id of a message's row, to scroll to it. */
+const rowId = (messageId: string) => `row-${messageId}`;
 const NICK_COL_WIDTH = 12;
 /** Time (5), a space, then the nick column. The message body starts after this. */
 const LABEL_COL_WIDTH = 5 + 1 + NICK_COL_WIDTH;
@@ -282,6 +289,7 @@ export function ChatPane({
   onSelectUser,
   onJoinChannel,
   onOpenLink = openLink,
+  onLoadOlder,
 }: ChatPaneProps) {
   const inputRef = useRef<InputRenderable>(null);
   const scrollRef = useRef<ScrollBoxRenderable>(null);
@@ -405,11 +413,23 @@ export function ChatPane({
   const [lastSeenId, setLastSeenId] = useState<string | null>(null);
   const messagesRef = useRef(buffer?.messages ?? []);
   messagesRef.current = buffer?.messages ?? [];
+  // Reaching the top loads older Lines above. The Line that was at the top stays there,
+  // so the view does not jump: this holds its id until the next render scrolls to it.
+  const keepAtTopRef = useRef<string | null>(null);
+  const loadOlderRef = useRef(onLoadOlder);
+  loadOlderRef.current = onLoadOlder;
   useEffect(() => {
     setLastSeenId(null);
     const sb = scrollRef.current;
     if (!sb) return;
+    let atTop = false;
     const onChange = () => {
+      const top = sb.scrollTop <= 0;
+      if (top && !atTop) {
+        const first = messagesRef.current[0]?.id;
+        if (first && (loadOlderRef.current?.() ?? 0) > 0) keepAtTopRef.current = first;
+      }
+      atTop = top;
       const atBottom = sb.scrollTop + sb.viewport.height >= sb.scrollHeight - 1;
       setLastSeenId((prev) => {
         if (atBottom) return null;
@@ -423,6 +443,12 @@ export function ChatPane({
       sb.verticalScrollBar.off("change", onChange);
     };
   }, [bufferKey]);
+  useEffect(() => {
+    const id = keepAtTopRef.current;
+    if (id === null) return;
+    keepAtTopRef.current = null;
+    scrollRef.current?.scrollChildIntoView(rowId(id), { align: "start" });
+  }, [buffer?.messages]);
   let newBelow = 0;
   if (lastSeenId !== null && buffer) {
     const at = buffer.messages.findIndex((m) => m.id === lastSeenId);
@@ -570,7 +596,7 @@ export function ChatPane({
               msg.timestamp.getTime() - prev.timestamp.getTime() < GROUP_WINDOW_MS;
 
             return (
-              <box key={msg.id} flexDirection="column" width="100%">
+              <box key={msg.id} id={rowId(msg.id)} flexDirection="column" width="100%">
                 {(day !== null || isFirstUnread) && (
                   /* The day goes first, then "new". A blank line above and below the pair. */
                   <box flexDirection="column" marginTop={1} marginBottom={1}>
