@@ -67,9 +67,13 @@ for (const target of targets) {
   // --production minifies and sets NODE_ENV, which picks React's production
   // build. The development one is slower, and its debug data for each element
   // grows the memory without end in a busy channel. --compile alone leaves
-  // NODE_ENV unset. --define puts these values into src/version.ts. Each value
-  // is JSON, so the strings keep their quotes.
+  // NODE_ENV unset. The two --no-compile-autoload flags stop the binary from
+  // reading a .env or a bunfig.toml in the folder where honk starts: a
+  // bunfig.toml could preload code into honk, and a .env could set variables
+  // such as NODE_TLS_REJECT_UNAUTHORIZED. --define puts these values into
+  // src/version.ts. Each value is JSON, so the strings keep their quotes.
   await $`bun build src/index.tsx --compile --production --target=bun-${target} \
+    --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
     --define __HONK_VERSION__=${JSON.stringify(version)} \
     --define __HONK_TARGET__=${JSON.stringify(target)} \
     ${libc} \
