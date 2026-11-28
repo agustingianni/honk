@@ -441,6 +441,15 @@ test("the Sync marker is per Network and never moves back", () => {
   expect(log.syncMarker("libera")).toBeUndefined();
 });
 
+test("a server time far ahead of honk's clock does not hold the Sync marker", () => {
+  const { log } = open();
+  const year2099 = Date.parse("2099-01-01T00:00:00Z");
+  log.setSyncMarker("libera", year2099);
+  expect(log.syncMarker("libera")).toBeUndefined();
+  log.setSyncMarker("libera", T);
+  expect(log.syncMarker("libera")).toBe(T);
+});
+
 test("a REDACT that comes before its Line marks the Line when it comes", () => {
   const { log } = open();
   log.redact("libera", "m9", "alice", T + 5000);

@@ -83,7 +83,7 @@ import {
   unreadAfter,
 } from "./readMarker.ts";
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
-import type { Log } from "../log/log.ts";
+import { type Log, tooFarAhead } from "../log/log.ts";
 import { FILL_LIMIT, type Fill, LATEST_LIMIT } from "../log/logSync.ts";
 import { SCROLLBACK_LINES, storedMessages } from "../log/scrollback.ts";
 import { LogRecorder } from "./logRecorder.ts";
@@ -1269,7 +1269,10 @@ export class IrcManager {
       const time = this.logRecorder && tagsOf(msg)?.time;
       if (time) {
         const ms = Date.parse(time);
-        if (ms > (ctrl.newestServerTime ?? 0)) ctrl.newestServerTime = ms;
+        // A time far ahead of honk's clock is a broken server clock: not the newest.
+        if (ms > (ctrl.newestServerTime ?? 0) && !tooFarAhead(ms, Date.now())) {
+          ctrl.newestServerTime = ms;
+        }
       }
     });
 
