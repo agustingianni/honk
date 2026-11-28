@@ -3,7 +3,7 @@
 // `bun install` only fetches the one for this machine, so fetch them all first.
 import { $ } from "bun";
 import pkg from "../package.json";
-import { buildFlags } from "./build";
+import { buildFlags } from "./build.ts";
 
 // Each binary carries the Bun that built it. With Bun 1.3.10 inside, `honk
 // upgrade` hangs on the download (oven-sh/bun#13237). The workflows pin 1.4.5.
