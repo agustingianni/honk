@@ -84,7 +84,7 @@ import {
 } from "./readMarker.ts";
 import { createNodeRuntime, describeEventError, describeLineError, neverThrow } from "./runtime.ts";
 import { type Log, tooFarAhead } from "../log/log.ts";
-import { FILL_LIMIT, type Fill, LATEST_LIMIT } from "../log/logSync.ts";
+import { FILL_LIMIT, type Fill, LATEST_LIMIT, PAGE_OVERLAP_MS } from "../log/logSync.ts";
 import { SCROLLBACK_LINES, storedMessages } from "../log/scrollback.ts";
 import { LogRecorder } from "./logRecorder.ts";
 
@@ -350,6 +350,13 @@ interface HistoryRequest {
   label?: string;
   /** Set for the Log's own request, which fills a gap in the Log. See logSync.ts. */
   fill?: Fill;
+  /** Set for a /history. */
+  history?: {
+    /** How many lines it asked for. */
+    asked: number;
+    /** The oldest Line on screen when it was asked: the batch's Lines go before it. */
+    beforeLineId?: string;
+  };
 }
 
 /** Counts the labels sent with History requests, so each one is new on its connection. */
@@ -1605,7 +1612,6 @@ export class IrcManager {
       if (!server) return;
 
       const batchTarget = batch.params.params[0];
-      // A /history that found nothing older says so, instead of nothing happening.
       // The label is on this BATCH line, or on a labeled-response batch around it.
       const parentRef = batch.params.tags?.batch;
       const label =
@@ -1617,18 +1623,10 @@ export class IrcManager {
       // A request of the Log's own (a fill) goes to the screen too: the screen shows the
       // Log's Lines, so a gap the fill closes in the Log must close on screen. See logSync.ts.
       const logHistory = this.logRecorder?.history(serverId, batchTarget ?? "", request?.fill);
-      if (request && !request.fill && batchTarget) {
-        const any = batch.params.messages.some(
-          (m) => m.command === "privmsg" || m.command === "notice",
-        );
-        if (!any) {
-          this.pushMessage(
-            serverId,
-            batchTarget,
-            makeMessage("system", `The server has no older messages in ${batchTarget}.`),
-          );
-        }
-      }
+      // Whether the screen got a Line it did not have, and how many Lines came. A /history
+      // asks from the time of the oldest Line on screen, so it may bring only Replays.
+      let anyNew = false;
+      let lines = 0;
       // The Replay counts of this batch, per buffer. See replay.ts.
       const batchReplays = new Map<string, HistoryBatch>();
       for (const raw of batch.params.messages) {
@@ -1639,6 +1637,7 @@ export class IrcManager {
           continue;
         }
 
+        lines++;
         const from = normalizeNick(raw.source?.name) || UNKNOWN_SENDER;
         const rawText = raw.params[1] ?? "";
         const isSelf = this.same(serverId, from, server.nick);
@@ -1655,7 +1654,7 @@ export class IrcManager {
         let replays = batchReplays.get(bufferKey);
         if (!replays) batchReplays.set(bufferKey, (replays = new HistoryBatch()));
 
-        this.pushMessage(
+        const isNew = this.pushMessage(
           serverId,
           target,
           makeMessage(msgKind, text, {
@@ -1666,10 +1665,22 @@ export class IrcManager {
             isHistory: true,
           }),
           replays,
+          request?.history?.beforeLineId,
         );
+        anyNew ||= isNew;
         // After the screen: a Buffer this opens loads the Log, and must not find this
         // Line there already, or the screen drops it as a Replay without its badge.
         logHistory?.add(target, { kind: msgKind, from, text, tags: raw.tags, self: isSelf });
+      }
+      // A /history that found nothing older says so, instead of nothing happening. A full
+      // batch of Replays may have more behind it, so it does not say so.
+      const history = request?.history;
+      if (history && batchTarget && !anyNew && lines < history.asked) {
+        this.pushMessage(
+          serverId,
+          batchTarget,
+          makeMessage("system", `The server has no older messages in ${batchTarget}.`),
+        );
       }
       // Asks for the History the Log misses, if any. See logSync.ts.
       logHistory?.end(batch.params.messages.length);
@@ -2436,26 +2447,31 @@ export class IrcManager {
     });
   }
 
-  /** `batch` is the History batch `message` came in, if any. See replay.ts. */
+  /**
+   * `batch` is the History batch `message` came in, if any. See replay.ts. A History
+   * Line goes before the Line with id `beforeLineId`, if the Buffer still has it.
+   * Returns true if the Buffer got the Line.
+   */
   private pushMessage(
     serverId: string,
     targetName: string,
     message: ChatMessage,
     batch?: HistoryBatch,
-  ): void {
+    beforeLineId?: string,
+  ): boolean {
     const server = this.servers.get(serverId);
     const bufferName = this.bufferKey(serverId, targetName);
     const buf = this.ensureBuffer(serverId, bufferName);
-    if (!server || !buf) return;
+    if (!server || !buf) return false;
 
     // A Replay of a line the buffer already has is dropped. See replay.ts.
     const verdict = checkReplay(buf.messages, message, batch);
-    if (verdict.type === "replay") return;
+    if (verdict.type === "replay") return false;
     if (verdict.type === "give-msgid") {
       const { msgid } = verdict;
       this.updateMessages(serverId, bufferName, new Set([verdict.line.id]), (m) => ({ ...m, msgid }));
       this.emit();
-      return;
+      return false;
     }
 
     // A history line that arrived while the connection was down counts as unread, and
@@ -2473,10 +2489,16 @@ export class IrcManager {
 
     // Live lines go at the end. History lines (CHATHISTORY playback, /history BEFORE)
     // are inserted in time order; the scan from the end replaces a full re-sort.
+    // Lines with the same time keep the batch's order: a /history's Lines also go before
+    // the Line it was asked before, which is near the top.
     const messages = [...buf.messages];
-    const at = message.isHistory
-      ? timeOrderIndex(messages, message.timestamp.getTime())
-      : messages.length;
+    let at = messages.length;
+    if (message.isHistory) {
+      at = timeOrderIndex(messages, message.timestamp.getTime());
+      const askedBefore =
+        beforeLineId === undefined ? -1 : messages.findIndex((m) => m.id === beforeLineId);
+      if (askedBefore >= 0) at = Math.min(at, askedBefore);
+    }
     messages.splice(at, 0, message);
     // History lines go in front of older lines, so trimming the oldest would drop them
     // right away. Grow the buffer's limit for them instead.
@@ -2527,7 +2549,7 @@ export class IrcManager {
     this.emit();
     if (isActive) this.readMarkerTracker.onNewLine();
 
-    if (!message.isMention) return;
+    if (!message.isMention) return true;
     const event: MentionEvent = {
       serverId,
       bufferName,
@@ -2542,6 +2564,7 @@ export class IrcManager {
     } else if (missed) {
       this.queueMissedMention(serverId, event);
     }
+    return true;
   }
 
   /**
@@ -3402,18 +3425,29 @@ export class IrcManager {
             `Fetching only ${limit} lines: scrollback holds at most ${MAX_MESSAGES_WITH_HISTORY}.`,
           );
         }
-        const oldest = buf?.messages.find(
+        const messages = buf?.messages ?? [];
+        const first = messages.findIndex(
           (m) => m.kind === "message" || m.kind === "action" || m.kind === "notice",
         );
+        const oldest = messages[first];
+        // It asks just after the oldest Line, as a fill's page does (see PAGE_OVERLAP_MS).
+        // The Lines on screen with its time come back as Replays, so they are asked for
+        // on top. The buffer is in time order, so they follow it.
+        const time = oldest?.timestamp.getTime();
+        let replays = 0;
+        while (oldest && messages[first + replays]?.timestamp.getTime() === time) replays++;
+        const asked = limit + replays;
         const label = historyLabel(client);
         this.getControl(server.id).historyRequests.push({
           target: this.key(server.id, activeBuffer),
           label,
+          history: { asked, beforeLineId: oldest?.id },
         });
-        const [subcommand, anchor] = oldest
-          ? (["BEFORE", `timestamp=${oldest.timestamp.toISOString()}`] as const)
-          : (["LATEST", "*"] as const);
-        requestHistory(client, subcommand, activeBuffer, anchor, limit, label);
+        const [subcommand, anchor] =
+          time !== undefined
+            ? (["BEFORE", timestampParam(time + PAGE_OVERLAP_MS)] as const)
+            : (["LATEST", "*"] as const);
+        requestHistory(client, subcommand, activeBuffer, anchor, asked, label);
         return;
       }
 

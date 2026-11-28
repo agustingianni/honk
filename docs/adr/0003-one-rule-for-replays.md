@@ -19,7 +19,10 @@ The screen and the **Log** use the same rule to decide whether an incoming
    server's text and msgid. A Line that never arrived is not logged.
 
 honk asks for History only after each Network's **Sync marker**, so this rule
-is a safety net, not the main way to avoid copies.
+is a safety net, not the main way to avoid copies. The one exception is on
+purpose: a fill's pages and /history ask 1 ms past the Line they start from, so
+that no Line of a millisecond (a second, on a store of whole seconds) cut in two
+is skipped, and this rule drops the Lines of it that honk already has.
 
 ## Why exact and not a time window
 
