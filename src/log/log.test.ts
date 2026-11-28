@@ -157,6 +157,38 @@ test("lines wait while another program locks the file, and are written once it i
   expect(errors.at(-1)).toBe("honk writes the log again.");
 });
 
+test("a REDACT waiting for its Line still marks it when the first write of the Line fails", () => {
+  const { log, clock } = open();
+  log.redact("libera", "m9", "alice", T + 5000);
+  log.add("libera", honk, line("secret", { msgid: "m9", history: true }));
+  const other = new Database(path);
+  other.run("BEGIN IMMEDIATE");
+  log.flush();
+  other.run("COMMIT");
+  other.close();
+  clock.advance(5000);
+  expect(rows("SELECT text, redacted_by FROM message")).toEqual([
+    { text: "secret", redacted_by: "alice" },
+  ]);
+  expect(search("secret")).toEqual([]);
+});
+
+test("Lines dropped from a full queue stop the Sync marker, so the next start asks again", () => {
+  const { log, errors } = open();
+  log.setSyncMarker("libera", T - 60_000);
+  log.flush();
+  const other = new Database(path);
+  other.run("BEGIN IMMEDIATE");
+  for (let i = 0; i < 10_001; i++) log.add("libera", honk, line(`n${i}`, { time: T + i }));
+  log.setSyncMarker("libera", T + 20_000);
+  other.run("COMMIT");
+  other.close();
+  log.flush();
+  expect(errors[1]).toStartWith("the log lost lines");
+  expect(texts()).toHaveLength(9001);
+  expect(log.syncMarker("libera")).toBe(T - 60_000);
+});
+
 test("a line that can't be stored is left out, and the others of its write are kept", () => {
   const { log, errors } = open();
   log.add("libera", honk, line("before"));

@@ -120,11 +120,17 @@ const FLUSH_MS = 1000;
 const RETRY_MS = 5000;
 /** The most Lines kept in memory while writes fail. The oldest go first. */
 const MAX_QUEUE = 10_000;
+/** How long a write waits for a file another program locks, on the UI thread. */
+const WRITE_BUSY_MS = 250;
 /**
- * Errors that may go away: another program locks the file, the disk is full, an I/O
- * error. The Lines wait for the next try. Other errors come from one Line.
+ * Errors that come from one Line, such as a time that is not a number. Other errors,
+ * such as a locked file or a full disk, may go away: the Lines wait for the next try.
  */
-const RETRYABLE = /^SQLITE_(BUSY|LOCKED|FULL|IOERR|CANTOPEN|READONLY)/;
+const ONE_LINE_ERROR = /^SQLITE_(CONSTRAINT|MISMATCH|TOOBIG|RANGE)/;
+
+function isOneLineError(err: unknown): boolean {
+  return ONE_LINE_ERROR.test((err as { code?: string }).code ?? "");
+}
 /** How many Lines one retention step deletes, so a long delete never stalls the screen. */
 const PRUNE_BATCH = 500;
 /**
@@ -241,7 +247,14 @@ export function openLog(
       off: newer ? `the log ${message}` : message,
     };
   }
-  const log = new Log(db, settings, options);
+  let log: Log;
+  try {
+    log = new Log(db, settings, options);
+  } catch (err) {
+    db.close();
+    const message = (err as Error).message;
+    return { notices: [`honk keeps no log: ${message}.`], off: message };
+  }
   const notices: string[] = [];
   if (created) notices.push(`honk keeps a log of your chats in ${path}.`);
   if (log.otherWriter !== undefined) {
@@ -267,6 +280,11 @@ export class Log {
   private flushTimer: unknown;
   /** The last write failed: the next one waits RETRY_MS, not for 100 Lines. */
   private failing = false;
+  /**
+   * Servers whose Lines were dropped from a full queue this run. Their Sync markers no
+   * longer move, so the next start asks for the lost History again.
+   */
+  private lostLines = new Set<string>();
   private pruneTimer: unknown;
   private closed = false;
   private networks = new Map<string, NetworkSnapshot>();
@@ -276,6 +294,8 @@ export class Log {
   private bufferIds = new Map<string, { id: number; display: string }>();
   /** Redactions whose Line is not in the Log yet, by network id and msgid. */
   private earlyRedactions = new Map<string, { by: string; time: number }>();
+  /** Keys of the early redactions the write in progress used: gone once it commits. */
+  private usedRedactions: string[] = [];
 
   constructor(
     private readonly db: Database,
@@ -286,6 +306,8 @@ export class Log {
     this.pid = options.pid ?? process.pid;
     this.onError = options.onError ?? (() => {});
     this.otherWriter = this.takeWriter(options.isAlive ?? processAlive);
+    // Opening waits longer (see prepare); a write waits for its next try instead.
+    db.run(`PRAGMA busy_timeout = ${WRITE_BUSY_MS}`);
     if (this.writable) this.schedulePrune(FIRST_PRUNE_MS);
   }
 
@@ -362,7 +384,7 @@ export class Log {
 
   /** The Sync marker of the Server's Network, or undefined if it has none yet. */
   syncMarker(serverId: string): number | undefined {
-    this.flush();
+    if (!this.failing) this.flush();
     const net = this.networkOf(serverId);
     const row = this.db
       .query("SELECT synced_until AS t FROM network WHERE config_id = ? AND bouncer_net = ?")
@@ -424,10 +446,25 @@ export class Log {
 
   private push(op: Op): void {
     if (!this.writable) return;
+    if (op.type === "sync" && this.lostLines.has(op.net.serverId)) return;
     this.queue.push(op);
-    if (this.queue.length > MAX_QUEUE) this.queue.shift();
+    if (this.queue.length > MAX_QUEUE) this.dropOldest();
     if (this.queue.length >= FLUSH_LINES && !this.failing) this.flush();
     else this.scheduleFlush();
+  }
+
+  /**
+   * The queue is full while writes fail: drops its oldest tenth. The Sync markers of
+   * the Servers those Lines came from stop for this run, so the next start asks for
+   * that History again.
+   */
+  private dropOldest(): void {
+    for (const op of this.queue.splice(0, MAX_QUEUE / 10)) this.lostLines.add(op.net.serverId);
+    this.queue = this.queue.filter((op) => op.type !== "sync" || !this.lostLines.has(op.net.serverId));
+    this.report(
+      "lost",
+      `the log lost lines: honk keeps at most ${MAX_QUEUE.toLocaleString("en-US")} in memory while it can't write. A server that keeps History sends them again at the next start.`,
+    );
   }
 
   private scheduleFlush(): void {
@@ -453,28 +490,51 @@ export class Log {
     if (this.queue.length === 0 || this.closed) return;
     const ops = this.queue;
     this.queue = [];
+    const stopped = this.writeAll(ops);
+    if (!stopped) return this.recovered();
+    this.queue = ops.slice(stopped.at).concat(this.queue);
+    while (this.queue.length > MAX_QUEUE) this.dropOldest();
+    this.failing = true;
+    this.scheduleFlush();
+    this.report(
+      "write",
+      `could not write to the log: ${stopped.err.message}. honk keeps new lines and tries again.`,
+    );
+  }
+
+  /**
+   * Writes `ops` in one transaction, or if one of them can't be stored, one by one
+   * without the bad ones. Returns where an error that may go away stopped it: `ops`
+   * from `at` on are not written.
+   */
+  private writeAll(ops: Op[]): { at: number; err: Error } | undefined {
     try {
       this.write(ops);
+      return undefined;
     } catch (err) {
-      if (!RETRYABLE.test((err as { code?: string }).code ?? "")) {
-        // Most likely one bad Line: write them one by one, and leave out the bad ones.
-        for (const op of ops) this.writeAlone(op);
-        return this.recovered();
-      }
-      this.queue = ops.concat(this.queue).slice(-MAX_QUEUE);
-      this.failing = true;
-      this.scheduleFlush();
-      this.report(
-        "write",
-        `could not write to the log: ${(err as Error).message}. honk keeps new lines and tries again.`,
-      );
-      return;
+      if (!isOneLineError(err)) return { at: 0, err: err as Error };
     }
-    this.recovered();
+    let bad: Error | undefined;
+    let badCount = 0;
+    for (const [i, op] of ops.entries()) {
+      try {
+        this.write([op]);
+      } catch (err) {
+        if (!isOneLineError(err)) return { at: i, err: err as Error };
+        bad = err as Error;
+        badCount++;
+      }
+    }
+    if (bad) {
+      const what = badCount === 1 ? "a line" : `${badCount} lines`;
+      this.onError(`could not write ${what} to the log: ${bad.message}`);
+    }
+    return undefined;
   }
 
   /** Applies `ops` in one transaction. On a failure nothing is written. */
   private write(ops: Op[]): void {
+    this.usedRedactions = [];
     try {
       this.db.transaction(() => {
         for (const op of ops) this.apply(op);
@@ -485,14 +545,7 @@ export class Log {
       this.bufferIds.clear();
       throw err;
     }
-  }
-
-  private writeAlone(op: Op): void {
-    try {
-      this.write([op]);
-    } catch (err) {
-      this.report("line", `could not write a line to the log: ${(err as Error).message}`);
-    }
+    for (const key of this.usedRedactions) this.earlyRedactions.delete(key);
   }
 
   /** A write worked. After failed ones, says so, and the next failure is reported again. */
@@ -623,10 +676,11 @@ export class Log {
       );
   }
 
+  /** A redaction that waits for this Line. It is removed once the write commits. */
   private takeEarlyRedaction(networkId: number, msgid: string) {
     const key = `${networkId}\0${msgid}`;
     const early = this.earlyRedactions.get(key);
-    this.earlyRedactions.delete(key);
+    if (early) this.usedRedactions.push(key);
     return early;
   }
 

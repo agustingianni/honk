@@ -146,8 +146,8 @@ export class NewerSchemaError extends Error {
  * NewerSchemaError for a file from a newer honk, and leaves it unchanged.
  */
 export function prepare(db: Database): void {
-  // Short: a write runs on the UI thread. A busy write waits for the next try (log.ts).
-  db.run("PRAGMA busy_timeout = 250");
+  // For opening and upgrading. The Log waits less once it is open (see log.ts).
+  db.run("PRAGMA busy_timeout = 5000");
   const version = userVersion(db);
   if (version > SCHEMA_VERSION) throw new NewerSchemaError(version);
   // Only before the first table: it changes how the file is laid out.
