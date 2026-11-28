@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DEFAULT_LOG_SETTINGS, type LogSettings } from "./log/log.ts";
 import type { AppConfig, AuthMethod, ServerConfig } from "./types.ts";
+import { NICK_COL_MAX_DEFAULT, NICK_COL_MAX_LIMIT, NICK_COL_MIN } from "./ui/panelWidths.ts";
 
 export function defaultNick(): string {
   return process.env.USER || "guest";
@@ -128,6 +129,18 @@ function readConfigFile(path: string): AppConfig | null {
   if (ascii !== undefined && typeof ascii !== "boolean") {
     throw new ConfigError(`${path}: "ascii" must be true or false, not ${JSON.stringify(ascii)}`);
   }
+  const nickColumnMax = parsed.nickColumnMax ?? undefined;
+  if (
+    nickColumnMax !== undefined &&
+    (typeof nickColumnMax !== "number" ||
+      !Number.isInteger(nickColumnMax) ||
+      nickColumnMax < NICK_COL_MIN ||
+      nickColumnMax > NICK_COL_MAX_LIMIT)
+  ) {
+    throw new ConfigError(
+      `${path}: "nickColumnMax" must be a whole number from ${NICK_COL_MIN} to ${NICK_COL_MAX_LIMIT}, not ${JSON.stringify(nickColumnMax)}`,
+    );
+  }
   const servers = Array.isArray(parsed.servers) ? parsed.servers : [];
   const logs = readLogSettings(path, parsed.logs);
   for (const s of servers) {
@@ -140,6 +153,7 @@ function readConfigFile(path: string): AppConfig | null {
     theme,
     mouse,
     ascii,
+    nickColumnMax,
     logs,
     servers: servers.map((s, idx) => ({
       id: s.id || s.name || s.host || `server-${idx + 1}`,
@@ -189,7 +203,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): AppConfig {
 
   if (typeof flags.theme === "string") config = { ...config, theme: flags.theme };
   const mouse = typeof flags.mouse === "boolean" ? flags.mouse : (config.mouse ?? true);
-  config = { ...config, mouse };
+  config = { ...config, mouse, nickColumnMax: config.nickColumnMax ?? NICK_COL_MAX_DEFAULT };
   // --ascii, or --no-ascii to undo "ascii": true for one run.
   if (typeof flags.ascii === "boolean") config = { ...config, ascii: flags.ascii };
 
